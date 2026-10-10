@@ -283,32 +283,32 @@ async function clippedLine() {
   });
 }
 
+/** A CSS colour as the engine says it (`rgb(…)` or `rgba(…)`): red, green, blue and alpha. */
+function rgb(css: string): [number, number, number, number] {
+  const parts = (css.match(/[\d.]+/g) ?? []).map(Number);
+  return [parts[0] ?? 0, parts[1] ?? 0, parts[2] ?? 0, parts[3] ?? 1];
+}
+
+/** WCAG's relative luminance of a colour. */
+function luminance([r, g, b]: number[]): number {
+  const linear = (c: number) => {
+    const s = c / 255;
+    return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+  };
+  return 0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b);
+}
+
+/** WCAG's contrast ratio of two colours. */
+function contrast(one: number[], other: number[]): number {
+  const [hi, lo] = [luminance(one), luminance(other)].sort((a, b) => b - a);
+  return (hi + 0.05) / (lo + 0.05);
+}
+
 /** Each "also names" mark: what it says, its sign's size, and the colours and their contrast. */
 async function marks() {
-  return browser.execute(() => {
-    const rgb = (css: string): [number, number, number, number] => {
-      const parts = (css.match(/[\d.]+/g) ?? []).map(Number);
-      return [parts[0] ?? 0, parts[1] ?? 0, parts[2] ?? 0, parts[3] ?? 1];
-    };
-    const luminance = ([r, g, b]: number[]) => {
-      const linear = (c: number) => {
-        const s = c / 255;
-        return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
-      };
-      return 0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b);
-    };
-    const contrast = (one: number[], other: number[]) => {
-      const [hi, lo] = [luminance(one), luminance(other)].sort((a, b) => b - a);
-      return (hi + 0.05) / (lo + 0.05);
-    };
-    /** The colour drawn behind `el`: the nearest background that is not see-through. */
-    const behind = (el: Element | null): number[] => {
-      for (let at = el; at; at = at.parentElement) {
-        const colour = rgb(getComputedStyle(at).backgroundColor);
-        if (colour[3] > 0.99) return colour;
-      }
-      return [255, 255, 255, 1];
-    };
+  // Only colours are read in the page, and the contrast is worked out here: no named helpers
+  // inside `execute`, because the spec's bundler wraps them in a `__name` the page does not have.
+  const read = await browser.execute(() => {
     // What `--state-waiting` is drawn as, read the way the engine resolves it.
     const probe = document.createElement("span");
     probe.style.color = "var(--state-waiting)";
@@ -318,18 +318,37 @@ async function marks() {
     return [...document.querySelectorAll<HTMLElement>(".activity-shared")].map((mark) => {
       const sign = mark.querySelector("svg");
       const box = sign?.getBoundingClientRect();
-      const ground = behind(mark);
-      const words = rgb(getComputedStyle(mark).color);
-      const signColour = sign ? getComputedStyle(sign).color : "";
+      // The colour drawn behind the mark: the nearest background that is not see-through.
+      let ground = "rgb(255, 255, 255)";
+      for (let at: Element | null = mark; at; at = at.parentElement) {
+        const colour = getComputedStyle(at).backgroundColor;
+        const alpha = colour.startsWith("rgba")
+          ? Number((colour.match(/[\d.]+/g) ?? [])[3] ?? 1)
+          : colour.startsWith("rgb")
+            ? 1
+            : 0;
+        if (alpha > 0.99) {
+          ground = colour;
+          break;
+        }
+      }
       return {
         says: mark.textContent ?? "",
         sign: { width: box?.width ?? 0, height: box?.height ?? 0 },
-        signIsWaiting: signColour === waiting,
-        signContrast: contrast(rgb(signColour), ground),
-        wordsContrast: contrast(words, ground),
+        signColour: sign ? getComputedStyle(sign).color : "",
+        waiting,
+        words: getComputedStyle(mark).color,
+        ground,
       };
     });
   });
+  return read.map((one) => ({
+    says: one.says,
+    sign: one.sign,
+    signIsWaiting: one.signColour === one.waiting,
+    signContrast: contrast(rgb(one.signColour), rgb(one.ground)),
+    wordsContrast: contrast(rgb(one.words), rgb(one.ground)),
+  }));
 }
 
 describe("a chat's Activity tab", () => {
