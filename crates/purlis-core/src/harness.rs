@@ -594,11 +594,12 @@ mod tests {
                     armed: Vec::new(),
                     charters: Vec::new(),
                 };
-                assert!(
+                assert_eq!(
                     to.adapter()
                         .sandboxed_line(applied.form(), words, &crate::sandbox::At::default())
-                        .is_err(),
-                    "{from:?}'s sandbox gave a {to:?} chat a line"
+                        .err(),
+                    Some(super::adapter::not_compiled_for(to)),
+                    "{from:?}'s sandbox gave a {to:?} chat a line, or refused it for another reason"
                 );
                 pairs += 1;
             }
@@ -2013,7 +2014,7 @@ mod tests {
         assert_eq!(cannot_report, ["sessionend"]);
     }
 
-    /// The plugin the app ships, in the repository: its skills, its shim, its hooks.
+    /// The environment a chat armed for this session only is started with.
     fn env_of(hooks: StateHooks) -> BTreeMap<String, String> {
         let StateHooks::ThisSessionOnly { env, .. } = hooks else {
             panic!("armed per session");

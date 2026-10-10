@@ -158,9 +158,12 @@ pub trait Adapter: Sync {
 
 /// Every harness charter knows, in the registry's order ([`crate::profiles::KINDS`]).
 ///
-/// Read through the one registry of harness adapters ([`crate::harness::Harness::adapter`]):
-/// each harness's plugin adapter is what its [`crate::harness::HarnessAdapter::plugins`]
-/// names, so there is no second list of harnesses here.
+/// Each kind in [`crate::profiles::KINDS`], made a harness by
+/// [`crate::harness::Harness::of_kind`]: its plugin adapter is what its
+/// [`crate::harness::HarnessAdapter::plugins`] names. This module keeps no list of harnesses of
+/// its own, but charter keeps more than one: `KINDS`, `of_kind`'s match and
+/// [`crate::harness::Harness::ALL`] each name every harness, and a harness added to one is
+/// added to each.
 pub fn adapters() -> impl Iterator<Item = &'static dyn Adapter> {
     crate::profiles::KINDS
         .iter()
