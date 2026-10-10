@@ -4,7 +4,13 @@ import { SaveIndicator } from "./SavingView";
 import { AboutCharter } from "./About";
 import { type Ending } from "./QuitWarning";
 import { UpdateItem, type Updates } from "./Updates";
-import { NeedsYouMenu, type Needing, type PermissionAsk, type Quiet } from "./NeedsYou";
+import {
+  NeedsYouMenu,
+  type Needing,
+  type OtherAsk,
+  type PermissionAsk,
+  type Quiet,
+} from "./NeedsYou";
 import type { AwayItem } from "./AwayRefusals";
 import { KillSwitch } from "./KillSwitch";
 import type { Offer } from "./actions";
@@ -139,6 +145,11 @@ export function TitleBar({
     onLook?: () => void;
     /** Goes up each time the list is asked open from elsewhere (an away summary, #1551). */
     openAsked?: number;
+    /** The asks registry's count (#1690): the number on the hand. */
+    asked?: number;
+    /** The registry's other asks, with Go to each one's chat. */
+    others?: readonly OtherAsk[];
+    onOpenOther?: (ask: OtherAsk) => void;
   };
   /**
    * The project in front's save standing (charter-app#294, ADR 0051) and what its two buttons

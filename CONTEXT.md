@@ -690,7 +690,24 @@ harness's own form of it is read into one shape: what it would do, the options a
 offered them, who may answer, its deadline, its risk, a masked one-line summary, and whether it
 elicits a secret. One answer per ask, and the first wins; every later one hears "answered
 elsewhere". An agent never answers one (ADR 0080 §5). A part of **Chat**.
+
+Everything that blocks until the person decides is an ask, whatever its source: a permission
+prompt of a chat or a task, a dispatch grant, a host a chat's sandbox refused, a prompt waiting
+in a harness's own terminal, a chat waiting on the person's reply. Each is derived from the
+source that waits, keeps no record of its own, and is gone the moment its source stops waiting.
+Each names its chain (the session first, the chat that asked last) and the path that answers it,
+which is its source's own. The title bar's ✋ counts asks. Not an **Update**.
 _Avoid_: prompt (that is what the operator types), approval (that is one kind of answer)
+
+**Inbox**:
+The one place for everything that waits on the person: its **asks** first, then its **updates**
+(spec #1688). The title bar's ✋ shows its count of asks.
+_Avoid_: queue, alerts, notifications
+
+**Update**:
+Something the person may want to know that waits on nothing: a task finished or failed, a doctor
+finding, a chat that resumed. Dismissable, and never counted on the ✋. Not an **Ask**.
+_Avoid_: notification, news
 
 **Kill switch**:
 Stop all on the title bar, or `purlis stop --all`: every chat's and shell's program that purlis

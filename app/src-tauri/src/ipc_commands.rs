@@ -119,6 +119,8 @@ macro_rules! app_commands {
                 task_failure_seen,
                 asking::pending_asks,
                 asking::answer_ask,
+                asking::asks_waiting,
+                asking::forget_sandbox_block,
                 send_input,
                 send_input_bytes,
                 resize_session,

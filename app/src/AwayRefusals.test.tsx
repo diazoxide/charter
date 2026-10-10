@@ -587,3 +587,14 @@ describe("the list, read from the core and answered through it", () => {
     await waitFor(() => expect(screen.queryByRole("button")).toBeNull());
   });
 });
+
+describe("the hand's number is the asks registry's (#1690)", () => {
+  it("does not count a dispatch refused while you were away: nothing waits on it", () => {
+    render(<NeedsYouMenu quiet={[]} items={[]} away={[item()]} asked={0} onPress={() => {}} />);
+
+    const button = screen.getByRole("button", {
+      name: "1 dispatch was refused while you were away",
+    });
+    expect(button.querySelector(".needs-you-number")).toBeNull();
+  });
+});
