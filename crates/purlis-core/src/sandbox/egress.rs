@@ -1173,7 +1173,7 @@ fn host_port(authority: &str) -> Option<(String, u16)> {
 }
 
 /// What a connect came to.
-enum Connected {
+pub(crate) enum Connected {
     To(TcpStream),
     /// The name resolved, and only to addresses a chat never reaches: refused, as a Block.
     OnlyLocal,
@@ -1185,7 +1185,7 @@ enum Connected {
 /// ([`reachable`]), checked at every connect so a name rebound to this machine or a metadata
 /// service reaches nothing. An address literal was decided as itself
 /// ([`super::reach::Reach::decide`]) and is held to the same check here.
-fn connect(host: &str, port: u16, reach: &Reach, own: &[std::net::IpAddr]) -> Connected {
+pub(crate) fn connect(host: &str, port: u16, reach: &Reach, own: &[std::net::IpAddr]) -> Connected {
     let resolve = |host: &str, port: u16| {
         (host, port)
             .to_socket_addrs()
@@ -1247,7 +1247,7 @@ fn answer(client: &mut TcpStream, status: &str, why: &str) {
 
 /// Copies each way until either side ends, at most `up_to` more bytes from the client, and
 /// closes both once nothing has moved either way for `idle`.
-fn splice(client: TcpStream, upstream: TcpStream, up_to: u64, idle: Duration) {
+pub(crate) fn splice(client: TcpStream, upstream: TcpStream, up_to: u64, idle: Duration) {
     let (Ok(client_in), Ok(upstream_out)) = (client.try_clone(), upstream.try_clone()) else {
         return;
     };

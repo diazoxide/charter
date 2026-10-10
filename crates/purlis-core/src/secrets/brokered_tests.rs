@@ -298,7 +298,8 @@ fn a_codex_chats_run_is_denied_the_operators_codex_home_as_the_chat_is() {
         "{:?}",
         confines.denied
     );
-    let profile = profile_on(&confines, &[], &root.join("work"), &root, 4242).expect("a profile");
+    let profile =
+        profile_on(&confines, &[], &root.join("work"), &root, &[4242]).expect("a profile");
     assert!(
         profile.contains(&format!(
             "(deny file-read* file-write* (subpath \"{}\"))",
@@ -705,7 +706,7 @@ fn the_childs_profile_gives_back_a_read_of_its_credential_file_alone() {
         std::slice::from_ref(&file),
         &root.join("work"),
         &root,
-        4242,
+        &[4242],
     )
     .expect("a profile");
     let denied = profile
@@ -1821,5 +1822,168 @@ fn a_wrapped_childs_refused_tunnel_is_told_to_the_asking_chat() {
     assert!(
         notes(&frames).join("\n").contains("refused.invalid:6443"),
         "{frames:?}"
+    );
+}
+
+// ----------------------------------------------------------------------------------------
+// tunnels (#1667): a database client handed a vault's connection string
+
+/// Vault `team` of `root` holding `DSN`, beside its own keys.
+fn holding_dsn(root: &Path, dsn: &str) {
+    std::fs::write(
+        root.join("team.json"),
+        serde_json::json!({"TOKEN": TOKEN, "KUBECONFIG": KUBECONFIG, "DSN": dsn}).to_string(),
+    )
+    .unwrap();
+}
+
+/// `asker`, its chat's sandbox listing `hosts`.
+fn reaching(mut asker: Asker, hosts: &[&str]) -> Asker {
+    if let Some(confines) = asker.confines.as_mut() {
+        confines.hosts = hosts.iter().map(|h| (*h).to_owned()).collect();
+    }
+    asker
+}
+
+/// Every frame, every block told, and every connection told, of `wanted` served unwrapped.
+type ToldReached = Vec<(Option<String>, &'static str, u64)>;
+fn served_recorded(
+    asker: &Asker,
+    wanted: Wanted,
+) -> (
+    Vec<Frame>,
+    Vec<crate::hookwire::SandboxBlocked>,
+    ToldReached,
+) {
+    let (reader, _keep) = held_open();
+    let wire = Wire::default();
+    let told: Arc<Mutex<Vec<crate::hookwire::SandboxBlocked>>> = Arc::default();
+    let reached: Arc<Mutex<ToldReached>> = Arc::default();
+    serve_recorded(
+        asker,
+        wanted,
+        reader,
+        Box::new(wire.clone()),
+        Wrap::Unwrapped,
+        {
+            let told = Arc::clone(&told);
+            Arc::new(move |block| told.lock().unwrap().push(block))
+        },
+        Some({
+            let reached = Arc::clone(&reached);
+            Arc::new(move |target: Option<&str>, by: &'static str, times: u64| {
+                reached
+                    .lock()
+                    .unwrap()
+                    .push((target.map(str::to_owned), by, times));
+            })
+        }),
+    );
+    let frames = String::from_utf8(wire.0.lock().unwrap().clone())
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("every line is a frame"))
+        .collect();
+    let told = told.lock().unwrap().clone();
+    let reached = reached.lock().unwrap().clone();
+    (frames, told, reached)
+}
+
+/// A command that prints where `$DSN` goes: everything after its `@`, which is not the value
+/// whole, so the mask leaves it.
+fn where_dsn_goes() -> Vec<String> {
+    sh(r#"printf '%s' "${DSN#*@}""#)
+}
+
+#[test]
+fn a_connection_string_to_a_host_the_chat_may_not_reach_is_its_block_and_is_handed_as_it_is() {
+    let project = project();
+    holding_dsn(
+        project.path(),
+        "postgres://app:pw@db.example.com:16752/orders",
+    );
+    let mut want = wanted(project.path(), "team", where_dsn_goes());
+    want.env = vec!["DSN=DSN".into()];
+    let (frames, told, _) = served_recorded(
+        &reaching(
+            asker(project.path(), Some("devops")),
+            &["db.example.com:5432"],
+        ),
+        want,
+    );
+    assert_eq!(stdout(&frames), "db.example.com:16752/orders");
+    let targets: Vec<Option<String>> = told.into_iter().map(|block| block.target).collect();
+    assert_eq!(
+        targets,
+        vec![Some("db.example.com:16752".to_owned())],
+        "the chat's Notice offers Allow for exactly that host and port"
+    );
+    let said = notes(&frames).join("\n");
+    assert!(
+        said.contains("db.example.com:16752") && said.contains("Allow"),
+        "{said}"
+    );
+    assert!(!said.contains("pw"), "{said}");
+}
+
+#[test]
+fn a_connection_string_to_this_machine_is_said_by_its_variable_and_never_tunnelled() {
+    let project = project();
+    holding_dsn(project.path(), "postgres://app:pw@127.0.0.1:5432/orders");
+    let mut want = wanted(project.path(), "team", where_dsn_goes());
+    want.env = vec!["DSN=DSN".into()];
+    let (frames, told, reached) = served_recorded(&asker(project.path(), Some("devops")), want);
+    assert_eq!(stdout(&frames), "127.0.0.1:5432/orders");
+    assert_eq!(told, Vec::new(), "nothing a person could allow");
+    assert_eq!(reached, Vec::new());
+    let said = notes(&frames).join("\n");
+    assert!(said.contains("DSN points at this machine"), "{said}");
+}
+
+/// A stand-in database on loopback, listed as that exact address and port (the one way a
+/// local address is ever reached): the child's connection goes through the tunnel to it, and
+/// the connection is told. Binds sockets: first run on CI.
+#[test]
+fn a_connection_string_to_a_host_the_chat_may_reach_goes_through_a_tunnel_to_exactly_it() {
+    use std::io::Read as _;
+    let database = std::net::TcpListener::bind("127.0.0.1:0").expect("a stand-in database");
+    let at = database.local_addr().unwrap();
+    let answering = std::thread::spawn(move || {
+        let (mut conn, _) = database.accept().expect("the tunnel's connection");
+        let mut asked = [0u8; 4];
+        conn.read_exact(&mut asked).expect("the client's bytes");
+        conn.write_all(b"pong").expect("answered");
+        asked
+    });
+    let project = project();
+    holding_dsn(
+        project.path(),
+        &format!("postgres://app:pw@127.0.0.1:{}/orders", at.port()),
+    );
+    let mut want = wanted(
+        project.path(),
+        "team",
+        sh(r#"hp="${DSN#*@}"; hp="${hp%%/*}"; printf '%s|' "$hp";
+              printf ping | /usr/bin/nc -w 5 "${hp%:*}" "${hp#*:}""#),
+    );
+    want.env = vec!["DSN=DSN".into()];
+    let listed = format!("127.0.0.1:{}", at.port());
+    let (frames, told, reached) = served_recorded(
+        &reaching(asker(project.path(), Some("devops")), &[listed.as_str()]),
+        want,
+    );
+    let out = stdout(&frames);
+    let (went, answer) = out.split_once('|').expect("where it went, then the answer");
+    assert!(went.starts_with("127.0.0.1:"), "{out}");
+    assert_ne!(
+        went, listed,
+        "pointed at the tunnel, not at the host itself"
+    );
+    assert_eq!(answer, "pong", "{frames:?}");
+    assert_eq!(&answering.join().unwrap(), b"ping");
+    assert_eq!(told, Vec::new());
+    assert!(
+        reached.contains(&(Some(listed.clone()), "open", 1)),
+        "every tunnelled connection is told: {reached:?}"
     );
 }

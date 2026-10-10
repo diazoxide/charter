@@ -204,6 +204,16 @@ fn the_wrapped_line_runs_codex_whole_under_sandbox_exec_with_its_own_sandbox_off
         line.env
             .contains(&("SSL_CERT_FILE".to_owned(), "/etc/ssl/cert.pem".to_owned()))
     );
+    // git over ssh through the chat's own SOCKS port (#1667).
+    let route = confinement.ssh_route().expect("an ssh route");
+    for pair in route.env() {
+        assert!(line.env.contains(&pair), "{pair:?}");
+    }
+    let config = std::fs::read_to_string(route.config()).expect("its config");
+    assert!(
+        config.contains(&format!("127.0.0.1:{} %h %p", confinement.socks_port())),
+        "{config}"
+    );
 }
 
 #[test]
