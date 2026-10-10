@@ -98,10 +98,12 @@ describe("saving the project from the title bar", function () {
 
   it("says a file written into the plane is unsaved, and saves it from the bar", async () => {
     await $(`${PROJECTS} button[aria-label="Open a project…"]`).click();
-    const box = await $("#open-by-path");
+    const box = await $('[data-setting="open-by-path"] input');
     await box.waitForDisplayed({ timeout: 20_000 });
     await box.addValue(plane);
-    await $("button=Open").click();
+    // Return in the path box is the opener's own submit: its button shares the
+    // name of the trust question's Open project, which comes next.
+    await browser.keys(["Enter"]);
     const question = await $('[role="dialog"]');
     await question.waitForDisplayed({ timeout: 30_000 });
     await $("button=Open project").click();

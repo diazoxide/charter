@@ -27,7 +27,10 @@ describe("cutting a new branch from the window (GL-1)", () => {
   it("names the repo the branch will be cut in", () => {
     show();
 
-    expect(screen.getByRole("dialog", { name: "New branch" })).toHaveTextContent("in svc");
+    // As its description, so a screen reader says where with the title (#1719).
+    expect(screen.getByRole("dialog", { name: "New branch" })).toHaveAccessibleDescription(
+      "In svc",
+    );
   });
 
   it("cuts a branch under the name typed", async () => {

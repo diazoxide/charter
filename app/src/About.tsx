@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { Info } from "lucide-react";
 import { commands, type About } from "./bindings";
@@ -58,6 +58,7 @@ export function AboutCharter() {
   const [open, setOpen] = useState(false);
   const [about, setAbout] = useState<About>();
   const [trouble, setTrouble] = useState<string>();
+  const close = useRef<HTMLButtonElement>(null);
 
   const ask = useCallback(() => {
     // Once. The changelog ships in the binary, so a second ask reads the same bytes.
@@ -99,7 +100,16 @@ export function AboutCharter() {
       </Dialog.Trigger>
       <Dialog.Portal>
         <Dialog.Overlay className="asking" />
-        <Dialog.Content className="warning update about" aria-describedby="about-what">
+        <Dialog.Content
+          className="warning update about"
+          aria-describedby="about-what"
+          // The keyboard starts on Close, as every question's does (#1719): Radix's own first
+          // tabbable is a link in the body, and Return there would leave the window.
+          onOpenAutoFocus={(event) => {
+            event.preventDefault();
+            close.current?.focus();
+          }}
+        >
           <Dialog.Title>About purlis</Dialog.Title>
           <div id="about-what">
             {trouble !== undefined ? (
@@ -124,7 +134,7 @@ export function AboutCharter() {
           {/* `tabIndex={0}` on each, per `docs/ui-primitives.md`, as `ExternalLink` gives each link. */}
           <AnswerBar>
             <Dialog.Close asChild>
-              <button type="button" tabIndex={0}>
+              <button type="button" tabIndex={0} ref={close}>
                 Close
               </button>
             </Dialog.Close>

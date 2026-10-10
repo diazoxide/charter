@@ -128,10 +128,12 @@ describe.skip("Locate… for a remembered project that moved", function () {
     first = (await ask<string[]>("open_planes"))[0];
     // Through the opener, as a person opens one, which is what puts it among the recents.
     await $(`${PROJECTS} button[aria-label="Open a project…"]`).click();
-    const box = await $("#open-by-path");
+    const box = await $('[data-setting="open-by-path"] input');
     await box.waitForDisplayed({ timeout: 20_000 });
     await box.addValue(mine);
-    await $("button=Open").click();
+    // Return in the path box is the opener's own submit: its button shares the
+    // name of the trust question's Open project, which comes next.
+    await browser.keys(["Enter"]);
     await $('[role="dialog"]').waitForExist({ timeout: 30_000 });
     await $("button=Open project").click();
     await browser.waitUntil(async () => (await ask<string[]>("open_planes")).includes(mine), {

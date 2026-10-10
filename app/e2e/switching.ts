@@ -80,10 +80,12 @@ export function aProjectOfItsOwn(n: number, prepare: (plane: string) => void = (
 /** Opens `plane` from the strip's `+`, through the trust gate, and waits for it in front. */
 export async function openFromTheStrip(plane: string): Promise<void> {
   await $(`${PROJECTS} button[aria-label="Open a project…"]`).click();
-  const box = await $("#open-by-path");
+  const box = await $('[data-setting="open-by-path"] input');
   await box.waitForDisplayed({ timeout: 20_000 });
   await box.addValue(plane);
-  await $("button=Open").click();
+  // Return in the path box is the opener's own submit: its button shares the
+  // name of the trust question's Open project, which comes next.
+  await browser.keys(["Enter"]);
   const question = await $('[role="dialog"]');
   await question.waitForDisplayed({ timeout: 30_000 });
   await expect(question).toHaveText("Open this project?", { containing: true });

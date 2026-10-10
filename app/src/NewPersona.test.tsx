@@ -1,9 +1,22 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
+import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { userEvent } from "@testing-library/user-event";
 import { NewPersona } from "./NewPersona";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  clearMocks();
+});
+
+/** The project's personas, as the sidebar answers them: what Inherits from offers. */
+function personas(names: string[] | Error) {
+  mockIPC((cmd) => {
+    if (cmd !== "plane_sidebar") return null;
+    if (names instanceof Error) throw names.message;
+    return { root: "/home/dev/plane", workspaces: [], personas: names, persona: null, unfiled: [] };
+  });
+}
 
 function draw(over: { trouble?: string; making?: boolean } = {}) {
   const create = vi.fn();
@@ -40,11 +53,15 @@ describe("the new-persona dialog", () => {
     expect(create).toHaveBeenCalledWith("devops", null, "CI/CD, k8s deploys", null);
   });
 
-  it("passes the role and the parent when they are typed", async () => {
+  it("passes the role and the parent picked from the project's personas", async () => {
+    personas(["steward", "devops"]);
     const { create, dialog, button } = draw();
     await userEvent.type(within(dialog).getByLabelText("Name"), "qa");
     await userEvent.type(within(dialog).getByLabelText("Role"), "QA Engineer");
-    await userEvent.type(within(dialog).getByLabelText("Inherits from"), "steward");
+    // A pick of the project's personas, so a typo is refused before the core sees it (#1719).
+    const inherits = within(dialog).getByRole("combobox", { name: "Inherits from" });
+    await within(dialog).findByRole("option", { name: "steward" });
+    await userEvent.selectOptions(inherits, "steward");
     // A parent carries a routing line of its own, so none is required with one.
     expect(button).toBeEnabled();
     await userEvent.click(button);
@@ -77,5 +94,30 @@ describe("the new-persona dialog", () => {
     await userEvent.keyboard("{Escape}");
     expect(cancel).toHaveBeenCalled();
     expect(create).not.toHaveBeenCalled();
+  });
+
+  it("says why Create waits, under the act, once a name is typed (#1719)", async () => {
+    personas([]);
+    const { dialog } = draw();
+    expect(within(dialog).queryByText(/Create persona needs/)).toBeNull();
+
+    await userEvent.type(within(dialog).getByLabelText("Name"), "qa");
+
+    expect(
+      within(dialog).getByText(
+        "Create persona needs Delegate when, or a persona it inherits from.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("says when the project's personas could not be read, and still makes one (#1719)", async () => {
+    personas(new Error("the project is gone"));
+    const { dialog } = draw();
+
+    expect(
+      await within(dialog).findByText(
+        "purlis could not read the project's personas: the project is gone",
+      ),
+    ).toBeInTheDocument();
   });
 });

@@ -276,7 +276,7 @@ describe("opening someone else's project (#1078)", () => {
 
     const person = userEvent.setup();
     await person.type(await screen.findByLabelText("Or type a path"), TWO);
-    await person.click(screen.getByRole("button", { name: "Open" }));
+    await person.click(screen.getByRole("button", { name: "Open project" }));
     const trust = await screen.findByRole("dialog", { name: "Open this project?" });
     await person.click(within(trust).getByRole("button", { name: "Open project" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());

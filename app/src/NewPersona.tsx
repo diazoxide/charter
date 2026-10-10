@@ -1,6 +1,7 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
-import { Field, SettingActions, SettingRow } from "./settings/components";
+import { commands } from "./bindings";
+import { Choice, Field, SettingActions, SettingRow } from "./settings/components";
 
 /**
  * Making a persona (SI-3), asked where the answer is given — `NewVault`'s shape, for `charter
@@ -42,6 +43,26 @@ export function NewPersona({
   const [role, setRole] = useState("");
   const [when, setWhen] = useState("");
   const [parent, setParent] = useState("");
+  // **The project's personas, read here** (#1719): Inherits from is a pick of them, so a
+  // typo is refused before the core sees it. Read from the sidebar's answer, which holds the
+  // list; a failure is said, and None still makes a persona.
+  const [offered, setOffered] = useState<{ names: string[] } | { unread: string }>();
+  useEffect(() => {
+    let gone = false;
+    void commands
+      .planeSidebar(plane)
+      .then((answer) => {
+        if (gone) return;
+        if (answer.status === "error") setOffered({ unread: answer.error });
+        else if (Array.isArray(answer.data?.personas)) setOffered({ names: answer.data.personas });
+      })
+      .catch((err: unknown) => {
+        if (!gone) setOffered({ unread: String(err) });
+      });
+    return () => {
+      gone = true;
+    };
+  }, [plane]);
   // The dialog, so the name box can be found in it on opening: the row draws the box, and a
   // setting's field takes no ref.
   const content = useRef<HTMLDivElement>(null);
@@ -118,8 +139,25 @@ export function NewPersona({
 
             <SettingRow
               label="Inherits from"
-              help="Optional: another persona's name."
-              control={(ids) => <Field ids={ids} kind="text" value={parent} onChange={setParent} />}
+              help={
+                offered === undefined
+                  ? "Optional. Reading the project's personas…"
+                  : "unread" in offered
+                    ? `purlis could not read the project's personas: ${offered.unread}`
+                    : "Optional: another persona of this project."
+              }
+              control={(ids) => (
+                <Choice
+                  ids={ids}
+                  kind="select"
+                  value={parent}
+                  unset="None"
+                  onValueChange={setParent}
+                  options={(offered !== undefined && "names" in offered ? offered.names : []).map(
+                    (one) => ({ value: one, label: one }),
+                  )}
+                />
+              )}
             />
 
             {trouble && (
@@ -136,6 +174,12 @@ export function NewPersona({
                 Cancel
               </button>
             </SettingActions>
+            {/* Why Create waits, said at the act rather than only in one row's help (#1719). */}
+            {name.trim() !== "" && given(when) === null && given(parent) === null && (
+              <p className="came-back">
+                Create persona needs Delegate when, or a persona it inherits from.
+              </p>
+            )}
           </form>
         </Dialog.Content>
       </Dialog.Portal>

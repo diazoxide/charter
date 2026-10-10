@@ -5,6 +5,7 @@ import { FirstRun } from "./FirstRun";
 import { Notice } from "./Notice";
 import { GoneProjectNotice } from "./GoneProjectNotice";
 import { useNewerTrouble } from "./pickTrouble";
+import { Field, SettingActions, SettingRow } from "./settings/components";
 
 /**
  * The screen a window with no project open draws.
@@ -90,6 +91,8 @@ export function Opener({
   /** Whether the recent list has answered at all, so the first run is never drawn over a
    *  machine whose list simply has not arrived yet, and never over one that could not say. */
   const [heard, setHeard] = useState(false);
+  /** Why the recent list could not be read, in the core's words; said, never swallowed. */
+  const [unread, setUnread] = useState<string>();
   /** The operator asked for this screen rather than the first run. */
   const [passed, setPassed] = useState(false);
   const [typed, setTyped] = useState("");
@@ -106,12 +109,16 @@ export function Opener({
       .recentPlanes()
       .then((answer) => {
         if (!gone && answer.status === "ok") setRecents(answer.data ?? undefined);
+        if (!gone) setUnread(answer.status === "error" ? answer.error : undefined);
         if (!gone) setHeard(true);
       })
-      // A window that cannot ask simply offers no list. The picker and the path box still
-      // work, which is the whole of what this screen has to do.
-      .catch(() => {
-        if (!gone) setHeard(true);
+      // A window that cannot ask offers no list, and says so (#1719): the picker and the path
+      // box still work, which is the whole of what this screen has to do.
+      .catch((err: unknown) => {
+        if (!gone) {
+          setUnread(String(err));
+          setHeard(true);
+        }
       });
     return () => {
       gone = true;
@@ -203,11 +210,11 @@ export function Opener({
 
       {/* Every button here says `tabIndex={0}`: WebKit leaves a `<button>` out of the tab
           sequence unless it is written down (`docs/ui-primitives.md`, charter-app#189). */}
-      <div className="doing">
+      <SettingActions>
         <button type="button" tabIndex={0} onClick={pick}>
           Open project…
         </button>
-      </div>
+      </SettingActions>
 
       {/* The path box is not a lesser picker. A native folder dialog cannot be driven by the
           scenario tests, and an operator who already knows the path types faster than they
@@ -220,17 +227,26 @@ export function Opener({
           if (typed.trim()) open(typed.trim());
         }}
       >
-        <label htmlFor="open-by-path">Or type a path</label>
-        <input
-          id="open-by-path"
-          type="text"
-          value={typed}
-          placeholder="/path/to/project"
-          onChange={(event) => setTyped(event.target.value)}
+        {/* The settings set's row (#1719), as the first run draws the same box. `setting` is
+            the handle the scenario tests find it by. */}
+        <SettingRow
+          label="Or type a path"
+          setting="open-by-path"
+          control={(ids) => (
+            <Field
+              ids={ids}
+              kind="text"
+              value={typed}
+              placeholder="/path/to/project"
+              onChange={setTyped}
+            />
+          )}
         />
-        <button type="submit" tabIndex={0} disabled={!typed.trim()}>
-          Open
-        </button>
+        <SettingActions>
+          <button type="submit" tabIndex={0} disabled={!typed.trim()}>
+            Open project
+          </button>
+        </SettingActions>
       </form>
 
       {said && (
@@ -242,6 +258,11 @@ export function Opener({
       {/* `?.` on the list as well as on the answer: a core that answered oddly — the shape
           changed, a command stubbed out — must cost this screen its recent list and not its
           picker. The opener is the one screen an operator with no project can reach. */}
+      {/* Said, not swallowed (#1719): an opener with no list and no word reads as a machine
+          that remembers nothing. No live role: this screen's status is the line above. */}
+      {unread !== undefined && (
+        <p className="came-back">purlis could not read the recent projects: {unread}</p>
+      )}
       {(recents?.planes?.length ?? 0) > 0 && (
         <>
           <h2>Recent projects</h2>

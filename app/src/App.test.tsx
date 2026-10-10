@@ -182,7 +182,9 @@ describe("App", () => {
     expect(await screen.findByRole("heading", { level: 1 })).toHaveTextContent(
       "purlis found no project here",
     );
-    expect(screen.getByText(/no charter.toml in \/tmp/)).toBeInTheDocument();
+    // The opener's own status says the resolver's words. Every command fails here, so the
+    // kill switch says it could not read its state too (#1719), in its own words.
+    expect(screen.getByRole("status")).toHaveTextContent(/no charter.toml in \/tmp/);
     expect(screen.getByRole("button", { name: "Open project…" })).toBeInTheDocument();
   });
 

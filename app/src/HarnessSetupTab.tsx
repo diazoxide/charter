@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { LoaderCircle } from "lucide-react";
-import { commands, type HarnessRow, type HarnessSetupFound, type PlaneId } from "./bindings";
+import { commands, type HarnessSetupFound, type PlaneId } from "./bindings";
+import { harnessSays } from "./harnessSays";
 import { EmptyState } from "./EmptyState";
 import { askHarnessSetup } from "./harnessSetup";
 
@@ -95,11 +96,24 @@ export function HarnessSetupTab({
       ) : (
         <>
           <h3>{any ? "A harness is installed" : "No harness found"}</h3>
-          <p className="came-back">
-            {any
-              ? "Start a chat and pick it. A harness that is not signed in asks for its own login when its chat starts."
-              : "A chat runs a harness, and none is installed on this machine. Install one with its own installer: Install runs that command in a shell tab. When it has finished, press Check again. Signing in is the harness's own first screen, when its chat starts."}
-          </p>
+          {any ? (
+            <p className="came-back">
+              Start a chat and pick it. A harness that is not signed in asks for its own login when
+              its chat starts.
+            </p>
+          ) : (
+            // The explanation, then the way out, each a paragraph of its own (#1719).
+            <>
+              <p className="came-back">
+                A chat runs a harness, and none is installed on this machine.
+              </p>
+              <p className="came-back">
+                Install one with its own installer: Install runs that command in a shell tab. When
+                it has finished, press Check again. Signing in is the harness&apos;s own first
+                screen, when its chat starts.
+              </p>
+            </>
+          )}
         </>
       )}
 
@@ -113,7 +127,7 @@ export function HarnessSetupTab({
       <ul className="harness-setup-rows" aria-label="Harnesses">
         {harnesses.map((row) => (
           <li key={row.name}>
-            <span className="tab-name">{row.title}</span>: {says(row)}
+            <span className="tab-name">{row.title}</span>: {harnessSays(row)}
             {!row.installed && (
               <>
                 <code className="harness-installer">{row.installer}</code>
@@ -181,9 +195,4 @@ export function HarnessSetupTab({
       </div>
     </div>
   );
-}
-
-function says(row: HarnessRow): string {
-  if (!row.installed) return "not installed";
-  return row.signed_in ? "ready" : "installed; it asks you to sign in when its chat starts";
 }

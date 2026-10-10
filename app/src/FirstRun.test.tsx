@@ -170,6 +170,49 @@ describe("the first run's project template (FR-17)", () => {
     expect(box).toHaveAttribute("placeholder", "/path/to/repo");
   });
 
+  it("asks the template before either act that uses it (#1719)", async () => {
+    core();
+    render(<App />);
+
+    const group = await screen.findByRole("radiogroup", { name: "Project template" });
+    const pick = screen.getByRole("button", { name: "Open a repo…" });
+    const box = screen.getByLabelText("Or type the repo's path");
+    // Drawn before both, so a repo is never opened before the choice is seen.
+    for (const after of [pick, box])
+      expect(group.compareDocumentPosition(after) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("says it is reading what this machine has, where the template will be (#1719)", async () => {
+    core((cmd) => (cmd === "first_run_found" ? new Promise(() => {}) : undefined));
+    render(<App />);
+
+    expect(await screen.findByText("Reading what this machine has…")).toBeInTheDocument();
+  });
+
+  it("says a machine purlis could not look at, and still opens a repo (#1719)", async () => {
+    core((cmd) => {
+      if (cmd === "first_run_found") throw "the probe was refused";
+      return undefined;
+    });
+    render(<App />);
+
+    expect(
+      await screen.findByText("purlis could not read what this machine has: the probe was refused"),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("Or type the repo's path")).toBeInTheDocument();
+  });
+
+  it("leads with one row of its two ways in (#1719)", async () => {
+    core();
+    render(<App />);
+
+    const pick = await screen.findByRole("button", { name: "Open a repo…" });
+    const row = pick.closest(".ui-setting-actions") as HTMLElement;
+    expect(
+      within(row).getByRole("button", { name: "Open an existing project instead" }),
+    ).toBeInTheDocument();
+  });
+
   it("says which template fits the repo whose path is typed", async () => {
     const { calls } = core((cmd, args) =>
       cmd === "template_that_fits" ? (args.path === REPO ? "rust" : null) : undefined,

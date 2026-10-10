@@ -35,7 +35,11 @@ export function KillSwitch() {
         .then((said) => {
           if (typeof said === "boolean") setStopped(said);
         })
-        .catch(() => {}),
+        // Said, never swallowed (#1719): a switch whose state could not be read would draw
+        // as armed, the one thing it must never show of a stopped app.
+        .catch((err: unknown) =>
+          setTrouble(`purlis could not read whether chats are stopped: ${String(err)}`),
+        ),
     [],
   );
 
