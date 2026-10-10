@@ -193,8 +193,9 @@ async function openActivityOf(name: string): Promise<void> {
   await browser.waitUntil(
     async () =>
       browser.execute(() => {
+        // By the row's name: its text also holds the note under the title (Menus.tsx).
         const item = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(
-          (one) => one.textContent?.trim() === "Activity",
+          (one) => one.getAttribute("aria-label") === "Activity",
         );
         item?.click();
         return item !== undefined;
