@@ -437,6 +437,31 @@ pub async fn set_extension_on(id: String, on: bool) -> Result<(), String> {
     .map_err(|err| format!("turning that extension on or off did not finish: {err}"))?
 }
 
+// The extension record opened in your editor (#1296): the Extensions dialog's way to mend a
+// record purlis could not read. The window names the editor and nothing else: the file is this
+// machine's own record, placed by the core, never a path the window sent. Window-only
+// (`WINDOW_ONLY`): it starts a program of the person's on a machine file, which no link may.
+// Not a doc comment, because the generated bindings carry those.
+#[tauri::command]
+#[specta::specta]
+pub async fn open_extension_record(
+    app: tauri::AppHandle,
+    editor: crate::piecefiles::YourEditor,
+) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt as _;
+    let root = config_root()?;
+    let var = |name: &str| std::env::var(name).ok();
+    match extension::record_in_your_editor(&root, editor.into(), &var)? {
+        purlis_core::youreditor::Launch::Url(url) => app
+            .opener()
+            .open_url(&url, None::<&str>)
+            .map_err(|e| format!("the system did not open {url}: {e}")),
+        purlis_core::youreditor::Launch::Program { program, args } => {
+            crate::piecefiles::started(program, args).await
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------------------
 // Per project (charter-app#253, ADR 0048)
 // ---------------------------------------------------------------------------------------
@@ -1602,5 +1627,20 @@ mod tests {
             assert_eq!(theme.local_left_out, None, "{workspace:?}");
             assert_eq!(theme.picked.as_deref(), Some("charter-dark"));
         }
+    }
+
+    /// #1296: opening the extension record is the window's alone, and the window names only the
+    /// editor: the generated client carries no path for it.
+    #[test]
+    fn the_record_is_opened_from_the_window_alone_and_names_no_file() {
+        assert!(purlis_session_protocol::ui::window_only(
+            "open_extension_record"
+        ));
+        let bound = include_str!("../../src/bindings.ts");
+        let at = bound
+            .find("openExtensionRecord: (")
+            .expect("the window's client has the command");
+        let signature = &bound[at..at + bound[at..].find(')').expect("its parameters end")];
+        assert_eq!(signature, "openExtensionRecord: (editor: YourEditor");
     }
 }

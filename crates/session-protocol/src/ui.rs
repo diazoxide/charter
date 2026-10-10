@@ -159,6 +159,10 @@ pub struct Server {
 /// sandbox block on one press (#1508), and `allow_sandbox_block` answers one chat's (#1538):
 /// a person's answer given in their own window to the block it showed, which no link carries
 /// a second way to give.
+///
+/// `open_extension_record` starts the person's editor on this machine's extension record
+/// (#1296): a program of theirs run on a machine file, from the Extensions dialog, which no link
+/// asks for.
 pub const WINDOW_ONLY: &[&str] = &[
     "answer_ask",
     // Ends.
@@ -248,6 +252,8 @@ pub const WINDOW_ONLY: &[&str] = &[
     "keep_sandbox_block_for_tasks",
     // Widens what a persona's chats reach on this machine (#1362).
     "allow_persona_hosts",
+    // Starts the person's editor on this machine's extension record (#1296).
+    "open_extension_record",
 ];
 
 /// **The commands of who may dispatch to whom**, by name (spec #1483): every one is on

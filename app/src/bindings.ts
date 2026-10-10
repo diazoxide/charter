@@ -1704,6 +1704,7 @@ export const commands = {
 	 *  project; a project or a workspace can still turn it off on its own, as it can any extension.
 	 */
 	setExtensionOn: (id: string, on: boolean) => typedError<null, string>(__TAURI_INVOKE("set_extension_on", { id, on })),
+	openExtensionRecord: (editor: YourEditor) => typedError<null, string>(__TAURI_INVOKE("open_extension_record", { editor })),
 	/**
 	 *  Every theme in force: the ones approved extensions contribute, and nothing else.
 	 * 

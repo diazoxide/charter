@@ -7,6 +7,7 @@ import { drawThemeFor, Extensions, troubleSaid } from "./Extensions";
 import { BUILT_IN, DEFAULT_THEME, drawIn, inForce, onDrawn, type Theme } from "./theme/theme";
 import { GLOBAL } from "./windowprefs";
 import { forgetProjectThemes } from "./projectTheme";
+import { forgetYourEditor, setYourEditor } from "./yourEditor";
 
 /**
  * A colour for a theme an extension contributes, taken out of charter's own light theme
@@ -305,6 +306,39 @@ describe("the extension registry", () => {
       expect(screen.queryByText(/nothing an extension declares is in force/)).toBeNull(),
     );
     expect(screen.getByText("Solarized")).toBeInTheDocument();
+  });
+
+  it("opens the unreadable record in your editor, naming the editor and no file (#1296)", async () => {
+    const asked: { cmd: string; args: unknown }[] = [];
+    mockIPC((cmd, args) => {
+      asked.push({ cmd, args });
+      if (cmd === "installed_extensions")
+        return {
+          built_in_themes: [],
+          extensions: [],
+          unreadable: "'/home/o/.config/charter/extensions.json' is not JSON",
+          dropped: [],
+        };
+      if (cmd === "extension_themes") return [];
+      if (cmd === "open_extension_record") return null;
+      throw new Error(`the window asked for ${cmd}, which this test did not expect`);
+    });
+    render(<Extensions onClose={() => undefined} />);
+    await screen.findByText(/nothing an extension declares is in force/);
+
+    forgetYourEditor();
+    await userEvent.click(screen.getByRole("button", { name: "Open in your editor" }));
+    expect(await screen.findByText(/Choose your editor in Settings › You › Editor/)).toBeVisible();
+    expect(asked.some(({ cmd }) => cmd === "open_extension_record")).toBe(false);
+
+    setYourEditor("zed");
+    await userEvent.click(screen.getByRole("button", { name: "Open in your editor" }));
+    await waitFor(() =>
+      expect(asked.filter(({ cmd }) => cmd === "open_extension_record")).toEqual([
+        { cmd: "open_extension_record", args: { editor: "zed" } },
+      ]),
+    );
+    forgetYourEditor();
   });
 });
 
