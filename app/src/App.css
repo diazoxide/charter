@@ -6233,6 +6233,26 @@ h2.sidebar-title .node-icon {
   overflow-y: auto;
 }
 
+/* **The days a dated list is drawn under** (#1674): Today, Yesterday, Earlier. Quieter than the
+   section's own title, which is the uppercase line above it, so a day reads as where a run of
+   rows starts and not as a second heading. One scroll holds every day (`.panel-rows`). */
+.panel-day {
+  margin: 0.35rem 0 0.1rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.panel-day:first-child {
+  margin-top: 0;
+}
+
+.panel-day-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
 /* **A row is one line and never three.** `nowrap` plus `ellipsis` is what actually fits the
    text to a region the operator drags; `PanelList.shorten` cuts the string before it reaches
    the DOM, which is the half a jsdom test can see. Both, because they do different work —

@@ -205,16 +205,13 @@ describe("the Sessions panel", () => {
     const panel = await screen.findByTestId("panel-sessions");
     await waitFor(() => expect(within(panel).getByText("Ship the widget")).toBeTruthy());
 
+    // One line a record (#1674): its title, and when, as whom and whether it resumes on hover.
     const rows = within(panel)
       .getAllByRole("button")
-      .map((row) => row.textContent ?? "")
-      .filter((text) => text.includes("·"));
-    expect(rows.map((text) => text.replace(/ · .*/, "").replace(/\d{4}-.*$/, ""))).toEqual([
-      "Ship the widget",
-      "Plan it",
-    ]);
-    expect(rows[0]).toContain("↻ resumable");
-    expect(rows[1]).not.toContain("resumable");
+      .filter((row) => row.hasAttribute("title") && /^\d{4}-/.test(row.title));
+    expect(rows.map((row) => row.textContent)).toEqual(["Ship the widget", "Plan it"]);
+    expect(rows[0].title).toContain("↻ resumable");
+    expect(rows[1].title).not.toContain("resumable");
   });
 
   it("opens a record as a read-only view tab of rendered Markdown", async () => {

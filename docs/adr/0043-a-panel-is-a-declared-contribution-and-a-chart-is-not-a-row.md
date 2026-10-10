@@ -490,3 +490,22 @@ something would need"*, and the answer is not the `runs` grant it described:
 **ADR 0065 (2026-09-28) supersedes the popover for memory rows.** A memory opens in a view tab
 of its own — read rendered, edited in place — and the row's popover and truncation title go.
 Every other row keeps the popover this record describes.
+
+## Later: a row on the right side is its title alone
+
+**Spec #1671 (B-9, accepted by the operator 2026-10-10), built in #1674.** The vocabulary is
+unchanged: `Row::note` is still a short trailing note, and a producer still writes it. What
+changed is where the window draws it, on the right side only:
+
+- **A row in a right-side panel is one line: its mark and its title.** The note is the row's
+  hover (`title`), which on a row that is a button is also its description for a screen reader.
+  A list in a view tab has the pane's width and keeps its notes on the line.
+- **A list whose notes begin with a date** (`YYYY-MM-DD`, as a memory's, a todo's and a
+  session record's do) is drawn under **Today**, **Yesterday** and **Earlier**, newest day
+  first, before the page is cut. A row with no note goes under Earlier. A list with one note
+  that is not a date gets no headings.
+- **A persona's row is its badge and its name.** How much it remembers is said on its tab
+  ("It remembers N things"), and the count on the row (the table above, *a count on a row*) is
+  now its hover. The default persona keeps the star.
+- **Statistics left the Personas heading.** An approved extension's view about personas is
+  offered on each persona's tab, about that persona, and in the palette.

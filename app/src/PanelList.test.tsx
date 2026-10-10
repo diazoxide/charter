@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { PAGE, PanelList, SHORTEST, codeSpans, shorten } from "./PanelList";
@@ -43,7 +43,7 @@ const EMPTY = { headline: "Nothing here", body: null, offer: null };
 /** The list, with the window's own open-row state around it — which is where it lives. */
 function draw(
   rows: PanelRow[],
-  over: { page?: number; onRun?: (id: string, kept?: boolean) => void } = {},
+  over: { page?: number; onRun?: (id: string, kept?: boolean) => void; titleOnly?: boolean } = {},
 ) {
   function Window() {
     const [open, setOpen] = useState<string>();
@@ -57,6 +57,7 @@ function draw(
         onOpen={setOpen}
         onRun={over.onRun}
         page={over.page}
+        titleOnly={over.titleOnly}
       />
     );
   }
@@ -457,5 +458,129 @@ describe("the keyboard in a list (charter-app#189)", () => {
     // The card has the keyboard now, and the list's stop is the row it came from.
     await waitFor(() => expect(second).toHaveAttribute("tabindex", "0"));
     expect(within(list).getAllByRole("button")[0]).toHaveAttribute("tabindex", "-1");
+  });
+});
+
+describe("a row on the right is its title alone (#1674)", () => {
+  // The clock the day headings read: noon on 2026-10-10, local time, which is the time a
+  // memory's stamp is written in (`memstore`, `%Y-%m-%d %H:%M`).
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 9, 10, 12, 0));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("draws the title and says the note on hover, not beside it", () => {
+    draw(
+      [row("a", "Deploys freeze on Fridays", { note: "2026-10-10 09:12", runs: "memory.open:a" })],
+      {
+        titleOnly: true,
+      },
+    );
+
+    const button = screen.getByRole("button", { name: "Deploys freeze on Fridays" });
+    expect(button).toHaveTextContent(/^Deploys freeze on Fridays$/);
+    expect(button).toHaveAttribute("title", "2026-10-10 09:12");
+  });
+
+  it("keeps the note beside the title where a list is not one of the right side's", () => {
+    // A view tab's list (a persona's memories, a stack's pull requests) has the pane's width
+    // and keeps what it says on the line.
+    draw([row("a", "Ship it", { note: "#7 open", runs: "x" })]);
+
+    expect(screen.getByRole("button")).toHaveTextContent("Ship it · #7 open");
+  });
+
+  it("groups dated rows under Today, Yesterday and Earlier, newest group first", () => {
+    draw(
+      [
+        row("old", "From last week", { note: "2026-10-02 08:00", runs: "x" }),
+        row("y", "From yesterday", { note: "2026-10-09 23:59", runs: "x" }),
+        row("t", "From this morning", { note: "2026-10-10 07:30", runs: "x" }),
+        row("t2", "From an hour ago", { note: "2026-10-10 11:00 · steward", runs: "x" }),
+      ],
+      { titleOnly: true },
+    );
+
+    const days = screen.getAllByRole("heading").map((one) => one.textContent);
+    expect(days).toEqual(["Today", "Yesterday", "Earlier"]);
+    const under = (day: string) =>
+      within(screen.getByRole("list", { name: day }))
+        .getAllByRole("button")
+        .map((one) => one.textContent);
+    // In the order the rows came, within each day.
+    expect(under("Today")).toEqual(["From this morning", "From an hour ago"]);
+    expect(under("Yesterday")).toEqual(["From yesterday"]);
+    expect(under("Earlier")).toEqual(["From last week"]);
+  });
+
+  it("draws no day without rows, and no headings where the notes are not dates", () => {
+    draw(
+      [
+        row("t", "Today's", { note: "2026-10-10 07:30", runs: "x" }),
+        row("old", "Old", { note: "2026-01-02 08:00", runs: "x" }),
+      ],
+      { titleOnly: true },
+    );
+    expect(screen.getAllByRole("heading").map((one) => one.textContent)).toEqual([
+      "Today",
+      "Earlier",
+    ]);
+
+    cleanup();
+    draw(
+      [
+        row("steward", "steward", { note: "default · 2 memories", runs: "x" }),
+        row("devops", "devops", { note: "0 memories", runs: "x" }),
+      ],
+      { titleOnly: true },
+    );
+    expect(screen.queryByRole("heading")).toBeNull();
+    expect(screen.getByRole("list", { name: "Todos" })).toBeInTheDocument();
+  });
+
+  it("puts a row with no date under Earlier, in a list whose other rows are dated", () => {
+    // A todo or a memory written by hand may have no stamp line, and its note is then none:
+    // one such row must not take the days away from the rest.
+    draw(
+      [
+        row("t", "Today's", { note: "2026-10-10 07:30", runs: "x" }),
+        row("bare", "Written by hand", { note: null, runs: "x" }),
+      ],
+      { titleOnly: true },
+    );
+
+    expect(screen.getAllByRole("heading").map((one) => one.textContent)).toEqual([
+      "Today",
+      "Earlier",
+    ]);
+    expect(
+      within(screen.getByRole("list", { name: "Earlier" })).getByRole("button"),
+    ).toHaveTextContent("Written by hand");
+  });
+
+  it("keeps the search at the top and Show more at the foot of a grouped list", async () => {
+    const dated = Array.from({ length: PAGE + 4 }, (_, at) =>
+      row(`k${at}`, `Memory ${at}`, {
+        note: at < 2 ? "2026-10-10 08:00" : "2026-09-01 08:00",
+        runs: "x",
+      }),
+    );
+    draw(dated, { titleOnly: true });
+
+    const list = screen.getByTestId("list");
+    expect(list.firstElementChild).toContainElement(screen.getByRole("searchbox"));
+    expect(screen.getAllByRole("button", { name: /^Memory/ })).toHaveLength(PAGE);
+    await userEvent.click(screen.getByRole("button", { name: /Show 4 more/ }));
+    expect(screen.getAllByRole("button", { name: /^Memory/ })).toHaveLength(PAGE + 4);
+
+    await userEvent.type(screen.getByRole("searchbox"), "Memory 1");
+    // Memory 1 (today) and Memory 10..15 (earlier): still under their days.
+    expect(screen.getAllByRole("heading").map((one) => one.textContent)).toEqual([
+      "Today",
+      "Earlier",
+    ]);
   });
 });

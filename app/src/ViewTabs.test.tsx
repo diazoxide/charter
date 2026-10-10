@@ -638,10 +638,16 @@ describe("a vault's own tab (charter-app#235)", () => {
 
 describe("a project's own extensions (charter-app#253)", () => {
   it("offers an extension's view only while the project in front has that extension on", async () => {
+    // On the persona's own tab, beside the persona it is about (#1674), and not on the
+    // Personas heading.
     core({ offered: [STATISTICS], extensionsOn: ["persona-statistics"] });
     render(<App />);
     const panel = await screen.findByTestId("panel-personas");
-    expect(await within(panel).findByRole("button", { name: /Statistics/ })).toBeInTheDocument();
+    await userEvent.click(await within(panel).findByRole("button", { name: /steward/ }));
+
+    const tab = await screen.findByTestId("view-pane-charter-persona-steward");
+    expect(await within(tab).findByRole("button", { name: /Statistics/ })).toBeInTheDocument();
+    expect(within(panel).queryByRole("button", { name: /Statistics/ })).toBeNull();
   });
 
   it("offers nothing from an extension the project turned off", async () => {
@@ -653,9 +659,11 @@ describe("a project's own extensions (charter-app#253)", () => {
         true,
       ),
     );
-    await within(panel).findByRole("button", { name: /steward/ });
+    await userEvent.click(await within(panel).findByRole("button", { name: /steward/ }));
+    const tab = await screen.findByTestId("view-pane-charter-persona-steward");
+    await within(tab).findByText(/It remembers/);
 
-    expect(within(panel).queryByRole("button", { name: /Statistics/ })).toBeNull();
+    expect(within(tab).queryByRole("button", { name: /Statistics/ })).toBeNull();
   });
 });
 
