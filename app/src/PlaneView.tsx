@@ -129,6 +129,7 @@ import {
   ReferenceChats,
   useReferenceChats,
   type ChatsForReferences,
+  type Referenced,
 } from "./references";
 import { Explorer, type Spot } from "./Explorer";
 import {
@@ -308,6 +309,7 @@ import { NewVault } from "./NewVault";
 import { OpenVault, useVaults } from "./Vaults";
 import { usePlaneEdits } from "./PlaneEdits";
 import { useMemoryEdits } from "./MemoryEdits";
+import { AddToAChat } from "./AddToAChat";
 import { DRAFT, isMemory, memoryRefOf } from "./memories";
 import { ViewPane } from "./Views";
 import type { FirstTaskDoes } from "./FirstTaskTab";
@@ -783,6 +785,8 @@ export const PlaneView = memo(function PlaneView({
   const reloadVaults = vaults.reload;
   /** Whether the vault picker is up. */
   const [pickingVault, setPickingVault] = useState(false);
+  /** A file or folder row's *Add to a chat's context*, picking its chat (#1151). */
+  const [addingToChat, setAddingToChat] = useState<Referenced>();
   /** Whether the new-vault dialog is up, why the last attempt made nothing, and whether
    *  charter is making one right now — `makingWorkspace`'s three, for a vault. */
   const [makingVault, setMakingVault] = useState(false);
@@ -5199,6 +5203,8 @@ export const PlaneView = memo(function PlaneView({
       ...fileDoing,
       shellInFolder,
       startChatHere,
+      // The picker of this project's chats, for that row's path (#1151): the pick hands it on.
+      addToChat: (at: BranchPath, folder: boolean) => setAddingToChat({ plane, ...at, folder }),
     }),
     [
       beginRename,
@@ -5223,6 +5229,7 @@ export const PlaneView = memo(function PlaneView({
       fileDoing,
       shellInFolder,
       startChatHere,
+      plane,
       focusWorkspace,
       ignoreNeedsYou,
       mergeWorktree,
@@ -7802,6 +7809,15 @@ export const PlaneView = memo(function PlaneView({
       )}
 
       {edits.dialogs}
+
+      {addingToChat && (
+        <AddToAChat
+          referenced={addingToChat}
+          chats={referenceChats.chats}
+          onPick={(chat) => referenceChats.hand(addingToChat, chat.session, "add")}
+          onCancel={() => setAddingToChat(undefined)}
+        />
+      )}
 
       {pickingVault && (
         <OpenVault

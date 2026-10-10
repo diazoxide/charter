@@ -1319,6 +1319,7 @@ function App() {
       openInEditor: async () => nowhere(),
       shellInFolder: () => undefined,
       startChatHere: async () => nowhere(),
+      addToChat: () => undefined,
     }),
     [windowDoes],
   );
