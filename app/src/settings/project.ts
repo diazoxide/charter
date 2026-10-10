@@ -284,6 +284,7 @@ export function profilePage(name: string): string {
  */
 function profilesCollection(
   local: SettingsFile,
+  plane: PlaneId | undefined,
   only?: { id: string; settings: readonly FileSetting[] },
 ): Collection {
   const listed = (local.entries ?? []).filter((one) => one.collection === "profiles");
@@ -306,6 +307,9 @@ function profilesCollection(
     home: "project.harness",
     renames: only !== undefined,
     pageOf: profilePage,
+    // The open chats started on it (#1290): a rename or remove leaves them running, and the
+    // next launch cannot start them again on a name no profile has.
+    ...(plane === undefined ? {} : { running: (entry) => runningOn(plane, entry.name) }),
     fields: [
       {
         field: "name",
@@ -329,6 +333,16 @@ function profilesCollection(
       },
     ],
   };
+}
+
+/** How many of `plane`'s open chats started on the profile called `name` (#1290). */
+function runningOn(plane: PlaneId, name: string | undefined): Promise<number> {
+  if (name === undefined) return Promise.resolve(0);
+  return commands.openedChats(plane).then(
+    (said) =>
+      said.status === "ok" ? (said.data ?? []).filter((one) => one.profile === name).length : 0,
+    () => 0,
+  );
 }
 
 /**
@@ -357,7 +371,7 @@ function profilePages(read: ProjectRead): SettingsGroup[] {
         label: one.label,
         help: `The profile ${one.label}: what it runs and with what environment, on this machine only. A changed command asks you to approve it before its next run.`,
         settings,
-        collection: profilesCollection(read.local, { id: one.id, settings }),
+        collection: profilesCollection(read.local, read.plane, { id: one.id, settings }),
         sub: true,
       };
     });
@@ -543,7 +557,7 @@ function declaredGroups(read: ProjectRead, reread?: () => void): SettingsGroup[]
           ),
         ]),
       ],
-      ...(localOk ? { collection: profilesCollection(read.local) } : {}),
+      ...(localOk ? { collection: profilesCollection(read.local, read.plane) } : {}),
     },
     ...profilePages(read),
     {
