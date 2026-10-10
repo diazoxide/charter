@@ -191,7 +191,7 @@ describe("the settings gears, and ⌘, at the focused level", function () {
 
     await levelBecomes("Workspace");
     await expect($('[data-strip="Tabs"] [role="tab"][aria-selected="true"]')).toHaveText(
-      `Workspace settings · ${focused}`,
+      `Settings · ${focused}`,
       { containing: true },
     );
   });

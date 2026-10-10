@@ -164,7 +164,7 @@ describe("a tab's menu opens Settings at that tab's level", function () {
     await fromItsMenu(`${WORKSPACES} [role="tab"][aria-selected="true"]`, "Workspace settings…");
 
     await levelBecomes("Workspace");
-    const title = `Workspace settings · ${focused}`;
+    const title = `Settings · ${focused}`;
     await expect(inFront()).toHaveText(title, { containing: true });
 
     // Both tabs are on the focused workspace's strip; each is closed by its own ×.

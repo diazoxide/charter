@@ -149,8 +149,17 @@ export function harnessCardView(harness: string): ViewRef {
   return { from: null, view: "harness", key: harness };
 }
 
-/** What Settings at a workspace's level is called (the core's `wscmd::rename` says the same). */
+/**
+ * What Settings at a workspace's level is called (the core's `wscmd::rename` says the same):
+ * "Settings", as at the You and Project levels, and the workspace it is at (D-1192-1). The name
+ * tells the tab apart from the Project level's Settings tab on the same strip.
+ */
 export function workspaceSettingsTitle(workspace: string): string {
+  return `Settings · ${workspace}`;
+}
+
+/** What Settings at a workspace's level was called before D-1192-1, as an older record holds it. */
+function workspaceSettingsTitleBefore(workspace: string): string {
   return `Workspace settings · ${workspace}`;
 }
 
@@ -192,7 +201,9 @@ export const SETTINGS_TAB_TITLE = "Settings";
  *
  * - the Preferences tab (charter-app#283) is Settings at the You level since SE-16;
  * - the Project settings page (charter-app#252, the view `settings` keyed `""`) is Settings at
- *   the Project level since SE-19 retired it (D-SE19b).
+ *   the Project level since SE-19 retired it (D-SE19b);
+ * - Settings at a workspace's level, titled "Workspace settings · <ws>" until D-1192-1, is
+ *   titled {@link workspaceSettingsTitle} — only that exact title, so nothing else is renamed.
  *
  * Every other view is itself.
  */
@@ -201,6 +212,8 @@ export function viewNamedNow(view: ViewRef, title: string): { view: ViewRef; tit
   if (view.view === "preferences") return { view: settingsView("you"), title: SETTINGS_TAB_TITLE };
   if (view.view === "settings" && view.key === "")
     return { view: settingsView("project"), title: SETTINGS_TAB_TITLE };
+  if (view.view === "workspace-settings" && title === workspaceSettingsTitleBefore(view.key))
+    return { view, title: workspaceSettingsTitle(view.key) };
   return { view, title };
 }
 

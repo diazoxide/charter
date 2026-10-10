@@ -222,10 +222,8 @@ impl Move {
             && let Some(key) = renamed_key(&view.view, &view.key, &self.old, &self.new)
         {
             view.key = key;
-            if let (Some(old), Some(new)) = (
-                title_of(&view.view, &self.old),
-                title_of(&view.view, &self.new),
-            ) && view.title == old
+            if let Some(new) = title_of(&view.view, &self.new)
+                && titled_by(&view.view, &self.old, &view.title)
             {
                 view.title = new;
             }
@@ -300,13 +298,24 @@ fn renamed_key(view: &str, key: &str, old: &str, new: &str) -> Option<String> {
 /// (`app/src/tabs.ts` `TITLED_BY_WORKSPACE`).
 fn title_of(view: &str, workspace: &str) -> Option<String> {
     let before = match view {
-        "workspace-settings" => "Workspace settings",
+        // "Settings", as at every other level, with the workspace it is at (D-1192-1).
+        "workspace-settings" => "Settings",
         "changes" => "Changes",
         "repo-instructions" => "Memory from the repo",
         "memory-archive" => "Archived memory",
         _ => return None,
     };
     Some(format!("{before} · {workspace}"))
+}
+
+/// Whether `title` is what the window titled view `view` under workspace `workspace`'s name, now
+/// or in an earlier version: Settings at a workspace's level was "Workspace settings · <ws>"
+/// until D-1192-1, and a record from a launch before it still holds that title. The window puts
+/// such a tab back under the new title (`app/src/tabs.ts` `viewNamedNow`); a rename between the
+/// two launches still follows it.
+fn titled_by(view: &str, workspace: &str, title: &str) -> bool {
+    title_of(view, workspace).is_some_and(|now| now == title)
+        || (view == "workspace-settings" && title == format!("Workspace settings · {workspace}"))
 }
 
 /// The steps of a rename, in order, named for a test to stop one dead after: the journal, the
