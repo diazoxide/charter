@@ -27,7 +27,7 @@ function row(over: Partial<AlertRow> = {}): AlertRow {
     severity: "warn",
     subject: "front door",
     detail: "ghost — no such persona",
-    way: { kind: "settings", group: "project.general" },
+    way: { kind: "settings", group: "project.general", setting: "project.general.persona.default" },
     ...over,
   };
 }
@@ -118,6 +118,28 @@ describe("the alerts drawer", () => {
     const beta = project("beta-plane");
     expect(beta).toHaveTextContent("memory commit not pushed");
     expect(within(beta).getByRole("listitem")).toHaveAttribute("data-severity", "bad");
+  });
+
+  it("hands the setting a row names to Settings, with its group and its project (#1289)", async () => {
+    const opened: unknown[][] = [];
+    render(
+      <AlertsDrawer
+        open
+        onOpenChange={() => {}}
+        reading={{ at: "read", planes: [plane(A, [row()])] }}
+        planes={[A]}
+        nameOf={nameOf}
+        does={{ ...DOES, openSettings: (...args: unknown[]) => void opened.push(args) }}
+      />,
+    );
+
+    await userEvent.click(
+      within(project("alpha-plane")).getByRole("button", { name: "Fix it in Settings" }),
+    );
+
+    await waitFor(() =>
+      expect(opened).toEqual([["project.general", A, "project.general.persona.default"]]),
+    );
   });
 
   it("lists them in the strip's order, with a project only the core holds after them", () => {
