@@ -380,7 +380,10 @@ fn report_in(
     };
     DoctorReport {
         rows: doctor.run().into_iter().map(DoctorRow::from).collect(),
-        app_rows: vec![chat_footer(root), event_log(crate::EVENT_LOG.get())],
+        app_rows: [chat_footer(root), event_log(crate::EVENT_LOG.get())]
+            .into_iter()
+            .chain(config_root.and_then(|config_root| local_project(root, config_root)))
+            .collect(),
         full,
         path: std::env::var_os("PATH").map(|p| p.to_string_lossy().into_owned()),
     }
@@ -541,6 +544,25 @@ fn event_log(opened: Option<&Result<std::path::PathBuf, crate::EventLogRefused>>
     }
 }
 
+/// `local project`: only on this machine's local project while it is still in the config home,
+/// where no sandboxed chat starts (#1670). The launch moves it when nothing works in it
+/// (`purlis_core::localproject`); this says so where the person meets it, every time the
+/// project is checked, until it has moved.
+fn local_project(root: &std::path::Path, config_root: &std::path::Path) -> Option<DoctorRow> {
+    let why = purlis_core::localproject::still_in_the_config_home(root, config_root)?;
+    Some(DoctorRow {
+        name: "local project".to_owned(),
+        status: DoctorStatus::Warn,
+        detail: why,
+        hint: "purlis moves it to its data home at a launch when nothing works in it: quit every \
+               chat, terminal and editor working in it, then quit purlis and open it again"
+            .to_owned(),
+        checked: true,
+        settings: None,
+        fix: None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -560,6 +582,29 @@ mod tests {
             std::fs::create_dir_all(root.join(d)).expect("a directory");
         }
         (dir, root)
+    }
+
+    /// #1670: the local project still in the config home is said, where it opens; any other
+    /// project, and the local project once it moved, has no such row.
+    #[test]
+    fn a_local_project_left_in_the_config_home_has_a_row_and_no_other_project_does() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let config_root = std::fs::canonicalize(dir.path()).expect("it resolves");
+        let old = purlis_core::machine::dir(&config_root).join(purlis_core::localproject::OLD_NAME);
+        std::fs::create_dir_all(&old).expect("the old place");
+        let other = config_root.join("elsewhere");
+        std::fs::create_dir_all(&other).expect("another project's folder");
+
+        let row = local_project(&old, &config_root).expect("a row");
+
+        assert_eq!(row.name, "local project");
+        assert_eq!(row.status, DoctorStatus::Warn);
+        assert!(
+            row.detail.contains("no sandboxed chat starts here"),
+            "{}",
+            row.detail
+        );
+        assert_eq!(local_project(&other, &config_root), None);
     }
 
     #[test]

@@ -45,7 +45,7 @@ afterEach(() => {
   withinTheBudget(asked);
 });
 
-const LOCAL = "/home/dev/.config/charter/local-plane";
+const LOCAL = "/home/dev/.local/share/purlis/local-project";
 const REPO = "/home/dev/widget";
 const CLONE = `${LOCAL}/workspaces/widget/widget`;
 
