@@ -2645,8 +2645,13 @@ export type AlertRow = {
  *  words: the drawer turns each into one button.
  */
 export type AlertWay = 
-/**  A Settings group of the project the alert is about, by its address (SE-22). */
-{ kind: "settings"; group: string } | 
+/**
+ *  A Settings group of the project the alert is about, by its address (SE-22) — and the
+ *  setting in it that mends the alert, by the id the Settings builders give it
+ *  (`settings/project.ts`), so the link lands on that control (#1289). `null` when the
+ *  group as a whole is the way out.
+ */
+{ kind: "settings"; group: string; setting: string | null } | 
 /**  A fix of the doctor's registry, by the id `charter doctor --fix` takes (FX-1). */
 { kind: "fix"; id: string } | 
 /**  Another project to open: the one whose `workspaces/` this one is nested in. */

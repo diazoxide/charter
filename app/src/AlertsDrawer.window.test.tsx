@@ -38,13 +38,13 @@ const FRONT_DOOR: AlertRow = {
   severity: "warn",
   subject: "front door",
   detail: "ghost — no such persona",
-  way: { kind: "settings", group: "project.general" },
+  way: { kind: "settings", group: "project.general", setting: "project.general.persona.default" },
 };
 const PIN: AlertRow = {
   severity: "warn",
   subject: "charter",
   detail: "this charter is 2.0.0, and the plane pins 1.0.0",
-  way: { kind: "settings", group: "project.general" },
+  way: { kind: "settings", group: "project.general", setting: "project.general.charter.version" },
 };
 const REINIT: AlertRow = {
   severity: "warn",
@@ -203,6 +203,12 @@ describe("each row of the Alerts drawer", () => {
         "true",
       ),
     );
+    // The settings the core's rows name (#1289) are controls this group draws: the default
+    // persona's picker and the version lock, by the ids the Settings builders give them.
+    for (const setting of [FRONT_DOOR, PIN].map((one) =>
+      one.way.kind === "settings" ? one.way.setting : null,
+    ))
+      expect(document.querySelector(`[data-setting="${setting}"]`), setting ?? "").not.toBeNull();
   });
 
   it("reinits the workspaces behind the layout through the doctor's fix, then reads again", async () => {

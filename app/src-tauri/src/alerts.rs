@@ -37,8 +37,14 @@ pub(crate) struct AlertRow {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub(crate) enum AlertWay {
-    /// A Settings group of the project the alert is about, by its address (SE-22).
-    Settings { group: String },
+    /// A Settings group of the project the alert is about, by its address (SE-22) — and the
+    /// setting in it that mends the alert, by the id the Settings builders give it
+    /// (`settings/project.ts`), so the link lands on that control (#1289). `null` when the
+    /// group as a whole is the way out.
+    Settings {
+        group: String,
+        setting: Option<String>,
+    },
     /// A fix of the doctor's registry, by the id `charter doctor --fix` takes (FX-1).
     Fix { id: String },
     /// Another project to open: the one whose `workspaces/` this one is nested in.
@@ -49,15 +55,15 @@ pub(crate) enum AlertWay {
 
 /// The way out of one of the core's alerts.
 fn way_out(alert: &alerts::Alert) -> AlertWay {
-    use purlis_core::doctor::{SettingsGroup, fix::FixId};
+    use purlis_core::doctor::fix::FixId;
     match alert {
-        // The version lock, the update channel and the default persona's picker are all in
-        // Project › General — where the doctor's `version lock` and `front door` rows link too.
-        alerts::Alert::PinBesideDev { .. }
-        | alerts::Alert::PinDrift { .. }
-        | alerts::Alert::FrontDoor { .. } => AlertWay::Settings {
-            group: SettingsGroup::General.id().to_owned(),
-        },
+        // The version lock and the default persona's picker are both in Project › General —
+        // where the doctor's `version lock` and `front door` rows link too — and the link lands
+        // on the control itself (#1289).
+        alerts::Alert::PinBesideDev { .. } | alerts::Alert::PinDrift { .. } => {
+            general_at(&["charter", "version"])
+        }
+        alerts::Alert::FrontDoor { .. } => general_at(&["persona", "default"]),
         alerts::Alert::Reinit { .. } => AlertWay::Fix {
             id: FixId::WorkspaceReinit.id().to_owned(),
         },
@@ -65,6 +71,17 @@ fn way_out(alert: &alerts::Alert) -> AlertWay {
             path: outer.display().to_string(),
         },
         alerts::Alert::PlaneRoot { .. } => AlertWay::Saving,
+    }
+}
+
+/// Project › General, at the setting whose key in `charter.toml` is `key`: the id the Settings
+/// builders give a Shared setting, its group's address then its dotted key (`driver.ts`,
+/// `fileSetting`).
+fn general_at(key: &[&str]) -> AlertWay {
+    let group = purlis_core::doctor::SettingsGroup::General.id();
+    AlertWay::Settings {
+        group: group.to_owned(),
+        setting: Some(format!("{group}.{}", key.join("."))),
     }
 }
 
@@ -213,7 +230,8 @@ mod tests {
         assert_eq!(
             alerts[0].way,
             AlertWay::Settings {
-                group: "project.general".to_owned()
+                group: "project.general".to_owned(),
+                setting: Some("project.general.persona.default".to_owned()),
             }
         );
     }
@@ -222,8 +240,10 @@ mod tests {
     /// own kind of alert rather than by its words.
     #[test]
     fn each_kind_of_alert_has_its_way_out() {
+        // On the version lock's own control (#1289).
         let general = AlertWay::Settings {
             group: "project.general".to_owned(),
+            setting: Some("project.general.charter.version".to_owned()),
         };
         let way = |alert: alerts::Alert| way_out(&alert);
         assert_eq!(
