@@ -254,7 +254,7 @@ fn name_refused(name: &str) -> Option<String> {
     if let Some(why) = secret_refused(name) {
         return Some(why);
     }
-    if name.chars().any(crate::shown::invisible) {
+    if hides_a_character(name) {
         return Some(
             "A name is one line of visible characters: no control, zero-width or \
              direction-changing characters."
@@ -271,6 +271,72 @@ fn name_refused(name: &str) -> Option<String> {
         return Some("A name cannot contain < or >: git keeps those for the email.".into());
     }
     None
+}
+
+/// ZERO WIDTH JOINER: joins two emoji into one (a family, a flag, a profession).
+const ZWJ: char = '\u{200d}';
+/// ZERO WIDTH NON-JOINER: keeps two letters of a joining script apart, as Persian spells
+/// a word's parts (the prefix `mi` before a verb).
+const ZWNJ: char = '\u{200c}';
+/// VARIATION SELECTOR-16, which may follow an emoji before the joiner (the rainbow flag).
+const EMOJI_PRESENTATION: char = '\u{fe0f}';
+
+/// Does `name` hold a character [`crate::shown::invisible`] escapes, other than the two joiners
+/// a name of a person may need (#1301, D-1301-1)?
+///
+/// **Only in a git identity's name, and only where each joiner does its one job:**
+/// - a ZWJ between two emoji (after the first's variation selector, if it has one), as in a
+///   ZWJ family emoji;
+/// - a ZWNJ between two letters of the Arabic script, as Persian writes it.
+///
+/// Anywhere else (at either end, doubled, between two Latin letters) each is refused like
+/// every other control, zero-width or direction-changing character. Neither joiner can reorder
+/// text or hide a word: each only changes how its two neighbours are drawn. The shared rule,
+/// [`crate::shown::invisible`], is not widened: every other writer keeps it as it is.
+fn hides_a_character(name: &str) -> bool {
+    let chars: Vec<char> = name.chars().collect();
+    chars.iter().enumerate().any(|(at, &c)| {
+        if !crate::shown::invisible(c) {
+            return false;
+        }
+        let before = at.checked_sub(1).map(|i| chars[i]);
+        let after = chars.get(at + 1).copied();
+        let joins = match c {
+            ZWJ => {
+                let emoji_before = match before {
+                    Some(EMOJI_PRESENTATION) => {
+                        at.checked_sub(2).is_some_and(|i| pictographic(chars[i]))
+                    }
+                    Some(before) => pictographic(before),
+                    None => false,
+                };
+                emoji_before && after.is_some_and(pictographic)
+            }
+            ZWNJ => before.is_some_and(arabic_letter) && after.is_some_and(arabic_letter),
+            _ => false,
+        };
+        !joins
+    })
+}
+
+/// Is `c` an emoji a ZWJ sequence is made of: the pictographic blocks (symbols, dingbats,
+/// arrows and the emoji planes) and the skin-tone modifiers in them. A close reading of
+/// Unicode's Extended_Pictographic, without a table of its own.
+fn pictographic(c: char) -> bool {
+    matches!(
+        c as u32,
+        0x2300..=0x23ff | 0x2600..=0x27bf | 0x2b00..=0x2bff | 0x1f000..=0x1faff
+    )
+}
+
+/// Is `c` a letter of the Arabic script, in which Persian, Urdu and others are written: the
+/// Arabic blocks and their presentation forms.
+fn arabic_letter(c: char) -> bool {
+    c.is_alphabetic()
+        && matches!(
+            c as u32,
+            0x0600..=0x06ff | 0x0750..=0x077f | 0x08a0..=0x08ff | 0xfb50..=0xfdff | 0xfe70..=0xfeff
+        )
 }
 
 /// Characters that take a column and draw nothing in it: the Hangul fillers, letters by
@@ -355,5 +421,50 @@ mod tests {
             assert!(why.contains("looks like a secret"), "{why}");
             assert!(!why.contains(tail), "{why}");
         }
+    }
+
+    /// #1301 (D-1301-1): a ZWJ family emoji and a Persian name written with a ZWNJ are names,
+    /// and each joiner anywhere it does not join is refused like any other invisible character.
+    #[test]
+    fn a_joiner_that_joins_is_a_name_and_one_that_does_not_is_refused() {
+        for name in [
+            // man, ZWJ, woman, ZWJ, girl
+            "\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}",
+            // rainbow flag: white flag, VS-16, ZWJ, rainbow
+            "Kai \u{1f3f3}\u{fe0f}\u{200d}\u{1f308}",
+            // woman, skin tone, ZWJ, laptop
+            "Ada \u{1f469}\u{1f3fd}\u{200d}\u{1f4bb}",
+            // Persian: mi + ZWNJ + khaham
+            "\u{0645}\u{06cc}\u{200c}\u{062e}\u{0648}\u{0627}\u{0647}\u{0645}",
+        ] {
+            assert_eq!(name_refused(name), None, "{name:?}");
+        }
+        let invisible = "A name is one line of visible characters: no control, zero-width or \
+                         direction-changing characters.";
+        for name in [
+            // A lone ZWJ at either end.
+            "\u{200d}\u{1f468}",
+            "\u{1f468}\u{200d}",
+            // Two joiners in a row, and a ZWJ between letters.
+            "\u{1f468}\u{200d}\u{200d}\u{1f469}",
+            "Ad\u{200d}a",
+            // A ZWNJ at either end, between Latin letters, or after an emoji.
+            "\u{200c}\u{0645}\u{06cc}",
+            "\u{0645}\u{06cc}\u{200c}",
+            "Ad\u{200c}a",
+            "\u{1f468}\u{200c}\u{1f469}",
+            // Every other invisible character, joined or not.
+            "\u{0645}\u{200b}\u{062e}",
+            "\u{1f468}\u{202e}\u{1f469}",
+        ] {
+            assert_eq!(name_refused(name).as_deref(), Some(invisible), "{name:?}");
+        }
+    }
+
+    /// #1301: the joiners are a name's only. An email keeps the shared rule.
+    #[test]
+    fn an_email_keeps_refusing_every_joiner() {
+        assert!(email_refused("\u{0645}\u{06cc}\u{200c}\u{062e}@x.dev").is_some());
+        assert!(email_refused("\u{1f468}\u{200d}\u{1f469}@x.dev").is_some());
     }
 }
