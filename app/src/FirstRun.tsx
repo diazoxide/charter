@@ -3,7 +3,6 @@ import {
   commands,
   type FirstRunFound,
   type ForgeRow,
-  type HarnessRow,
   type TemplateChoice,
   type TemplateRow,
 } from "./bindings";
@@ -19,6 +18,7 @@ function choiceOf(value: string): TemplateChoice {
 }
 import { type ForgeAsk, ForgeQuestion } from "./ForgeQuestion";
 import { useNewerTrouble } from "./pickTrouble";
+import { harnessSays } from "./harnessSays";
 import { Choice, Field, SettingActions, SettingRow } from "./settings/components";
 
 /**
@@ -72,6 +72,8 @@ export function FirstRun({
   forgeAsk?: ForgeAsk;
 }) {
   const [found, setFound] = useState<FirstRunFound>();
+  /** Why purlis could not look at this machine, in the core's words: said, not swallowed. */
+  const [unread, setUnread] = useState<string>();
   const [typed, setTyped] = useState("");
   const [template, setTemplate] = useState(FITS);
   // The template that fits a typed path, by id, with the path it was asked about: `null` when
@@ -100,10 +102,15 @@ export function FirstRun({
     void commands
       .firstRunFound()
       .then((answer) => {
-        if (!gone && answer.status === "ok") setFound(answer.data);
+        if (gone) return;
+        if (answer.status === "ok") setFound(answer.data);
+        else setUnread(answer.error);
       })
-      // A machine charter could not look at still opens a repo.
-      .catch(() => undefined);
+      // A machine purlis could not look at still opens a repo, and says it could not look
+      // (#1719), where "On this machine" would otherwise just be absent.
+      .catch((err: unknown) => {
+        if (!gone) setUnread(String(err));
+      });
     return () => {
       gone = true;
     };
@@ -132,10 +139,54 @@ export function FirstRun({
         your repo in a workspace of its own. Nothing is written into your repo.
       </p>
 
-      {/* `tabIndex={0}` on every button, per `docs/ui-primitives.md` (charter-app#189). */}
+      {/* **The template first** (#1719): both acts below open the repo with it, so it is seen
+          before either is pressed. Until the machine is read, a line stands where it will be,
+          so the acts do not jump when it arrives. */}
+      {found === undefined && unread === undefined && (
+        <p className="pending" aria-busy="true">
+          Reading what this machine has…
+        </p>
+      )}
+      {unread !== undefined && (
+        <p className="came-back">purlis could not read what this machine has: {unread}</p>
+      )}
+      {found && found.templates.length > 0 && (
+        <SettingRow
+          label="Project template"
+          help={
+            "Personas, a review checklist and the commands purlis asks you about before a chat " +
+            "runs them, for the stack you work in. Nothing is written into your repo."
+          }
+          grouped
+          control={(ids) => (
+            <Choice
+              ids={ids}
+              kind="radio"
+              options={[
+                { value: FITS, label: "Fits the repo", says: fitsSays(fits, found.templates) },
+                ...found.templates.map((one) => ({
+                  value: one.id,
+                  label: one.title,
+                  says: one.summary,
+                })),
+                { value: NONE, label: "None", says: "Only the steward persona." },
+              ]}
+              value={template}
+              onValueChange={setTemplate}
+              disabled={opening}
+            />
+          )}
+        />
+      )}
+
+      {/* One leading row of the two ways in (#1719), and the path form's own below it.
+          `tabIndex={0}` on every button, per `docs/ui-primitives.md` (charter-app#189). */}
       <SettingActions>
         <button type="button" tabIndex={0} disabled={opening} onClick={pick}>
           Open a repo…
+        </button>
+        <button type="button" tabIndex={0} onClick={onOpenProject}>
+          Open an existing project instead
         </button>
       </SettingActions>
 
@@ -167,35 +218,6 @@ export function FirstRun({
           </button>
         </SettingActions>
       </form>
-
-      {found && found.templates.length > 0 && (
-        <SettingRow
-          label="Project template"
-          help={
-            "Personas, a review checklist and the commands purlis asks you about before a chat " +
-            "runs them, for the stack you work in. Nothing is written into your repo."
-          }
-          grouped
-          control={(ids) => (
-            <Choice
-              ids={ids}
-              kind="radio"
-              options={[
-                { value: FITS, label: "Fits the repo", says: fitsSays(fits, found.templates) },
-                ...found.templates.map((one) => ({
-                  value: one.id,
-                  label: one.title,
-                  says: one.summary,
-                })),
-                { value: NONE, label: "None", says: "Only the steward persona." },
-              ]}
-              value={template}
-              onValueChange={setTemplate}
-              disabled={opening}
-            />
-          )}
-        />
-      )}
 
       {opening && (
         <p className="came-back" role="status">
@@ -250,12 +272,6 @@ export function FirstRun({
           </ul>
         </>
       )}
-
-      <SettingActions>
-        <button type="button" tabIndex={0} onClick={onOpenProject}>
-          Open an existing project instead
-        </button>
-      </SettingActions>
     </section>
   );
 }
@@ -266,11 +282,6 @@ function fitsSays(fits: string | null | undefined, templates: TemplateRow[]): st
   if (fits === null) return "None fits this repo, so it opens with no template.";
   const title = templates.find((one) => one.id === fits)?.title ?? fits;
   return `${title}, by the files at the repo's top level.`;
-}
-
-function harnessSays(row: HarnessRow): string {
-  if (!row.installed) return "not installed";
-  return row.signed_in ? "ready" : "installed; it asks you to sign in when its chat starts";
 }
 
 function forgeSays(row: ForgeRow): string {

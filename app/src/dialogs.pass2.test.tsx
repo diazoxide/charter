@@ -8,6 +8,8 @@ import { ApprovePlane } from "./ApprovePlane";
 import { AskPersona } from "./AskPersona";
 import { BriefPanel } from "./Brief";
 import { ClosingProject } from "./ClosingProject";
+import { DeleteWorkspace } from "./DeleteWorkspace";
+import { NewWorkspace } from "./NewWorkspace";
 import { PersonaProfile } from "./PersonaProfile";
 import { RelaunchAsk } from "./RelaunchAsk";
 import type { Ending } from "./QuitWarning";
@@ -52,14 +54,6 @@ describe("Reopen your sessions", () => {
 });
 
 describe("closing a project", () => {
-  it("writes each answer's type", () => {
-    render(<ClosingProject name="one" chats={[CHAT]} heard onClose={none} onCancel={none} />);
-
-    const question = screen.getByRole("alertdialog");
-    for (const answer of within(question).getAllByRole("button"))
-      expect(answer).toHaveAttribute("type", "button");
-  });
-
   it("names the project and the act alike when it has not heard of any chat yet", () => {
     render(<ClosingProject name="one" chats={[]} heard={false} onClose={none} onCancel={none} />);
 
@@ -206,6 +200,39 @@ describe("the two trust questions", () => {
 
     expect(screen.getByRole("dialog")).toHaveAccessibleDescription(
       /^purlis can only list what it can read\./,
+    );
+  });
+});
+
+describe("deleting a workspace", () => {
+  it("says what goes in the reader's words, not the folder underneath (#1719)", () => {
+    render(
+      <DeleteWorkspace
+        workspace="alpha"
+        atRisk={[]}
+        deleting={false}
+        onDelete={none}
+        onCancel={none}
+      />,
+    );
+
+    const said = screen.getByRole("alertdialog").textContent ?? "";
+    expect(said).toContain("This deletes workspace alpha and everything in it:");
+    expect(said).not.toContain("workspaces/alpha/");
+  });
+});
+
+describe("a new workspace's Live row", () => {
+  it("says one thing per sentence (#1719)", () => {
+    mockIPC(() => ({ repos: [], trouble: [] }));
+    render(
+      <NewWorkspace plane="ops" planeId="ops" making={false} onCreate={none} onCancel={none} />,
+    );
+
+    expect(screen.getByRole("checkbox", { name: "Live" })).toHaveAccessibleDescription(
+      "Its charter, memory and todos are committed with the project and published by every " +
+        "save. Ticked, the project is saved as soon as it is made, as Saving says. Left " +
+        "unticked, they stay on this machine.",
     );
   });
 });

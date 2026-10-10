@@ -65,9 +65,10 @@ export function LinkWorkItem({
           onCloseAutoFocus={handBack}
         >
           <Dialog.Title>Link to work item</Dialog.Title>
-          <p className="where">
-            for <code>{chat}</code>
-          </p>
+          {/* The dialog's description (#1719): where the link goes, said with the title. */}
+          <Dialog.Description className="where">
+            For <code>{chat}</code>
+          </Dialog.Description>
 
           <form
             onSubmit={(event) => {

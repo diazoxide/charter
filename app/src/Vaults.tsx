@@ -8,6 +8,7 @@ import { Notice } from "./Notice";
 import type { Catalogued, Offer } from "./actions";
 import { commands, type PanelRow, type VaultSummary } from "./bindings";
 import { AnswerBar } from "./AnswerBar";
+import { providerName } from "./vaultProviders";
 
 /**
  * The plane's vaults, in the Attention region: each vault with its provider and how many
@@ -56,36 +57,39 @@ export function Vaults({
         >
           {trouble}
         </Notice>
+      ) : vaults === undefined ? (
+        // Said while it is read (#1719): a heading with nothing under it reads as no vaults.
+        <p className="pending" aria-busy="true">
+          Reading the vaults…
+        </p>
       ) : (
-        vaults !== undefined && (
-          <PanelList
-            rows={vaults.map(rowOf)}
-            empty={NO_VAULTS}
-            label="Vaults"
-            testid="list-vaults"
-            // No row opens a card: pressing one opens the vault's tab, which says the rest.
-            open={undefined}
-            onOpen={() => undefined}
-            onRun={(id) => {
-              // **The catalogue's row or nothing**, `Panels.tsx`'s rule: an id the catalogue
-              // has stopped offering runs nothing rather than something else.
-              const offer = offers.get(id);
-              if (offer) onPress(offer);
-            }}
-            // Right-click on a vault: open it, make another, delete it (SI-3). The rows are the
-            // catalogue's (`menuOn`), so the menu and the palette say the same thing.
-            wrap={(row, item) => (
-              <Menued
-                key={row.key}
-                on={{ on: "vault", vault: row.key }}
-                offers={offers}
-                onPress={onPress}
-              >
-                {item}
-              </Menued>
-            )}
-          />
-        )
+        <PanelList
+          rows={vaults.map(rowOf)}
+          empty={NO_VAULTS}
+          label="Vaults"
+          testid="list-vaults"
+          // No row opens a card: pressing one opens the vault's tab, which says the rest.
+          open={undefined}
+          onOpen={() => undefined}
+          onRun={(id) => {
+            // **The catalogue's row or nothing**, `Panels.tsx`'s rule: an id the catalogue
+            // has stopped offering runs nothing rather than something else.
+            const offer = offers.get(id);
+            if (offer) onPress(offer);
+          }}
+          // Right-click on a vault: open it, make another, delete it (SI-3). The rows are the
+          // catalogue's (`menuOn`), so the menu and the palette say the same thing.
+          wrap={(row, item) => (
+            <Menued
+              key={row.key}
+              on={{ on: "vault", vault: row.key }}
+              offers={offers}
+              onPress={onPress}
+            >
+              {item}
+            </Menued>
+          )}
+        />
       )}
     </PanelSection>
   );
@@ -116,7 +120,7 @@ function rowOf(vault: VaultSummary): PanelRow {
   return {
     key: vault.name,
     text: vault.name,
-    note: `${vault.provider}${count}`,
+    note: `${providerName(vault.provider)}${count}`,
     mark: "vault",
     tone: vault.health.ok ? "plain" : "trouble",
     detail: null,
@@ -210,8 +214,10 @@ export function useVaults(plane: string): VaultsSaid {
         if (answer.status === "error") setSaid({ plane, trouble: answer.error });
         else if (Array.isArray(answer.data)) setSaid({ plane, vaults: answer.data });
       })
-      .catch(() => {
-        // Nothing: a core that did not answer leaves the section with its heading and no rows.
+      // Said, not swallowed (#1719): an ask that failed outright is a refusal like any other,
+      // with Read again, where an empty section would read as no vaults at all.
+      .catch((err: unknown) => {
+        if (!gone) setSaid({ plane, trouble: String(err) });
       });
     return () => {
       gone = true;

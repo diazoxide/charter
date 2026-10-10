@@ -87,10 +87,12 @@ describe("a pin to a workspace that is gone", function () {
     // Through the opener, as `workspace-lifecycle.e2e.ts` opens its own project and for its
     // reason: a window learns it holds a project by opening one.
     await $(`${PROJECTS} button[aria-label="Open a project…"]`).click();
-    const box = await $("#open-by-path");
+    const box = await $('[data-setting="open-by-path"] input');
     await box.waitForDisplayed({ timeout: 20_000 });
     await box.addValue(mine);
-    await $("button=Open").click();
+    // Return in the path box is the opener's own submit: its button shares the
+    // name of the trust question's Open project, which comes next.
+    await browser.keys(["Enter"]);
     const question = await $('[role="dialog"]');
     await question.waitForDisplayed({ timeout: 30_000 });
     await $("button=Open project").click();

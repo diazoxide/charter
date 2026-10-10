@@ -33,7 +33,7 @@ describe("the delete-persona dialog", () => {
   it("says what goes with it and what stays", () => {
     const { dialog } = draw();
     expect(dialog).toHaveTextContent("personas/qa/");
-    expect(dialog).toHaveTextContent("its definition, its memory and its refs");
+    expect(dialog).toHaveTextContent("its definition, its memory and its reference files");
     expect(dialog).toHaveTextContent("Its vault is left alone");
   });
 

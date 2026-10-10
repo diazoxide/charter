@@ -81,7 +81,7 @@ function core(answers: (cmd: string, args: Record<string, unknown>) => unknown) 
 async function openByPath(path: string) {
   const person = userEvent.setup();
   await person.type(await screen.findByLabelText("Or type a path"), path);
-  await person.click(screen.getByRole("button", { name: "Open" }));
+  await person.click(screen.getByRole("button", { name: "Open project" }));
   return person;
 }
 
@@ -179,6 +179,31 @@ describe("the opener", () => {
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
       "You have not opened a project yet",
     );
+  });
+
+  it("draws the path box as a setting row, and its acts in the set's rows (#1719)", async () => {
+    core(() => undefined);
+    render(<App />);
+
+    const box = await screen.findByLabelText("Or type a path");
+    expect(box.closest(".ui-setting-row")).not.toBeNull();
+    expect(box.closest("[data-setting]")?.getAttribute("data-setting")).toBe("open-by-path");
+    for (const name of ["Open project…", "Open project"])
+      expect(screen.getByRole("button", { name }).closest(".ui-setting-actions")).not.toBeNull();
+    expect(document.querySelector(".doing")).toBeNull();
+  });
+
+  it("says the recent projects could not be read, and still opens by path (#1719)", async () => {
+    core((cmd) => {
+      if (cmd === "recent_planes") throw "the store is locked";
+      return undefined;
+    });
+    render(<App />);
+
+    expect(
+      await screen.findByText("purlis could not read the recent projects: the store is locked"),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("Or type a path")).toBeInTheDocument();
   });
 
   it("names the program purlis where it says what a project is (#630)", async () => {

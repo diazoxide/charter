@@ -45,6 +45,7 @@ const STANDS: Record<string, { count: number; why: string }> = {
   "ChatsSection.tsx": { count: 1, why: FILTER },
   "DispatchesTab.tsx": { count: 4, why: "the dispatch list's four filters: " + FILTER },
   "Explorer.tsx": { count: 1, why: FILTER },
+  "Inbox.tsx": { count: 1, why: "a reply typed into an Inbox row, a stop of the list it is in" },
   "FindBar.tsx": { count: 1, why: "the terminal's find box, its own bar over the pane" },
   "MemoryArchiveTab.tsx": { count: 1, why: FILTER },
   "Palette.tsx": { count: 1, why: "the palette's query, a combobox over its own list" },
@@ -71,10 +72,6 @@ const DEBT: Record<string, { count: number; why: string }> = {
   "DispatchGrantNotice.tsx": {
     count: 2,
     why: "two native radios for the grant's reach: a `Choice` radio, as Close a chat's became",
-  },
-  "Opener.tsx": {
-    count: 1,
-    why: "the path box is a native label and input: a SettingRow and Field, as the first run's",
   },
   "SandboxBlockNotice.tsx": {
     count: 1,

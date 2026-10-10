@@ -172,10 +172,12 @@ describe("making a workspace and deleting one", function () {
     // found" and says nothing about why. The `+` carries the catalogue's words in its
     // `aria-label` exactly so it can be reached by what it MEANS.
     await $(`${PROJECTS} button[aria-label="Open a project…"]`).click();
-    const box = await $("#open-by-path");
+    const box = await $('[data-setting="open-by-path"] input');
     await box.waitForDisplayed({ timeout: 20_000 });
     await box.addValue(mine);
-    await $("button=Open").click();
+    // Return in the path box is the opener's own submit: its button shares the
+    // name of the trust question's Open project, which comes next.
+    await browser.keys(["Enter"]);
     // A plane nobody has approved is described and not opened; there is no third way in
     // (ADR 0035). This run's store is its own, so this is always a first ask.
     const question = await $('[role="dialog"]');

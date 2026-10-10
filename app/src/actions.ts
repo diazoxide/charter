@@ -215,7 +215,7 @@ export const ROOT_TIP = "Project — chats here start at the project root";
  *  is where an operator learns it (`shellKey.ts`). */
 export const SHELL_KEY_SAID = shellKeySaid(onAMac());
 
-/** The key that opens a Search tab, as this platform spells it — said on *Search in files*'s
+/** The key that shows the Search view, as this platform spells it — said on *Search in files*'s
  *  row, for the same reason (`searchKey.ts`, #1137). */
 export const SEARCH_KEY_SAID = searchKeySaid(onAMac());
 
@@ -1305,7 +1305,7 @@ export function harnessCardId(harness: string): string {
   return `harness.card:${harness}`;
 }
 
-/** What a Search tab opened on `ask` looks in, as its row's note says it. */
+/** What the Search view asked on `ask` looks in, as its row's note says it. */
 function searchedSaid(ask: SearchAsk): string {
   if (ask.kind === "branch" && ask.branch !== undefined)
     return `branch ${ask.branch.piece ?? ask.branch.repo}`;

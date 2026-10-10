@@ -94,10 +94,12 @@ describe("the settings gears, and ⌘, at the focused level", function () {
     first = (await ask<string[]>("open_planes"))[0];
     // Through the opener, as a person opens one (`workspace-lifecycle.e2e.ts` says why).
     await $(`${PROJECTS} button[aria-label="Open a project…"]`).click();
-    const box = await $("#open-by-path");
+    const box = await $('[data-setting="open-by-path"] input');
     await box.waitForDisplayed({ timeout: 20_000 });
     await box.addValue(mine);
-    await $("button=Open").click();
+    // Return in the path box is the opener's own submit: its button shares the
+    // name of the trust question's Open project, which comes next.
+    await browser.keys(["Enter"]);
     const question = await $('[role="dialog"]');
     await question.waitForDisplayed({ timeout: 30_000 });
     await $("button=Open project").click();

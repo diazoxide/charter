@@ -95,9 +95,8 @@ export function DeleteWorkspace({
         >
           <AlertDialog.Title>Delete workspace {workspace}?</AlertDialog.Title>
           <AlertDialog.Description className="came-back">
-            This deletes <code>workspaces/{workspace}/</code> and everything in it: every repo
-            cloned there, every branch folder made in it, its memory and its todos. There is no
-            undo.
+            This deletes workspace {workspace} and everything in it: every repo cloned there, every
+            branch folder made in it, its memory and its todos. There is no undo.
           </AlertDialog.Description>
 
           {/* The three lines below are **about the preview**, so they stop being drawn the

@@ -10,6 +10,18 @@ afterEach(() => {
 });
 
 describe("About Charter", () => {
+  it("opens with the keyboard on Close, as every question does (#1719)", async () => {
+    mockIPC(() => new Promise(() => {}));
+    render(<AboutCharter />);
+
+    await userEvent.click(screen.getByTestId("title-about"));
+
+    const dialog = await screen.findByRole("dialog");
+    await waitFor(() =>
+      expect(within(dialog).getByRole("button", { name: "Close" })).toHaveFocus(),
+    );
+  });
+
   it("says what it is reading while it reads, in sentence case (#630)", async () => {
     mockIPC(() => new Promise(() => undefined));
     render(<AboutCharter />);

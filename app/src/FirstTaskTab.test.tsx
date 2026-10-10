@@ -146,6 +146,38 @@ describe("the First task tab, on this machine (#1698)", () => {
     expect(within(run2).getByRole("radio", { name: "codex" })).toBeEnabled();
   });
 
+  it("says the machine could not be looked at, rather than saying nothing (#1719)", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "start_options") return START_OPTIONS;
+      if (cmd === "harness_setup_found") throw "the probe was refused";
+      if (cmd === "worktree_list") return [];
+      return null;
+    });
+    render(<FirstTaskTab plane={PLANE} clone={CLONE} does={DOES} />);
+
+    expect(
+      await screen.findByText(
+        "purlis could not look at which harnesses this machine has, so every profile is offered: the probe was refused",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("says the clone's branches could not be listed, rather than saying nothing (#1719)", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "start_options") return START_OPTIONS;
+      if (cmd === "harness_setup_found") return NO_CODEX;
+      if (cmd === "worktree_list") throw "git is not on PATH";
+      return null;
+    });
+    render(<FirstTaskTab plane={PLANE} clone={CLONE} does={DOES} />);
+
+    expect(
+      await screen.findByText(
+        "purlis could not list the branches of this repo, so a chat started before this launch may show as not started: git is not on PATH",
+      ),
+    ).toBeInTheDocument();
+  });
+
   it("starts no built-in profile before the machine has been looked at", async () => {
     let answer: (found: unknown) => void = () => {};
     const look = new Promise((resolve) => (answer = resolve));

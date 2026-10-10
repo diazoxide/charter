@@ -427,10 +427,12 @@ describe("view tabs", function () {
 
     it("come back in front when their project is opened, and read the plane again", async () => {
       await $(`${PROJECTS} button[aria-label="Open a project…"]`).click();
-      const box = await $("#open-by-path");
+      const box = await $('[data-setting="open-by-path"] input');
       await box.waitForDisplayed({ timeout: 20_000 });
       await box.addValue(other);
-      await $("button=Open").click();
+      // Return in the path box is the opener's own submit: its button shares the
+      // name of the trust question's Open project, which comes next.
+      await browser.keys(["Enter"]);
       // Through the gate, which is what reads the record (ADR 0035).
       const question = await $('[role="dialog"]');
       await question.waitForDisplayed({ timeout: 30_000 });

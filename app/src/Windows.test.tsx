@@ -292,7 +292,7 @@ describe("a project moved into a window of its own", () => {
     await userEvent.click(screen.getByRole("button", { name: "Open a project…" }));
     const person = userEvent.setup();
     await person.type(await screen.findByLabelText("Or type a path"), TWO);
-    await person.click(screen.getByRole("button", { name: "Open" }));
+    await person.click(screen.getByRole("button", { name: "Open project" }));
 
     await vi.waitFor(() => expect(sent("show_window_holding")).toContainEqual({ plane: TWO }));
     expect(projectTabs()).toEqual(["one"]);

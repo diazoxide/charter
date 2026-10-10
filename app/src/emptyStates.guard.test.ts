@@ -26,6 +26,11 @@ import { describe, expect, it } from "vitest";
  *  view tab (#1701): it is a side view only, and draws its empty states through `EmptyState`. */
 const LATER: Record<string, string> = {};
 
+/** The side views, read beside the view tabs (#1718 line 4): Changes and Search draw in the side
+ *  since #1701, so `Views.tsx` no longer imports them, and their empty states are held all the
+ *  same. */
+const SIDE_VIEWS = ["ChangesView.tsx", "SearchTab.tsx"];
+
 const SRC = join(process.cwd(), "src");
 
 /** The source files of the view tabs `Views.tsx` draws, relative to `src/`. */
@@ -55,12 +60,18 @@ function handDrawnEmpties(source: string): string[] {
 const read = (path: string) => readFileSync(join(SRC, path), "utf8");
 
 describe("an empty view tab", () => {
-  const tabs = viewTabs(read("Views.tsx"));
+  const tabs = [...viewTabs(read("Views.tsx")), ...SIDE_VIEWS];
 
   it("is read from every view tab Views.tsx draws", () => {
     // A reader that found none would pass on nothing.
     expect(tabs).toEqual(
-      expect.arrayContaining(["SavingView.tsx", "TaskChangesTab.tsx", "ChatNetworkTab.tsx"]),
+      expect.arrayContaining([
+        "SavingView.tsx",
+        "TaskChangesTab.tsx",
+        "ChatNetworkTab.tsx",
+        "ChangesView.tsx",
+        "SearchTab.tsx",
+      ]),
     );
   });
 

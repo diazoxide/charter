@@ -55,7 +55,7 @@ describe("the repo picker", () => {
     );
     render(<RepoPicker plane={"p1" as PlaneId} picked={new Set()} onPicked={() => undefined} />);
     await screen.findByRole("checkbox", { name: "api" });
-    await userEvent.type(screen.getByPlaceholderText("Filter"), "zzz");
+    await userEvent.type(screen.getByRole("textbox", { name: "Filter repos" }), "zzz");
     expect(screen.getByText("No repo you can reach matches zzz.")).toBeInTheDocument();
   });
 

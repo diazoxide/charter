@@ -236,7 +236,7 @@ const stateOnTab = (name: string) =>
 async function openByPath(path: string) {
   const person = userEvent.setup();
   await person.type(await screen.findByLabelText("Or type a path"), path);
-  await person.click(screen.getByRole("button", { name: "Open" }));
+  await person.click(screen.getByRole("button", { name: "Open project" }));
   return person;
 }
 

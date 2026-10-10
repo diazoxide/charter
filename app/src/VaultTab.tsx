@@ -18,6 +18,7 @@ import { Field, SettingActions, SettingRow } from "./settings/components";
 import { counted } from "./Vaults";
 import { saidOfTheOldExport, saidOfTheOthers, VaultSignIn } from "./VaultSignIn";
 import { AnswerBar } from "./AnswerBar";
+import { providerName } from "./vaultProviders";
 
 /**
  * **One vault, in a tab of its own** (charter-app#235): its name, its provider and how many
@@ -46,9 +47,9 @@ import { AnswerBar } from "./AnswerBar";
  * a minute later clears the clipboard if it still holds it (`vaults.rs`, `clear_later`). The
  * timer is the core's, so a tab or a window that closes within the minute leaves nothing behind.
  *
- * **A 1Password token moves into the Keychain from here** (charter-app#237). Where the vault is
+ * **A 1Password token moves into your system keychain from here** (charter-app#237). Where the vault is
  * read through an identity variable charter's environment carries (`$OP_TEAM_TOKEN`), the header
- * offers "Move this token into the Keychain": `vault_identity_move` reads the token in the core,
+ * offers "Move this token into your system keychain": `vault_identity_move` reads the token in the core,
  * stores it in the keyring and answers with the vault's names. The token never comes here, and
  * no chat carries an `OP_*` variable, so after the move the keyring is where every `charter
  * secret` finds it.
@@ -69,7 +70,7 @@ import { AnswerBar } from "./AnswerBar";
  *
  * **How a 1Password vault signs in is changed from here** (#1527): *Change how this vault signs
  * in* opens {@link VaultSignIn} for this vault, which is also how a vault bound to an environment
- * variable comes to keep its token in the Keychain. The token is handed to the core there and is
+ * variable comes to keep its token in your system keychain. The token is handed to the core there and is
  * never in this tab; the answer is the vault read again, with no restart.
  *
  * **A tab a launch put back reads nothing until the person presses for it** (#1660), where
@@ -202,13 +203,13 @@ export function VaultTab({
       stillExported.length > 0
         ? ` Your shell still exports ${stillExported.map((v) => `$${v}`).join(", ")}, which a chat can still read from purlis's own environment — quit and relaunch purlis from a shell that does not, and remove the export from your shell's startup files.`
         : "";
-    // Never "stored" alone beside a refusal: the token is in the Keychain and the read that
+    // Never "stored" alone beside a refusal: the token is in your system keychain and the read that
     // followed still failed, and the reason for that is the sentence above the box.
     const unread = answer.data.refused !== null;
     setNote({
       said: unread
-        ? `${sentence(names)} is stored in the Keychain, and the vault still could not be read: the reason is above.${relaunch}`
-        : `Stored ${names} in the Keychain. purlis reads it from there, and no chat is given the token.${relaunch}`,
+        ? `${sentence(names)} is stored in your system keychain, and the vault still could not be read: the reason is above.${relaunch}`
+        : `Stored ${names} in your system keychain. purlis reads it from there, and no chat is given the token.${relaunch}`,
       trouble: unread || relaunch !== "",
     });
     return true;
@@ -370,8 +371,8 @@ export function VaultTab({
           {contents && (
             <span className="panel-from">
               {contents.refused === null
-                ? ` · ${contents.provider} · ${counted(contents.count)}`
-                : ` · ${contents.provider}`}
+                ? ` · ${providerName(contents.provider)} · ${counted(contents.count)}`
+                : ` · ${providerName(contents.provider)}`}
             </span>
           )}
         </h2>
@@ -597,7 +598,7 @@ export function VaultTab({
 }
 
 /** Identity variables as the tab names them: `$OP_TEAM_TOKEN, $OP_OTHER_TOKEN`. A token kept
- *  in the Keychain and read through no variable (#1527) is "this vault's token". */
+ *  in your system keychain and read through no variable (#1527) is "this vault's token". */
 function named(identity: VaultIdentity[]): string {
   return identity.map((one) => (one.kept ? "this vault's token" : `$${one.variable}`)).join(", ");
 }
@@ -613,7 +614,7 @@ function sentence(text: string): string {
 }
 
 /**
- * Where the vault's identity token is, under the header, and how to put it in the Keychain
+ * Where the vault's identity token is, under the header, and how to put it in your system keychain
  * (charter-app#237, hardened after the #271 review).
  *
  * **The primary way is a password box**: the operator pastes the token and it goes straight to
@@ -677,7 +678,7 @@ function IdentityPanel({
     return (
       <div className="vault-identity">
         <p>
-          {`purlis reads ${named(identity)} from the Keychain.`}
+          {`purlis reads ${named(identity)} from your system keychain.`}
           {stillExported}
         </p>
         {elsewhere.map((other) => (
@@ -714,8 +715,8 @@ function IdentityPanel({
     : inKeychain
       ? KEPT_AND_UNREAD[unread ?? "other"](named(identity))
       : identity.every((one) => one.held === "unset")
-        ? `Paste the service-account token for ${tokenFor(identity)} here. It goes straight into the Keychain; purlis reads it from there, and no chat is given it.`
-        : `Read through ${named(identity)}. Put the token in the Keychain, where no chat can read it and purlis finds it for every command.`;
+        ? `Paste the service-account token for ${tokenFor(identity)} here. It goes straight into your system keychain; purlis reads it from there, and no chat is given it.`
+        : `Read through ${named(identity)}. Put the token in your system keychain, where no chat can read it and purlis finds it for every command.`;
   return (
     <div className="vault-identity">
       <p>
@@ -738,7 +739,7 @@ function IdentityPanel({
               }}
             />
             <button type="button" tabIndex={0} disabled={busy} onClick={put}>
-              Put this vault's token in the Keychain
+              Put this vault's token in your system keychain
             </button>
           </>
         )}
@@ -770,22 +771,22 @@ function IdentityPanel({
 }
 
 /**
- * What the box of a vault says when its token IS in the Keychain and its contents still could
+ * What the box of a vault says when its token IS in your system keychain and its contents still could
  * not be read, by what kept them (#1526). The reason itself is the core's sentence, drawn above;
  * this says what the box is for in that case, and never blames the token for a failure that is
  * not known to be the token's.
  */
 const KEPT_AND_UNREAD: Record<UnreadFor, (names: string) => string> = {
-  // Not reached with a token in the Keychain; said plainly all the same.
+  // Not reached with a token in your system keychain; said plainly all the same.
   "no-token": (names) => `Paste the token for ${names} here.`,
   program: (names) =>
-    `purlis reads ${names} from the Keychain, and could not run the program that reads this vault. Nothing says the token is wrong. Storing the token again here pins the program purlis finds now.`,
+    `purlis reads ${names} from your system keychain, and could not run the program that reads this vault. Nothing says the token is wrong. Storing the token again here pins the program purlis finds now.`,
   "try-again": (names) =>
-    `purlis reads ${names} from the Keychain. Nothing says the token is wrong: read again in a moment. The box replaces the token, should you need it.`,
+    `purlis reads ${names} from your system keychain. Nothing says the token is wrong: read again in a moment. The box replaces the token, should you need it.`,
   "sign-in": (names) =>
-    `purlis reads ${names} from the Keychain, and the sign-in with it was refused. Paste the right token here to replace it.`,
+    `purlis reads ${names} from your system keychain, and the sign-in with it was refused. Paste the right token here to replace it.`,
   other: (names) =>
-    `purlis reads ${names} from the Keychain. If it is the token that is wrong, paste the right one here to replace it.`,
+    `purlis reads ${names} from your system keychain. If it is the token that is wrong, paste the right one here to replace it.`,
 };
 
 /** The window event a tab sends when it has stored a token, for the other vault tabs. */
