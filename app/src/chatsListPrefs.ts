@@ -2,8 +2,9 @@ import { useSyncExternalStore } from "react";
 import { atCreation, sayAboutThisMachine, type Reading } from "./windowprefs";
 
 /**
- * **How the Chats list is drawn** (#1499, V100-73): whether a row is two lines or one, and
- * whether the sessions of one workspace stand together. **And what pressing a task in it does**
+ * **How the Chats list is drawn** (#1499, V100-73): whether the sessions of one workspace
+ * stand together. A row is one line (#1675), so how many lines it takes is no longer a choice:
+ * a file that still says `lines` is read as if it did not, and says nothing of it. **And what pressing a task in it does**
  * (#1489, V100-74): shows it inside its session's tab, or opens it in a tab of its own.
  *
  * **Kept in the layout file, beside the text sizes and your editor** (`layout.json`,
@@ -12,8 +13,6 @@ import { atCreation, sayAboutThisMachine, type Reading } from "./windowprefs";
  * that file does, and a value that is not one is the default's, said in the alerts drawer.
  */
 export type ChatsListPrefs = {
-  /** How many lines a row is drawn on. One drops what the second line said. */
-  lines: 1 | 2;
   /** Whether the sessions are grouped by the workspace they work in. */
   grouped: boolean;
   /** Whether a pressed task opens in a tab of its own (V100-74, "Open tasks in their own
@@ -25,7 +24,6 @@ export type ChatsListPrefs = {
 };
 
 export const DEFAULT_CHATS_LIST: ChatsListPrefs = {
-  lines: 2,
   grouped: false,
   tabbed: false,
   away: true,
@@ -46,10 +44,6 @@ export function loadChatsList(raw: unknown): { prefs: ChatsListPrefs; said: stri
     return { prefs: DEFAULT_CHATS_LIST, said };
   }
   const from = held as Record<string, unknown>;
-  let lines = DEFAULT_CHATS_LIST.lines;
-  if (from.lines === 1 || from.lines === 2) lines = from.lines;
-  else if (from.lines !== undefined)
-    said.push(`"chats.lines" ${JSON.stringify(from.lines)} is not 1 or 2, so it is 2`);
   let grouped = DEFAULT_CHATS_LIST.grouped;
   if (typeof from.grouped === "boolean") grouped = from.grouped;
   else if (from.grouped !== undefined)
@@ -64,13 +58,12 @@ export function loadChatsList(raw: unknown): { prefs: ChatsListPrefs; said: stri
   if (typeof from.away === "boolean") away = from.away;
   else if (from.away !== undefined)
     said.push(`"chats.away" ${JSON.stringify(from.away)} is not true or false, so it is true`);
-  return { prefs: { lines, grouped, tabbed, away }, said };
+  return { prefs: { grouped, tabbed, away }, said };
 }
 
 /** Whether `prefs` are the defaults, which the layout file leaves out. */
 export function isDefaultChatsList(prefs: ChatsListPrefs): boolean {
   return (
-    prefs.lines === DEFAULT_CHATS_LIST.lines &&
     prefs.grouped === DEFAULT_CHATS_LIST.grouped &&
     prefs.tabbed === DEFAULT_CHATS_LIST.tabbed &&
     prefs.away === DEFAULT_CHATS_LIST.away
@@ -112,13 +105,7 @@ export function chatsListPrefs(): ChatsListPrefs {
 export function setChatsListPrefs(to: Partial<ChatsListPrefs>): void {
   const was = chatsListPrefs();
   const now = { ...was, ...to };
-  if (
-    now.lines === was.lines &&
-    now.grouped === was.grouped &&
-    now.tabbed === was.tabbed &&
-    now.away === was.away
-  )
-    return;
+  if (now.grouped === was.grouped && now.tabbed === was.tabbed && now.away === was.away) return;
   changed = now;
   sayAboutThisMachine("chats", undefined);
   for (const listener of listeners) listener(now);

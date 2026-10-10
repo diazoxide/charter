@@ -1,9 +1,8 @@
 import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { act, cleanup, render } from "@testing-library/react";
+import { cleanup, render } from "@testing-library/react";
 import type { FinishedTask } from "./bindings";
 import { ChatsSection } from "./ChatsSection";
-import { setChatsListPrefs } from "./chatsListPrefs";
 import {
   ChatsHere,
   fixedChats,
@@ -14,6 +13,8 @@ import {
 } from "./chatState";
 import { DoingsHere, fixedDoings } from "./chatDoing";
 import { chatsTree, type ListedChat } from "./chatsTree";
+import { tasksBelowOf } from "./sessionTasks";
+import { TasksBelowLent } from "./TasksBelow";
 import { forgetThisLaunch, SLOTS } from "./regions";
 import { MOST_TEXT } from "./textSize";
 
@@ -67,7 +68,7 @@ const task = (session: number, parent: number, more: Partial<ListedChat> = {}) =
 const CHATS: ListedChat[] = [
   // Working, with a task below it that needs the person: it wears the rolled-up hand.
   listed(1, { name: "cancel mid-turn smart-ide" }),
-  // Needs the person; works elsewhere, on a branch of its own: the longest second line.
+  // Needs the person; works elsewhere, on a branch of its own: the longest card.
   task(2, 1, {
     name: "live check of the staging cluster after the release",
     workspace: "volaticloud",
@@ -86,12 +87,12 @@ const CHATS: ListedChat[] = [
   // Idle, folded by itself over five finished tasks.
   listed(7),
   // Idle, open over a finished task that ended without a report. Its work went to two chats
-  // (#1492): the second line starts with where, under the longest name there is.
+  // (#1492): its card says where, under the longest name there is.
   listed(8),
   // A handoff: a row of its own at the top, which says the chat it came from.
   listed(10, { name: LONG, parent: 8, mode: "handoff", from: "steward 8" }),
   listed(11, { name: "drop commons", parent: 8, mode: "handoff", from: "steward 8" }),
-  // A task the person asked for themselves, elsewhere, on a branch: the most a line two says.
+  // A task the person asked for themselves, elsewhere, on a branch: the most a card says.
   task(12, 11, {
     name: "devops 12",
     byYou: true,
@@ -205,13 +206,15 @@ function markup(): string {
   const { container } = render(
     <ChatsHere.Provider value={fixedChats(states())}>
       <DoingsHere.Provider value={DOINGS}>
-        <ChatsSection
-          rows={chatsTree(CHATS)}
-          front={1}
-          onOpen={() => {}}
-          stopping={new Set([6])}
-          finished={FINISHED}
-        />
+        <TasksBelowLent below={tasksBelowOf(CHATS, FINISHED)}>
+          <ChatsSection
+            rows={chatsTree(CHATS)}
+            front={1}
+            onOpen={() => {}}
+            stopping={new Set([6])}
+            finished={FINISHED}
+          />
+        </TasksBelowLent>
       </DoingsHere.Provider>
     </ChatsHere.Provider>,
   );
@@ -225,7 +228,7 @@ beforeEach(forgetThisLaunch);
 afterEach(cleanup);
 
 describe("the Chats list the e2e measures", () => {
-  it("is the component's own markup, on two lines", async () => {
+  it("is the component's own markup, a row a line (#1675)", async () => {
     const html = markup();
 
     // What the e2e's cases are about is in it.
@@ -236,26 +239,13 @@ describe("the Chats list the e2e measures", () => {
       "rolled-up",
       "Stopping…",
       "finished-task",
-      'class="line two"',
-      "handed off to drop commons and 1 more",
-      `from steward 8`,
-      "asked by you",
-      "ran <bdi",
-      "reading 3 files",
-      LONG_FILE,
-      'class="doing-and-since"',
+      'class="task-count"',
     ])
       expect(html, drawn).toContain(drawn);
-    await expect(html).toMatchFileSnapshot("../e2e/fixtures/chats-list.two-lines.html");
-  });
-
-  it("is the component's own markup, on one line", async () => {
-    act(() => setChatsListPrefs({ lines: 1 }));
-    const html = markup();
-
+    // And nothing of a second line: what it said is each row's card, drawn only while it is up.
     expect(html).not.toContain('class="line two"');
-    // On one line there is no second line for it to stand in.
     expect(html).not.toContain("chat-doing");
+    expect(html).not.toContain("handed off to");
     await expect(html).toMatchFileSnapshot("../e2e/fixtures/chats-list.one-line.html");
   });
 

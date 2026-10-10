@@ -14,6 +14,7 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
 import type { FinishedTask, Moved, OpenChat } from "./bindings";
 import type { State } from "./chatState";
+import { cardOf } from "./chatCard.testkit";
 import { forgetThisLaunch } from "./regions";
 import type { Shown } from "./shownState";
 
@@ -281,8 +282,8 @@ const says = (on: HTMLElement) => ({
 const colour = (on: HTMLElement) =>
   on.querySelector<HTMLElement>(".shown-state .shape")?.style.color;
 
-/** What a row says of its tasks, or nothing where it says none. */
-const count = (on: HTMLElement) => on.querySelector(".task-count")?.textContent;
+/** What a row's card says of its tasks, or nothing where it says none (#1675). */
+const count = async (on: HTMLElement) => (await cardOf(on)).facts.Tasks;
 
 const rows = async (names: number) => {
   const tree = await section();
@@ -340,7 +341,7 @@ describe("a session whose turn has ended while its tasks work", () => {
         shape: "hourglass",
       }),
     );
-    expect(count(row(tree, "steward 1"))).toBe("1 working · 1 done");
+    expect(await count(row(tree, "steward 1"))).toBe("1 working · 1 done");
     expect(screen.queryByTestId("needs-you-button")).toBeNull();
 
     // The last one reports, the session reads it in a turn of its own and stops with nothing
@@ -352,7 +353,7 @@ describe("a session whose turn has ended while its tasks work", () => {
     move(1, "waiting", 7, [1]);
 
     expect(says(row(tree, "steward 1"))).toEqual({ word: "needs you", shape: "hand" });
-    expect(count(row(tree, "steward 1"))).toBe("2 done");
+    expect(await count(row(tree, "steward 1"))).toBe("2 done");
     expect(await screen.findByTestId("needs-you-button")).toBeTruthy();
   });
 
@@ -367,7 +368,7 @@ describe("a session whose turn has ended while its tasks work", () => {
     move(1, "waiting", 3, [2]);
 
     expect(says(row(tree, "steward 1"))).toEqual({ word: "idle", shape: "pause" });
-    expect(count(row(tree, "steward 1"))).toBe("2 waiting");
+    expect(await count(row(tree, "steward 1"))).toBe("2 waiting");
     // The task that needs you wears the hand, and the session's row leads to it.
     expect(says(row(tree, "check prod"))).toEqual({ word: "needs you", shape: "hand" });
     expect(tree.querySelector('.rolled-up[data-leads-to="2"]')).not.toBeNull();
@@ -382,7 +383,7 @@ describe("a session whose turn has ended while its tasks work", () => {
     move(1, "waiting", 1, []);
 
     expect(says(row(tree, "steward 1"))).toEqual({ word: "idle", shape: "pause" });
-    expect(count(row(tree, "steward 1"))).toBeUndefined();
+    expect(await count(row(tree, "steward 1"))).toBeUndefined();
   });
 
   it("counts a task two dispatches down, and a task with tasks of its own says the same of itself", async () => {
@@ -396,7 +397,7 @@ describe("a session whose turn has ended while its tasks work", () => {
 
     expect(says(row(tree, "steward 1")).word).toBe("waiting on 2 tasks");
     expect(says(row(tree, "check prod")).word).toBe("waiting on 1 task");
-    expect(count(row(tree, "check prod"))).toBe("1 working");
+    expect(await count(row(tree, "check prod"))).toBe("1 working");
   });
 });
 
@@ -412,11 +413,16 @@ describe("the count on a session's row", () => {
     move(2, "running", 1);
     move(3, "running", 2);
 
-    await waitFor(() => expect(count(row(tree, "steward 1"))).toBe("2 working · 3 done"));
+    await waitFor(
+      async () => expect(await count(row(tree, "steward 1"))).toBe("2 working · 3 done"),
+      {
+        timeout: 5000,
+      },
+    );
     // The same rows the finished fold under it counts.
     expect(await within(tree).findByRole("button", { name: /Finished \(3\)/ })).toBeTruthy();
     // A task with none of its own says nothing.
-    expect(count(row(tree, "check prod"))).toBeUndefined();
+    expect(await count(row(tree, "check prod"))).toBeUndefined();
   });
 
   it("says how many failed when any did, and never a part that is zero", async () => {
@@ -435,7 +441,12 @@ describe("the count on a session's row", () => {
     render(<App />);
     const tree = await rows(1);
 
-    await waitFor(() => expect(count(row(tree, "steward 1"))).toBe("2 failed · 3 done"));
+    await waitFor(
+      async () => expect(await count(row(tree, "steward 1"))).toBe("2 failed · 3 done"),
+      {
+        timeout: 5000,
+      },
+    );
   });
 
   it("says 6 of 6 tasks at the limit the core says is in force for it", async () => {
@@ -445,7 +456,12 @@ describe("the count on a session's row", () => {
     const tree = await rows(7);
     for (const one of six) move(one.session, "running", one.session);
 
-    await waitFor(() => expect(count(row(tree, "steward 1"))).toBe("6 of 6 tasks · 3 done"));
+    await waitFor(
+      async () => expect(await count(row(tree, "steward 1"))).toBe("6 of 6 tasks · 3 done"),
+      {
+        timeout: 5000,
+      },
+    );
   });
 
   it("is below its limit again when one of the six reports", async () => {
@@ -453,13 +469,20 @@ describe("the count on a session's row", () => {
     const { reports, running } = core([chat(1, { tasks_limit: 6, tasks_running: 6 }), ...six]);
     render(<App />);
     const tree = await rows(7);
-    await waitFor(() => expect(count(row(tree, "steward 1"))).toBe("6 of 6 tasks"));
+    await waitFor(async () => expect(await count(row(tree, "steward 1"))).toBe("6 of 6 tasks"), {
+      timeout: 5000,
+    });
 
     // The core counts one fewer against the limit once it has reported.
     running(1, 5);
     await reports(7, "done");
 
-    await waitFor(() => expect(count(row(tree, "steward 1"))).toBe("5 working · 1 done"));
+    await waitFor(
+      async () => expect(await count(row(tree, "steward 1"))).toBe("5 working · 1 done"),
+      {
+        timeout: 5000,
+      },
+    );
   });
 });
 
@@ -520,7 +543,9 @@ describe("a limit, said where it binds (#1498)", () => {
     render(<App />);
     const tree = await rows(7);
 
-    await waitFor(() => expect(count(row(tree, "steward 1"))).toBe("6 of 6 tasks"));
+    await waitFor(async () => expect(await count(row(tree, "steward 1"))).toBe("6 of 6 tasks"), {
+      timeout: 5000,
+    });
     expect(screen.queryByTestId("at-limit-1")).toBeNull();
   });
 });
@@ -562,7 +587,9 @@ describe("what a finishing task does to its session's row", () => {
     expect(says(row(tree, "steward 1")).shape).not.toBe("hand");
     expect(tree.querySelector('[data-mark="needs-you"]')).toBeNull();
     expect(screen.queryByTestId("needs-you-button")).toBeNull();
-    await waitFor(() => expect(count(row(tree, "steward 1"))).toBe("1 done"));
+    await waitFor(async () => expect(await count(row(tree, "steward 1"))).toBe("1 done"), {
+      timeout: 5000,
+    });
   });
 
   it("puts the hand on it for a task that failed, though it is working and others still are", async () => {
@@ -728,7 +755,7 @@ describe("a task the person asked for", () => {
 
     // Its turn ended with nothing it asked for at work: idle here, and the core queues it.
     expect(says(row(tree, "steward 1"))).toEqual({ word: "idle", shape: "pause" });
-    expect(count(row(tree, "steward 1"))).toBe("1 working");
+    expect(await count(row(tree, "steward 1"))).toBe("1 working");
     move(1, "waiting", 3, [1]);
     expect(says(row(tree, "steward 1"))).toEqual({ word: "needs you", shape: "hand" });
   });
@@ -758,14 +785,19 @@ describe("what a task changing state redraws (SC-3)", () => {
     move(2, "waiting", 6, [9]);
 
     expect(new Set(drawn.marks)).toEqual(new Set(["idle", "waiting on 1 task"]));
-    expect(count(row(tree, "steward 1"))).toBe("1 working · 1 waiting");
+    expect(await count(row(tree, "steward 1"))).toBe("1 working · 1 waiting");
     drawn.marks.length = 0;
 
     // It reports: its own state changes, and its session's count and state are read again
     // from its tasks. The two unrelated chats are not drawn.
     await reports(2, "done");
 
-    await waitFor(() => expect(count(row(tree, "steward 1"))).toBe("1 working · 1 done"));
+    await waitFor(
+      async () => expect(await count(row(tree, "steward 1"))).toBe("1 working · 1 done"),
+      {
+        timeout: 5000,
+      },
+    );
     expect(new Set(drawn.marks)).toEqual(new Set(["done", "waiting on 1 task"]));
   });
 });

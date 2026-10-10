@@ -2,6 +2,7 @@ import {
   memo,
   useCallback,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -11,6 +12,7 @@ import {
   type ReactNode,
 } from "react";
 import * as RovingFocusGroup from "@radix-ui/react-roving-focus";
+import * as Popover from "@radix-ui/react-popover";
 import { ChevronDown, ChevronRight, Hand, MessagesSquare, SquareTerminal } from "lucide-react";
 import {
   besideId,
@@ -22,10 +24,8 @@ import {
 } from "./actions";
 import { TaskEndConfirm, type TaskEndInline } from "./TaskEnd";
 import type { AtLimit, FinishedTask } from "./bindings";
-import { ChatRowActivity } from "./ChatRowActivity";
-import { ChatRowHandedOff, goesTo } from "./ChatRowHandedOff";
 import { HelpersSaid } from "./ExplorerChats";
-import { chatDoingId, useDoingSaid } from "./chatDoing";
+import { useDoingSaid } from "./chatDoing";
 import { ChatShownState } from "./ChatRows";
 import { sameList, useChatsHere, useChatsSelect, type ChatStates } from "./chatState";
 import { useTokensOnHover } from "./tasksUsed";
@@ -58,7 +58,8 @@ import {
 import { FinishedTasks } from "./FinishedTasks";
 import type { TaskFacts } from "./shownState";
 import { standingOfRows } from "./sessionTasks";
-import { TaskCountShown } from "./TasksBelow";
+import { useTaskCount, useTaskCountSaid } from "./TasksBelow";
+import { tasksIn } from "./taskBuckets";
 import { Menued } from "./Menus";
 import { PersonaMark } from "./PersonaMark";
 import { useRevealedTask, type Reveal } from "./revealTask";
@@ -67,6 +68,16 @@ import { stateClock, useStateSince, type StateClock } from "./stateClock";
 import { deletes } from "./tabKeys";
 import { askSettingsLink } from "./settings/links";
 import { DISPATCH } from "./settings/dispatch";
+
+/** What a chat's state is drawn from (`ChatShownState`): its row's and its card's alike. */
+type ShownFacts = {
+  session: number;
+  shell: boolean;
+  report: TaskFacts["report"] | null;
+  outcome: string | null;
+  asking: string | null;
+  harness: string | null;
+};
 
 /** A row's id in the section's roving focus. */
 const rowId = (session: number) => `chats:${session}`;
@@ -116,6 +127,9 @@ const NOT_HANDED_OFF: readonly number[] = [];
 
 /** No restart has anything to say. */
 const NO_RESTARTS: Readonly<Record<number, string>> = {};
+
+/** No chat that needs you has had the rows above it opened yet. */
+const NONE_OPENED: ReadonlySet<number> = new Set();
 
 /** No folds set by hand. */
 const NO_FOLDS: ReadonlyMap<number, boolean> = new Map();
@@ -169,7 +183,8 @@ function byKeyboard(target: Element): boolean {
  * while one of them is not over, and folds by itself when all are, saying how its finished
  * tasks ended on its own row; **a fold set by hand wins** until it is set again. A filter over
  * the list finds a chat by its name, persona, workspace or state, keeps the rows above a match,
- * and says how many it hides. A row is two lines, or one (`chatsListPrefs.ts`).
+ * and says how many it hides. A row is one line, and the rest of what it knows is its card
+ * (#1675, `Row`).
  *
  * **No row is moved under a resting pointer.** While the pointer is over the list, or the
  * keyboard is in it, the order, the folds the list makes by itself, the filter's answer and
@@ -184,19 +199,20 @@ function byKeyboard(target: Element): boolean {
  * line under the filter says so and has a button that goes to it. And a filter opens every row
  * above what it found, whatever fold was set by hand, which is back when the filter is cleared.
  *
- * **A row says its chat's state in a word beside a mark** (#1484): `ChatShownState`, which the
- * explorer's rows draw too.
+ * **A row says its chat's state by its mark, and the word in its card** (#1484, #1675):
+ * `ChatShownState`, which the explorer's rows draw too.
  *
  * **The hand rolls up** (#1448). A chat that needs you wears it on its own row, as its state's
  * mark, and so does every row above it, where it is a button that goes to that chat. A row
  * with chats under it folds, and a folded row still wears the hand for what it hides, so a
- * fold never hides a chat that needs you.
+ * fold never hides a chat that needs you. **A task that comes to need you opens the rows above
+ * it** (#1675), once, whatever fold was set by hand.
  *
  * **A handoff is a row of its own at the top, never under the chat it came from** (#1492,
- * V100-69): the work moved, and its chat is a session with its own tab. Its row says `from
- * <chat>`, and that chat's row says `handed off to <chat>` while it is not working; a press on
- * those words goes there. Both name the other chat as its own row does, so a rename is followed.
- * **A task the person asked for themselves is marked `asked by you`** (V100-70).
+ * V100-69): the work moved, and its chat is a session with its own tab. Its card says `from
+ * <chat>`, and that chat's card says `handed off to <chat>`; its menu goes there. Both name the
+ * other chat as its own row does, so a rename is followed. **A task the person asked for
+ * themselves is marked `asked by you`** in its card (V100-70).
  *
  * **A task that has finished stays under the chat that asked** (#1485), as a finished entry
  * and not a chat: its program has ended (`FinishedTasks`). They are drawn under their chat's
@@ -373,6 +389,24 @@ export function ChatsSection({
     window.addEventListener("blur", away);
     return () => window.removeEventListener("blur", away);
   }, []);
+  // **What the person used last, the pointer or the keyboard** (#1675): a row's card comes up
+  // on the keyboard resting on it, and not on a focus a press left there.
+  const pointed = useRef(false);
+  useEffect(() => {
+    const press = () => {
+      pointed.current = true;
+    };
+    const key = () => {
+      pointed.current = false;
+    };
+    document.addEventListener("pointerdown", press, true);
+    document.addEventListener("keydown", key, true);
+    return () => {
+      document.removeEventListener("pointerdown", press, true);
+      document.removeEventListener("keydown", key, true);
+    };
+  }, []);
+  const pointedLast = useCallback(() => pointed.current, []);
   const resting = over || inside;
   const [held, setHeld] = useState<Moving | null>(null);
   const moving: Moving = { order, live, asked, listed };
@@ -398,8 +432,8 @@ export function ChatsSection({
     });
 
   /** What each chat's finished tasks come to: whether one of them stands alone, which keeps
-   *  its chat open. What a folded row says of them is its count (`TaskCountShown`, #1491),
-   *  the same on a folded row and an open one. */
+   *  its chat open. A folded row counts them with its tasks (`TasksFolded`, #1491), and its
+   *  card says how each ended. */
   const ended = useMemo(
     () =>
       new Map(
@@ -461,6 +495,38 @@ export function ChatsSection({
   const needsYou = useChatsSelect(chats, (states) => states.needsYou);
   const leads = useMemo(() => needing(rows, needsYou), [rows, needsYou]);
   const byNumber = useMemo(() => new Map(rows.map((row) => [row.session, row])), [rows]);
+  /**
+   * **A task that comes to need you opens the rows above it** (#1675, B-6), so it is never
+   * hunted for: once, as it starts to ask, the folds set by hand over it are taken off, and the
+   * list's own folds already leave open a row with a chat under it that is not over. A fold set
+   * again afterwards is the person's and holds, with the hand rolled up on it (#1448).
+   */
+  const [opened, setOpened] = useState<ReadonlySet<number>>(NONE_OPENED);
+  // A chat counts as opened for once it has a row here: one the board says asks before the
+  // list has its row is opened for when the row comes. One that stops asking is forgotten,
+  // so its next ask opens its rows again.
+  const asks = needsYou.filter((session) => !opened.has(session) && byNumber.has(session));
+  if (asks.length > 0 || [...opened].some((session) => !needsYou.includes(session))) {
+    setOpened(new Set(needsYou.filter((session) => opened.has(session) || byNumber.has(session))));
+    const above = new Set<number>();
+    for (const asking of asks) {
+      let at = byNumber.get(asking);
+      while (at !== undefined && at.level > 1 && at.parent !== null) {
+        above.add(at.parent);
+        at = byNumber.get(at.parent);
+      }
+    }
+    const unfold = (was: ReadonlyMap<number, boolean>) => {
+      if (![...above].some((session) => was.get(session) === true)) return was;
+      const set = new Map(was);
+      for (const session of above) if (set.get(session) === true) set.delete(session);
+      return set;
+    };
+    if (above.size > 0) {
+      setHand(unfold);
+      setHandFiltered(unfold);
+    }
+  }
   /** Where each chat's work went by a handoff, the newest first (#1492). */
   const went = useMemo(() => handedOff(rows), [rows]);
   /** The same by number, for each row's menu: held, so a row is drawn again only for its own. */
@@ -831,15 +897,7 @@ export function ChatsSection({
                       name={row.name}
                       persona={row.persona}
                       workspace={row.workspace}
-                      // A task says where it works only when that is not where the chat
-                      // that asked works (V100-19); every other chat says it.
-                      elsewhere={
-                        row.mode !== "task" ||
-                        asker === undefined ||
-                        asker.workspace !== row.workspace
-                      }
                       task={row.mode === "task"}
-                      lines={prefs.lines}
                       branch={row.branch}
                       shell={row.shell}
                       report={row.report}
@@ -860,7 +918,6 @@ export function ChatsSection({
                             : null
                       }
                       byYou={row.byYou === true}
-                      handedTo={handed?.[0].session ?? null}
                       handedToName={handed?.[0].name ?? null}
                       handedMore={handed === undefined ? 0 : handed.length - 1}
                       handedAll={wentTo.get(row.session) ?? NOT_HANDED_OFF}
@@ -890,6 +947,7 @@ export function ChatsSection({
                       onFold={fold}
                       onPress={press}
                       onAct={act}
+                      pointedLast={pointedLast}
                     />,
                     // The finished tasks of each chat whose rows end here (#1485): this
                     // row's own, where no chat is drawn under it, then those of every chat
@@ -951,25 +1009,33 @@ function endingAt(drawn: readonly ChatRow[], at: number, folded: ReadonlySet<num
 }
 
 /**
+ * How long a row is rested on, by the pointer or the keyboard, before its card comes up
+ * (#1675): a pointer running down the list, or the arrows going through it, bring up nothing.
+ */
+export const CARD_DELAY_MS = 500;
+
+/**
  * One chat's row. Held on plain values, so only a row whose own facts changed is drawn again.
  *
- * **Two lines** (#1499, V100-50). The first is the persona's mark, the name and the state; the
- * state's word is never cut short, and the name is, with the whole of it as its tooltip and in
- * what a screen reader is told. The second, dimmer, is what the chat is doing while it works
- * and for how long (`SecondLine`, `ChatRowActivity`, #1493); otherwise where its work was
- * handed off to (`ChatRowHandedOff`, #1492), that the person asked for it, where it works, how
- * long it has been in its state, its own branch and the chat it came from. **On one line the
- * second is not drawn at all**, and what of it
- * does not change is the row's tooltip: a row is never two lines squeezed into one.
+ * **One line** (#1675, B-3): its state's mark, its persona's badge, its name, and nothing more.
+ * The state's word is not drawn there, and is still what a screen reader is told of the row;
+ * the name is cut short where the row is narrow. A folded row with tasks under it says how
+ * many in a small count (`TasksFolded`), and an open one says nothing: its tasks are its rows.
+ * The hand of a chat below that needs you is beside the row, as it was (#1448).
+ *
+ * **Everything else is the row's card** (`ChatCard`): its state in words, what it is doing,
+ * its persona, harness and workspace, how long it has been in its state, its tasks, its own
+ * branch, where its work went or came from, and a task's tokens. The card is Radix's popover,
+ * opened by the row and anchored to it, with the tooltip's role: it comes up under a pointer
+ * that rests and on the keyboard resting on the row, goes on Escape, and is what the row is
+ * described by while it is up.
  */
 const Row = memo(function Row({
   session,
   name,
   persona,
   workspace,
-  elsewhere,
   task,
-  lines,
   branch,
   shell,
   report,
@@ -981,7 +1047,6 @@ const Row = memo(function Row({
   setsize,
   from,
   byYou,
-  handedTo,
   handedToName,
   handedMore,
   handedAll,
@@ -1007,16 +1072,14 @@ const Row = memo(function Row({
   onFold,
   onPress,
   onAct,
+  pointedLast,
 }: {
   session: number;
   name: string;
   persona: string | null;
   workspace: string;
-  /** Whether the row says its workspace: every chat but a task working where its asker does. */
-  elsewhere: boolean;
   /** A task, which Delete asks to stop. */
   task: boolean;
-  lines: 1 | 2;
   /** The branch of its own a task works on, where it was given one. */
   branch: string | null;
   shell: boolean;
@@ -1033,9 +1096,8 @@ const Row = memo(function Row({
   from: string | null;
   /** A task the person asked for themselves, from its session's tab (V100-70). */
   byYou: boolean;
-  /** The newest open chat its work was handed off to, and that chat's name; nothing for a chat
-   *  that handed nothing off. */
-  handedTo: number | null;
+  /** The newest open chat its work was handed off to, by name; nothing for a chat that
+   *  handed nothing off. */
   handedToName: string | null;
   /** How many other open chats it handed off to. */
   handedMore: number;
@@ -1076,6 +1138,8 @@ const Row = memo(function Row({
   onFold: (session: number, shut: boolean) => void;
   onPress: (offer: Offer) => void;
   onAct: (session: number, what: Asked) => void;
+  /** Whether the pointer, and not the keyboard, was what the person used last. */
+  pointedLast: () => boolean;
 }) {
   // The keys of a row. Enter is the button's own press, which opens it. Space opens a task
   // beside its session, and Delete (Backspace on a Mac, `tabKeys.deletes`) asks to stop
@@ -1097,22 +1161,45 @@ const Row = memo(function Row({
   const self = useRef<HTMLButtonElement>(null);
   // Asked once, as the row is drawn: whether its chat's state changed while it was not.
   const [changed] = useState(() => clock.missed(session));
-  const ownBranch = branch === null ? null : `own branch ${branch}`;
-  const cameFrom = from === null ? null : cameFromSaid(from, task, askerWaiting);
-  const wentTo = handedToName === null ? null : handedOffSaid(handedToName, handedMore);
-  /** What the second line says that does not change by itself: one line's tooltip. */
-  const second = [
-    wentTo,
-    byYou ? ASKED_BY_YOU : null,
-    elsewhere ? workspace : null,
-    ownBranch,
-    cameFrom,
-  ].filter((one): one is string => one !== null);
-  // A task's tokens, on its row's hover (#1500): read as the pointer comes on, never polled.
+  // A task's tokens, in its card (#1500): read as the pointer or the keyboard rests on the
+  // row, never polled.
   const used = useTokensOnHover({ chat: session });
-  const hover = [lines === 1 ? second.join(" · ") : "", task ? (used.said ?? "") : ""]
-    .filter((one) => one !== "")
-    .join("\n");
+  const state: ShownFacts = { session, shell, report, outcome, asking, harness };
+  // **The card** (#1675). Up after the pointer rests on the row, or the keyboard does, for
+  // `CARD_DELAY_MS`: a pointer running down the list, or the arrows going down the tree, bring
+  // up none. Down when the pointer leaves, the keyboard moves on, a press lands, or Escape.
+  const [carded, setCarded] = useState(false);
+  const cardId = useId();
+  const resting = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(resting.current), []);
+  /** The pointer or the keyboard left, or a press landed, before the card came up. */
+  const unrest = () => {
+    window.clearTimeout(resting.current);
+    resting.current = undefined;
+  };
+  const card = (up: boolean) => {
+    unrest();
+    setCarded(up);
+    if (!task) return;
+    if (up) used.onPointerEnter();
+    else used.onPointerLeave();
+  };
+  /** Brings the card up once the row has been rested on for `CARD_DELAY_MS`. */
+  const rest = () => {
+    unrest();
+    resting.current = window.setTimeout(() => card(true), CARD_DELAY_MS);
+  };
+  /** The keyboard came to the row. Only where the keyboard was used last: a focus a press
+   *  gave the row, or gave back to it as a menu it pressed in closed, is no rest of it. */
+  const rested = () => {
+    if (pointedLast()) unrest();
+    else rest();
+  };
+  /** The pointer or the keyboard left the row: no card, now or after the wait. */
+  const away = () => {
+    if (carded) card(false);
+    else unrest();
+  };
   return (
     <li role="none" data-level={level}>
       {open === null ? (
@@ -1133,135 +1220,111 @@ const Row = memo(function Row({
           {open ? <ChevronDown aria-hidden="true" /> : <ChevronRight aria-hidden="true" />}
         </button>
       )}
-      <Menued on={{ on: "listed", session, handed: handedAll }} offers={offers} onPress={onPress}>
-        <RovingFocusGroup.Item asChild tabStopId={rowId(session)}>
-          <button
-            type="button"
-            ref={self}
-            className="chat"
-            role="treeitem"
-            aria-level={level}
-            aria-posinset={posinset}
-            aria-setsize={setsize}
-            aria-current={current || undefined}
-            aria-expanded={open ?? undefined}
-            // A chat below it needs you: said on the row, which is where a screen reader is,
-            // since the hand beside it is out of the keyboard's way.
-            aria-description={
-              needs !== null && needs !== session
-                ? `${needsName ?? "A chat"} below it needs you`
-                : undefined
-            }
-            // What it is doing is its description on demand (#1493), never announced as it
-            // changes: the line is out of the tree where it stands, and named here. A chat
-            // below that needs you is said first, so it is the one description then.
-            aria-describedby={
-              lines === 2 && !(needs !== null && needs !== session)
-                ? chatDoingId(session)
-                : undefined
-            }
-            data-tab={tab}
-            data-lines={lines}
-            // The chat's number, as a pane carries it: what a reveal finds the row by (#1490).
-            data-session={session}
-            title={hover || undefined}
-            onPointerEnter={task ? used.onPointerEnter : undefined}
-            onPointerLeave={task ? used.onPointerLeave : undefined}
-            // The row goes to its chat, and the words that name another chat go to that one
-            // (`ChatRowHandedOff`). Enter is a press on the row itself.
-            onClick={(event) => onOpen(goesTo(event.target, event.currentTarget) ?? session)}
-            onKeyDown={keys}
-            // A button presses itself as Space comes up: Space is the row's own key here.
-            onKeyUp={(event) => {
-              if (event.key === " ") event.preventDefault();
-            }}
-          >
-            <span className="line one">
-              {persona === null ? (
-                <SquareTerminal className="node-icon" aria-hidden="true" />
-              ) : (
-                <PersonaMark persona={persona} />
-              )}
-              {/* Cut short where the row is narrow, and whole here for a pointer that rests
-                  on it; a screen reader is told the text, which is always the whole name. */}
-              <span
-                className="session"
-                title={task && used.said !== undefined ? `${name}\n${used.said}` : name}
+      {/* Radix's popover, held open by the row and anchored to it, never by its trigger: a
+          trigger is a press, and a press on a row opens its chat. */}
+      <Popover.Root open={carded} onOpenChange={card}>
+        <Menued on={{ on: "listed", session, handed: handedAll }} offers={offers} onPress={onPress}>
+          <Popover.Anchor asChild>
+            <RovingFocusGroup.Item asChild tabStopId={rowId(session)}>
+              <button
+                type="button"
+                ref={self}
+                className="chat"
+                role="treeitem"
+                aria-level={level}
+                aria-posinset={posinset}
+                aria-setsize={setsize}
+                aria-current={current || undefined}
+                aria-expanded={open ?? undefined}
+                // What the card says, while it is up: the row's description.
+                aria-describedby={carded ? cardId : undefined}
+                // A chat below it needs you: said on the row, which is where a screen reader
+                // is, since the hand beside it is out of the keyboard's way.
+                aria-description={
+                  needs !== null && needs !== session
+                    ? `${needsName ?? "A chat"} below it needs you`
+                    : undefined
+                }
+                data-tab={tab}
+                // The chat's number, as a pane carries it: what a reveal finds the row by (#1490).
+                data-session={session}
+                onClick={() => {
+                  // A press focuses the row too: that is no rest of the keyboard.
+                  away();
+                  onOpen(session);
+                }}
+                onPointerEnter={(event) => {
+                  if (event.pointerType !== "touch") rest();
+                }}
+                onPointerLeave={away}
+                onFocus={rested}
+                onBlur={away}
+                onKeyDown={keys}
+                // A button presses itself as Space comes up: Space is the row's own key here.
+                onKeyUp={(event) => {
+                  if (event.key === " ") event.preventDefault();
+                }}
               >
-                {name}
-              </span>
-              {/* Its state, a mark and a word (#1484): the hand of a chat that needs you is
-                  this mark, so the row draws no second one. Never cut short. */}
-              <ChatShownState
-                session={session}
-                shell={shell}
-                report={report}
-                outcome={outcome}
-                asking={asking}
-                harness={harness}
-                changed={changed}
-              />
-              {/* How its tasks stand, where it has any (#1491): `2 working · 1 waiting ·
-                  3 done`. It reads its own tasks, so one that changes state redraws this and
-                  not the row. */}
-              <TaskCountShown session={session} />
-              {stopping && <span className="stopping">Stopping…</span>}
-            </span>
-            {lines === 2 && (
-              <span className="line two">
-                <SecondLine
-                  session={session}
-                  activity={<ChatRowActivity session={session} />}
-                  since={<StateSince clock={clock} session={session} />}
-                  before={
+                <span className="line one">
+                  {persona === null ? (
+                    <SquareTerminal className="node-icon" aria-hidden="true" />
+                  ) : (
+                    <PersonaMark persona={persona} />
+                  )}
+                  {/* Cut short where the row is narrow; whole in the card, and to a screen
+                      reader, which is told the text. */}
+                  <span className="session">{name}</span>
+                  {/* A space between the words a screen reader is told, which the line's flex
+                      does not draw. */}{" "}
+                  {/* Its state's mark (#1484): the hand of a chat that needs you is this mark,
+                      so the row draws no second one. Drawn first on the line, and heard after
+                      the name, as the word is: out of sight, and still the row's. */}
+                  <ChatShownState {...state} changed={changed} />
+                  {open === false && (
                     <>
-                      {handedTo !== null && handedToName !== null && (
-                        <ChatRowHandedOff
-                          session={session}
-                          shell={shell}
-                          report={report}
-                          outcome={outcome}
-                          asking={asking}
-                          harness={harness}
-                          to={handedTo}
-                          name={handedToName}
-                          more={handedMore}
-                        />
-                      )}
-                      {byYou && (
-                        <span
-                          className="by-you"
-                          title="You asked for this task from its session's tab"
-                        >
-                          {ASKED_BY_YOU}
-                        </span>
-                      )}
-                      {elsewhere && <span className="workspace">{workspace}</span>}
+                      {" "}
+                      <TasksFolded session={session} />
                     </>
-                  }
-                  after={
-                    <>
-                      {ownBranch !== null && (
-                        <span
-                          className="own-branch"
-                          title="A branch of its own, which only you merge, from the task's Changes"
-                        >
-                          {ownBranch}
-                        </span>
-                      )}
-                      {cameFrom !== null && <span className="from">{cameFrom}</span>}
-                      {/* A task's helpers, as a count (#1490, V100-4): it has no row in the
-                          explorer, where a chat's helpers unfold, so its own row says them.
-                          Last on the line, and only where it has some. */}
-                      {task && <HelpersSaid session={session} />}
-                    </>
-                  }
-                />
-              </span>
-            )}
-          </button>
-        </RovingFocusGroup.Item>
-      </Menued>
+                  )}
+                  {stopping && <span className="stopping">Stopping…</span>}
+                </span>
+              </button>
+            </RovingFocusGroup.Item>
+          </Popover.Anchor>
+        </Menued>
+        <Popover.Portal>
+          <Popover.Content
+            className="row-card chat-card"
+            data-testid={`chat-card-${session}`}
+            // Words about the row, read as its description, and nothing to press: a tooltip,
+            // which leaves the keyboard on the row as it comes and goes.
+            role="tooltip"
+            id={cardId}
+            onOpenAutoFocus={(event) => event.preventDefault()}
+            onCloseAutoFocus={(event) => event.preventDefault()}
+            // Beside the row, over the centre, in the default arrangement; Radix turns it to
+            // the other side where there is no room, as a region moves (ADR 0038).
+            side="right"
+            align="start"
+            sideOffset={6}
+            collisionPadding={8}
+          >
+            <ChatCard
+              state={state}
+              name={name}
+              persona={persona}
+              workspace={workspace}
+              branch={branch}
+              task={task}
+              cameFrom={from === null ? null : cameFromSaid(from, task, askerWaiting)}
+              wentTo={handedToName === null ? null : handedOffSaid(handedToName, handedMore)}
+              byYou={byYou}
+              clock={clock}
+              tokens={task ? used.said : undefined}
+            />
+          </Popover.Content>
+        </Popover.Portal>
+      </Popover.Root>
       {atLimit !== null && (
         /* **At its task limit** (#1498, V100-54): said where the limit binds, on a refusal,
            until a slot frees; with the number and the way to where it is changed. */
@@ -1324,42 +1387,110 @@ const Row = memo(function Row({
 });
 
 /**
- * **What a row's second line holds.** While its chat works and something was heard of what it
- * is doing (#1493), that and how long it has been in its state, and nothing else: "running
- * cargo · 2m". The activity is cut short where the row is narrow and the time is not, since
- * the time is what tells a live "running cargo" from a stuck one. Otherwise where it works,
- * the time, its own branch and the chat it came from, as before.
- *
- * It reads its own chat, so the swap draws the second line's contents and not the row. The
- * line itself is always there and a fixed line high, so no row changes height (#1499).
+ * **A folded row's tasks, as one small number** (#1675): how many tasks are under it, at any
+ * depth and however each stands, by the one count (`useTaskCount`). Heard as "3 tasks"; the
+ * card says how many are in each state. Reads its own session's tasks, so one arriving redraws
+ * this and not the row.
  */
-function SecondLine({
-  session,
-  activity,
-  since,
-  before,
-  after,
+const TasksFolded = memo(function TasksFolded({ session }: { session: number }) {
+  const counts = useTaskCount(session);
+  const total = tasksIn(counts);
+  if (total === 0) return null;
+  return (
+    <span className="task-count" data-testid={`task-count-${session}`}>
+      <span aria-hidden="true">{total}</span>
+      <span className="hidden-words">{total === 1 ? "1 task" : `${total} tasks`}</span>
+    </span>
+  );
+});
+
+/**
+ * **What a row's card says** (#1675): everything a row said on its second line and in its
+ * counts before it was one line, as facts with a word for each. Drawn only while the card is
+ * up, so what it reads (the clock, the tasks, what the chat is doing) costs nothing until then.
+ */
+function ChatCard({
+  state,
+  name,
+  persona,
+  workspace,
+  branch,
+  task,
+  cameFrom,
+  wentTo,
+  byYou,
+  clock,
+  tokens,
 }: {
-  session: number;
-  activity: ReactNode;
-  since: ReactNode;
-  before: ReactNode;
-  after: ReactNode;
+  /** What its state is derived from (`ChatShownState`), as its row has it. */
+  state: ShownFacts;
+  name: string;
+  persona: string | null;
+  workspace: string;
+  branch: string | null;
+  task: boolean;
+  /** Where it came from, as its row said it, where it is not drawn under that chat. */
+  cameFrom: string | null;
+  /** Where its work went, as its row said it. */
+  wentTo: string | null;
+  byYou: boolean;
+  clock: StateClock;
+  /** A task's tokens, once read. */
+  tokens: string | undefined;
 }) {
-  if (useDoingSaid(session) !== undefined)
-    return (
-      <span className="doing-and-since">
-        {activity}
-        {since}
-      </span>
-    );
+  const { session, harness } = state;
+  const tasks = useTaskCountSaid(session);
   return (
     <>
-      {activity}
-      {before}
-      {since}
-      {after}
+      <p className="chat-card-head">
+        <span className="chat-card-name">{name}</span>
+        <ChatShownState {...state} />
+      </p>
+      <Doing session={session} />
+      <dl className="chat-card-facts">
+        {persona !== null && <Fact term="Persona">{persona}</Fact>}
+        {harness !== null && <Fact term="Harness">{harness}</Fact>}
+        <Fact term="Workspace">{workspace}</Fact>
+        <StateSince clock={clock} session={session} />
+        {tasks !== undefined && <Fact term="Tasks">{tasks}</Fact>}
+        {branch !== null && <Fact term="Branch">{branch}</Fact>}
+      </dl>
+      {wentTo !== null && <p>{wentTo}</p>}
+      {cameFrom !== null && <p>{cameFrom}</p>}
+      {byYou && <p>{ASKED_BY_YOU}</p>}
+      {/* A task's helpers, as a count (#1490, V100-4): it has no row in the explorer, where a
+          chat's helpers unfold. */}
+      {task && <HelpersSaid session={session} />}
+      {tokens !== undefined && <p>{tokens}</p>}
     </>
+  );
+}
+
+/** What a working chat is doing (#1493), in its card: read as a line of it, where the row's
+ *  own line was out of the tree and named by the row's description. */
+function Doing({ session }: { session: number }) {
+  const says = useDoingSaid(session);
+  if (says === undefined) return null;
+  return (
+    <p className="chat-doing">
+      {says.words}
+      {says.name !== undefined && (
+        <>
+          {" "}
+          <bdi className="named">{says.name}</bdi>
+        </>
+      )}
+    </p>
+  );
+}
+
+/** One fact of a card: its word, and what it is. */
+function Fact({ term, children }: { term: string; children: ReactNode }) {
+  return (
+    <div>
+      <dt>{term}</dt>
+      <dd>{children}</dd>
+    </div>
   );
 }
 
@@ -1377,9 +1508,5 @@ const StateSince = memo(function StateSince({
 }) {
   const seconds = useStateSince(clock, session);
   if (seconds === null) return null;
-  return (
-    <span className="since" title="How long it has been in this state, as this window saw it">
-      {sinceSaid(seconds)}
-    </span>
-  );
+  return <Fact term="In this state">{sinceSaid(seconds)}</Fact>;
 });

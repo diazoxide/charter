@@ -3153,18 +3153,17 @@ h2.sidebar-title .node-icon {
   white-space: normal;
 }
 
-/* **How a session's tasks stand, on its row** (#1491): `2 working · 1 waiting · 3 done`.
-   Numbers that change under the eye, so they are tabular and the row does not shift as one
-   moves; muted, since the state's word beside it is what says whether the session is waiting
-   on them. It keeps to one line and gives way before the name does. */
+/* **A folded row's tasks, as one small number** (#1675): a quiet badge after the name, as
+   wide as its digits, which never gives way. Its card says how they stand. */
 .chats-section .task-count {
-  flex: 0 1 auto;
-  overflow: hidden;
+  flex: none;
+  padding: 0 0.3rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: 2px;
   color: var(--text-muted);
-  font-size: 0.9em;
+  font-size: 0.75rem;
   font-variant-numeric: tabular-nums;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.2;
 }
 
 .explorer .helpers-count {
@@ -3217,14 +3216,6 @@ h2.sidebar-title .node-icon {
 .explorer .tasks-line .counted .shape svg {
   width: 0.8rem;
   height: 0.8rem;
-}
-
-/* A task's helpers, said on its row in the Chats list (#1490): last on the second line, in
-   that line's own quiet. */
-.chats-section .line.two .helpers {
-  flex: none;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
 }
 
 /* **A row another part of the window asked for** (#1490, `revealTask.ts`): the explorer's
@@ -3316,14 +3307,13 @@ h2.sidebar-title .node-icon {
   }
 }
 
-/* **A row is two lines, and as wide as the list** (#1499, V100-50). No row, of a chat or of a
+/* **A row is one line, and as wide as the list** (#1675, #1499). No row, of a chat or of a
    finished task, makes the list scroll sideways: what gives way in a narrow sidebar is the
    name, and never the state. */
 .chats-section .chat {
   display: flex;
   flex: 1 1 0;
-  flex-direction: column;
-  align-items: stretch;
+  align-items: center;
   min-width: 0;
   padding: 0.1rem 0.2rem;
   border: none;
@@ -3335,13 +3325,11 @@ h2.sidebar-title .node-icon {
   cursor: default;
 }
 
-/* The first line: the persona's mark, the name, the state. The name takes what the state
-   leaves and is cut short with an ellipsis; the state's word is whole (`.shown-state` does not
-   give way to it). Where the sidebar is too narrow for a few letters of name beside the state,
-   the state goes under the name, whole, and is still not cut. */
+/* The line: the state's mark, the persona's badge, the name, and a folded row's count. Only
+   the name gives way, cut short with an ellipsis; the marks and the count never do. */
 .chats-section .chat .line.one {
   display: flex;
-  flex-wrap: wrap;
+  flex: 1 1 0;
   gap: 0 0.35rem;
   align-items: center;
   min-width: 0;
@@ -3363,59 +3351,43 @@ h2.sidebar-title .node-icon {
 /* The state on a row of the list: beside the name where both fit, under it where they do not,
    and, in a sidebar narrower than the state itself, on as many lines as its words need. Never
    cut: a state has no ellipsis. */
-.chats-section .chat .shown-state,
 .chats-section .finished-name .shown-state {
   flex: 0 1 auto;
   min-width: 0;
   white-space: normal;
 }
 
-.chats-section .chat .shown-state .shape,
 .chats-section .finished-name .shown-state .shape {
   flex: none;
 }
 
-.chats-section .chat .shown-state .word,
 .chats-section .finished-name .shown-state .word {
   min-width: 0;
   overflow-wrap: anywhere;
 }
 
-/* The second line, dimmer: where it works, for how long, its own branch. One line, cut short
-   as a whole; a part with more to say has its own tooltip. **Exactly a line high, with or
-   without words, whatever the words are drawn in**: what it comes to say later (a time, what
-   the chat is doing) must not make the row taller and move the rows below it, and text drawn
-   from a taller font is cut, not made room for. */
-.chats-section .chat .line.two {
-  display: block;
-  min-width: 0;
-  height: 1.4em;
-  height: 1lh;
-  padding-inline-start: 1.35rem;
+/* **A chat's row says its state by its mark alone** (#1675): the word is the card's, and
+   still the row's to a screen reader, clipped to nothing where it stands as `.hidden-words`
+   is. The mark is a shape as well as a colour (#1484), so it reads without the word. It is
+   drawn first on the line and comes after the name in the markup, so a row is heard by its
+   name first, as a tree's rows are. */
+.chats-section .chat .shown-state {
+  flex: none;
+  order: -1;
+}
+
+.chats-section .chat .shown-state .word {
+  position: absolute;
+  width: 1px;
+  height: 1px;
   overflow: hidden;
-  color: var(--text-muted);
-  font-size: 0.9em;
-  text-overflow: ellipsis;
+  clip-path: inset(50%);
   white-space: nowrap;
 }
 
-.chats-section .chat .line.two > * + *::before {
-  content: " · ";
-}
-
-/* Where a chat's work was handed off to (#1492): words in the row that go to that chat, and
-   say so under the pointer. Text of the line like the rest of it: no box, no height of its
-   own, and cut with the line. */
-.chats-section .chat .line.two .handed-off:hover {
-  color: var(--text-primary);
-  text-decoration: underline;
-}
-
-/* What a working chat is doing, in one line (#1493): dim, never wrapped. In a row it stands
-   in the second line with the time in the chat's state after it ("running cargo · 2m"): the
-   activity is cut short where the row is narrow, and the time never is. Anything else that
-   mounts it gives it a line of its own to be cut in. The one name in it keeps its own
-   direction (`bdi`). */
+/* What a working chat is doing, in one line (#1493): dim, never wrapped. Whatever mounts it
+   gives it a line of its own to be cut in: a tab's menu, a row's card. The one name in it
+   keeps its own direction (`bdi`). */
 .chat-doing {
   color: var(--text-muted);
   white-space: nowrap;
@@ -3423,27 +3395,6 @@ h2.sidebar-title .node-icon {
 
 .chat-doing .named {
   unicode-bidi: isolate;
-}
-
-.chats-section .chat .line.two > .doing-and-since {
-  display: flex;
-  min-width: 0;
-}
-
-.chats-section .doing-and-since > .chat-doing {
-  flex: 0 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.chats-section .doing-and-since > .since {
-  flex: none;
-}
-
-.chats-section .doing-and-since > .chat-doing + .since::before {
-  content: " · ";
-  white-space: pre;
 }
 
 /* The filter over the list: the box, then its two chips. The box gives way first. */
@@ -6278,6 +6229,52 @@ h2.sidebar-title .node-icon {
   margin: 0;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+/* **A chat row's card** (#1675): its name and state, then its facts, a word and a value a
+   line. The card's own surface (`.row-card`), at a width a fact's line fits in. */
+.chat-card {
+  max-width: 20rem;
+  overflow-wrap: anywhere;
+}
+
+.chat-card p {
+  margin: 0.15rem 0 0;
+}
+
+.chat-card .chat-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 0.5rem;
+  align-items: center;
+  margin: 0;
+}
+
+.chat-card .chat-card-name {
+  font-weight: 600;
+}
+
+.chat-card .chat-doing {
+  white-space: normal;
+}
+
+.chat-card-facts {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.1rem 0.6rem;
+  margin: 0.35rem 0 0;
+}
+
+.chat-card-facts > div {
+  display: contents;
+}
+
+.chat-card-facts dt {
+  color: var(--text-muted);
+}
+
+.chat-card-facts dd {
+  margin: 0;
 }
 
 /* **The empty state, centred, with the way out in it** (`EmptyState.tsx`). `page` is the

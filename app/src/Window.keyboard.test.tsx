@@ -319,8 +319,8 @@ describe("the window's tab order", () => {
       "input Filter chats by name, persona, workspace or state",
       "input",
       // The project's chats (#1447): ONE stop, the row of the chat in front, which reads as
-      // its name and its state's word (#1484), then its workspace on its second line (#1499).
-      "treeitem steward tworunning (no detail from Claude Code)alpha",
+      // its name and its state's word (#1484), on its one line (#1675).
+      "treeitem steward two running (no detail from Claude Code)",
       // The explorer: ONE stop, its current row.
       "treeitem alphathe workspace itself",
       // The handle between it and the centre — `react-resizable-panels`' keyboard resize.

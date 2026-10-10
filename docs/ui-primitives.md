@@ -414,6 +414,28 @@ opens nothing else, such as an extension's declared row.
 An extension's view — persona statistics — opens in a tab of its own the same way, from a button
 on the personas panel's heading, a button on a persona's tab, or its palette row.
 
+And a **Chats row's card** (`@radix-ui/react-popover`, `app/src/ChatsSection.tsx`, #1675):
+what a chat's one-line row says when it is rested on, its state in words, what it is doing, its
+persona, harness, workspace, time in its state, tasks, own branch, handoffs and a task's tokens.
+It is the popover the window already has, used as a tooltip, and not a package of its own:
+
+- **The row holds it open, and anchors it** (`Popover.Anchor`), and there is no `Trigger`. A
+  trigger is a press that toggles the card and says `aria-expanded`, and a press on a row opens
+  its chat while `aria-expanded` is the row's fold.
+- **It comes on a rest, the pointer's or the keyboard's**, after `CARD_DELAY_MS`, so a pointer
+  running down the list or the arrows going down the tree put up none. The keyboard's counts
+  only where the keyboard was used last: a focus a press gave the row, or a closing menu gave
+  back, is no rest. The pointer leaving, the keyboard moving on, a press and Escape take it
+  down.
+- **It is a tooltip to a screen reader**: `role="tooltip"`, named by the row's
+  `aria-describedby` while it is up. It takes no focus as it opens or closes
+  (`onOpenAutoFocus`/`onCloseAutoFocus` are prevented), so the keyboard stays on the row, and it
+  holds nothing to press: every way to act on a chat is the row's own.
+
+**It is drawn only while it is up**, so what it reads (the clock, the tasks, what the chat is
+doing) costs a row nothing until then. Like the persona card, `side="right"` is the default
+arrangement's side and no more: Radix flips it where there is no room (ADR 0038).
+
 Two decisions those four share, taken once so they do not have to be taken again per dialog:
 
 - **A click outside answers nothing.** `onInteractOutside` is prevented on all four, which is
