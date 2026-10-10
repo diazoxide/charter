@@ -435,8 +435,15 @@ asks the person).
   kept there) is refused rather than read: by `secret exec` when no app takes the run, by
   `secret get` and `cp`, which the app does not broker, and, as a backstop where the keyring
   itself is read, by every other read (`vault verify`, `secret rename`, a listing that runs
-  `op`). The sentence says why and what to run instead. A vault the keyring does not hold runs
-  as it did. On Linux, where the Secret Service answers without asking, it refuses the same way.
+  `op`). The sentence says why and what to run instead: on macOS `secret exec` through the
+  app; where the app runs no command for a chat yet (Linux, #1040), a terminal outside the
+  chat. A vault the keyring does not hold runs as it did. On Linux, where the Secret Service
+  answers without asking, it refuses the same way: there a sandboxed chat's `secret get`, `cp`
+  and every other read of such a vault, which used to read it, are now refused.
+- **`vault list` never reads a kept token to draw its status** (#1180). A 1Password vault whose
+  token is kept in the keyring shows that it is kept there and that `vault verify` reads it,
+  as the guide already said; it no longer runs `op`, which made the Keychain ask once per such
+  vault in every listing. `persona list` and `vault add` still check the vault live (#1180).
 - **A courtesy, not the boundary.** The refusal reads the chat's own environment, which the
   chat can change. What holds the item is still the store's rule (V90a) and the sandbox; this
   keeps purlis from raising a question on the chat's behalf and says what to do.

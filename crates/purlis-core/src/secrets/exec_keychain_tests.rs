@@ -1,4 +1,5 @@
-//! How often one `purlis secret exec` makes the Keychain ask the person (#1638).
+//! How often one `purlis secret exec`, and `purlis vault list`, make the Keychain ask the
+//! person (#1638, #1180).
 //!
 //! A 1Password vault whose service-account token is kept in the keyring is read by running
 //! `op` once per value, and every `op` is handed the token. Where the `purlis` command is the
@@ -76,6 +77,22 @@ fn sandboxed_no_app(tmp: &tempfile::TempDir) -> Vec<(&'static str, String)> {
     ]
 }
 
+/// What a refusal of `get`, `cp` or any other read tells a sandboxed chat to run instead: on
+/// macOS `secret exec` through the app; elsewhere the app runs none for a chat yet
+/// ([`crate::secrets::brokered::NO_WRAP`]), so a terminal outside the chat.
+const ROUTE: &str = if cfg!(target_os = "macos") {
+    "secret exec team"
+} else {
+    "terminal outside the chat"
+};
+
+/// What the refusal of a `secret exec` no app took tells a sandboxed chat to do instead.
+const EXEC_ROUTE: &str = if cfg!(target_os = "macos") {
+    "while the app that started this chat is open"
+} else {
+    "terminal outside the chat"
+};
+
 fn reads(ctx: &Ctx) -> usize {
     keyring::stub_reads(&ctx.state.join(keyring::STUB_FILE))
 }
@@ -115,6 +132,7 @@ fn a_sandboxed_chat_no_app_answers_is_refused_a_kept_token_and_the_keychain_is_n
     let said = io.said();
     assert!(said.contains("vault 'team'"), "{said}");
     assert!(said.contains("app"), "{said}");
+    assert!(said.contains(EXEC_ROUTE), "{said}");
     assert_eq!(
         reads(&ctx) - before,
         0,
@@ -163,7 +181,7 @@ fn a_sandboxed_chat_is_refused_secret_get_of_a_kept_token_and_the_keychain_is_ne
     assert_eq!(code, 1);
     assert!(io.out.is_empty(), "nothing was said of the value");
     let said = io.said();
-    assert!(said.contains("secret exec team"), "{said}");
+    assert!(said.contains(ROUTE), "{said}");
     assert_eq!(
         reads(&ctx) - before,
         0,
@@ -197,10 +215,34 @@ fn any_other_read_of_a_kept_token_in_a_sandboxed_chat_is_refused_where_the_keyri
     let code = crate::secrets::cmd::list(&ctx, "team", &mut io);
 
     assert_ne!(code, 0);
-    assert!(io.said().contains("secret exec team"), "{}", io.said());
+    assert!(io.said().contains(ROUTE), "{}", io.said());
     assert_eq!(
         reads(&ctx) - before,
         0,
         "the chat never reaches the Keychain"
+    );
+}
+
+#[test]
+fn vault_list_never_reads_a_kept_token_from_the_keychain_to_draw_its_status() {
+    let (tmp, bin) = kept_plane();
+    let ctx = on_path(tmp.path(), bin.path(), &[]);
+    let before = reads(&ctx);
+    let mut io = Rec::default();
+
+    let code = crate::secrets::vaultcmd::list(&ctx, &mut io);
+
+    assert_eq!(code, 0, "{}", io.said());
+    let out = String::from_utf8_lossy(&io.out).into_owned();
+    let row = out
+        .lines()
+        .find(|line| line.starts_with("team"))
+        .unwrap_or_else(|| panic!("no row for team in {out}"));
+    assert!(row.contains(keyring::STORE_NAME), "{row}");
+    assert!(row.contains("purlis vault verify team"), "{row}");
+    assert_eq!(
+        reads(&ctx) - before,
+        0,
+        "drawing the list never makes the Keychain ask the person"
     );
 }

@@ -875,6 +875,13 @@ pub fn list(ctx: &Ctx, io: &mut dyn Io) -> i32 {
             // keyring to draw a row.
             .and_then(|v| super::identity_missing(ctx, &v).map_or(Ok(v), Err))
         {
+            // A token kept in the keyring is not read to draw a row either: each read of it by
+            // the command makes the Keychain ask the person (#1180). `vault verify` reads it.
+            Ok(v) if super::identity::in_keyring(ctx, &v) => format!(
+                "token kept in {}, not read to list it (`purlis vault verify {}` reads it)",
+                super::keyring::STORE_NAME,
+                crate::personas::one_line(&v.name)
+            ),
             Ok(v) => cmd::health(ctx, &v).1,
             Err(e) => e.message.split('\n').next().unwrap_or_default().to_string(),
         };

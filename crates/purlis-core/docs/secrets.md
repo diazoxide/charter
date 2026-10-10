@@ -80,8 +80,10 @@ purlis persona secret exec --env TOKEN=API_TOKEN -- some-cli       # the active 
   whose values come from the keyring (a `keyring` vault, or a 1Password vault whose token is
   kept there) is refused with a sentence saying so, and nothing runs: read in the chat, the
   Keychain would ask you on the chat's behalf. `secret get`, `cp` and every other read of such
-  a vault in a sandboxed chat are refused the same way, since the app runs only `exec`. Any
-  other vault runs as before.
+  a vault in a sandboxed chat are refused the same way, since the app runs only `exec`. The
+  refusal names what to run instead: `secret exec` through the app on macOS, and a terminal
+  outside the chat where the app runs no command for a chat yet (Linux). Any other vault runs
+  as before.
 - **`secret list <vault>`** prints the key names.
 - **`secret get <vault> <key>`** prints a size band and a keyed fingerprint —
   `devops/API_TOKEN: present · 16–31 bytes · fp:9c41a0b7e5d2` — never the value. The
@@ -127,7 +129,8 @@ the keys and the command — never a value.
   the command reads it), and the vault's next read through the command says so once. A
   purlis update is a new binary, so with an ad-hoc signed build the first read after an
   update asks again. A 1Password vault's kept token is read once per `secret exec`, however
-  many values it hands on, not once per value (#1638).
+  many values it hands on, not once per value (#1638), and `vault list` never reads it: its
+  status says the token is kept in the keyring and that `vault verify` reads it (#1180).
 - **`plain-file`** (`--provider plain-file`) — a JSON object of key → value at 0600,
   `.charter/vaults/<vault>.json` by default. It is **plaintext on disk**. Inside a plane that is a git repository, `vault add`
   refuses a `--file` git would commit, and `secret set` checks again before it writes, because
