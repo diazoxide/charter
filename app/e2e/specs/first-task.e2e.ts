@@ -211,6 +211,19 @@ async function pressInTheTab(words: string): Promise<void> {
   await browser.execute((el: HTMLElement) => el.click(), button as unknown as HTMLElement);
 }
 
+/** Picks the profile `name` for the run headed `run` in the First task tab. */
+async function pickInTheTab(run: string, name: string): Promise<void> {
+  const radio = await $(
+    `//div[@class="first-task"]//section[h3[normalize-space()="${run}"]]//*[@role="radio"][normalize-space()="${name}" or @value="${name}"]`,
+  );
+  await radio.waitForExist({ timeout: 30_000, timeoutMsg: `the ${run} has no ${name} to pick` });
+  await browser.execute((el: HTMLElement) => el.click(), radio as unknown as HTMLElement);
+  await browser.waitUntil(async () => (await radio.getAttribute("aria-checked")) === "true", {
+    timeout: 10_000,
+    timeoutMsg: `${name} was never picked for the ${run}`,
+  });
+}
+
 /** What the First task tab says about its runs, in one read. */
 async function theTabSays(): Promise<string> {
   return browser.execute(
@@ -328,6 +341,9 @@ describe("the first task, from its tab", function () {
         timeoutMsg: `the tab never said where the first chat started: ${await theTabSays()}`,
       },
     );
+    // The tab suggests another harness for the second chat, so the two differ; this run has only
+    // the stand-in Claude Code, so the second is started on it too.
+    await pickInTheTab("Second chat", "claude");
     await pressInTheTab("tart the second chat");
     await aPaneShows(
       "lesson in the briefing: 1",
