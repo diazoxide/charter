@@ -9,4 +9,7 @@
   place they are. The status line's toggle for the left side is called Navigation now (#1673).
 - **The layout file is version 2.** Each project keeps its own arrangement under `projects`,
   and the left region is `navigation`. A version 1 file is read and moved forward at the first
-  change, so every arrangement you saved is kept (#1673).
+  change, so every arrangement you saved is kept (#1673). Going back to an older purlis is
+  safe but forgets the arrangement: an older purlis cannot read version 2, so it draws the
+  default layout and says so, and its first change rewrites the file as version 1, without
+  each project's own arrangement.
