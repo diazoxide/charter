@@ -164,7 +164,7 @@ import {
 } from "./planeChanged";
 import { FreshMark, freshMarkShown, usePlaneUpdated } from "./PlaneUpdated";
 import { useHarnessCards } from "./harnessCards";
-import { Notice, NoticeBand, NoticeOf } from "./Notice";
+import { Notice, NoticeBand, NoticeOf, NoticePaneRow } from "./Notice";
 import { SandboxBlockNotice } from "./SandboxBlockNotice";
 import { VaultRefusedNotice } from "./VaultRefusedNotice";
 import { PersonaGrantsNotice } from "./PersonaGrantsNotice";
@@ -8799,8 +8799,10 @@ function tabTip(from: string | undefined, workItem: string | undefined): string 
 }
 
 /**
- * One pane's frame: the terminal, and what charter draws over it in the pane's two corners —
- * side by side with the terminal, so neither is ever a child of the element xterm draws into.
+ * One pane's frame: what purlis has to say of its chats, in a row of its own at the top
+ * (`PaneNotices`, #1647), and under it the terminal, with what charter draws over it in the
+ * pane's two corners — side by side with the terminal, so neither is ever a child of the
+ * element xterm draws into.
  *
  * **Two corners, and neither thing in them places itself** (charter-app#193). The gauge is
  * top-left and the controls top-right — the operator: *"context status indicator in pane right
@@ -8813,6 +8815,10 @@ function tabTip(from: string | undefined, workItem: string | undefined): string 
  * **Both corners float over the terminal and neither takes a row.** #207 gave the gauge a row
  * of its own, and a pane with a gauge was then a row shorter than one without — the operator:
  * *"its changing harness container sizes"*. A pane's size is the layout's business alone.
+ *
+ * **The Notices are the exception, and take a row** (#1647): they were in the start corner
+ * (#1481), and three of them hid the conversation. A chip is one short line; a Notice is a
+ * sentence and its answers, and what it covers is what the person has to read to answer it.
  */
 function PaneFrame({
   plane,
@@ -8880,40 +8886,44 @@ function PaneFrame({
         lent.hand(r, session, "add");
       }}
     >
-      {/* **The corners before the terminal, in the document**, although they are drawn over
+      {/* **The Notices first**: they are the top of the pane, and the first thing read and
+          tabbed to (#1647). */}
+      <PaneNotices notices={notices} asked={asked} others={others} onShowChat={onShowChat} />
+      <div className="pane-body">
+        {/* **The corners before the terminal, in the document**, although they are drawn over
           it: the tab order is the document's, and a terminal keeps Tab for its shell, so a
           control written after it is one Tab never reaches (charter-app#189). The pane's own
           controls are in its top corner, which is where reading order puts them anyway. */}
-      <div className="pane-corner at-start">
-        {/* The chat at a glance, on one row. */}
-        <div className="pane-chips">
-          {/* **Which chat this is, while the tab shows a task** (#1486): first in the line, and
+        <div className="pane-corner at-start">
+          {/* The chat at a glance, on one row. */}
+          <div className="pane-chips">
+            {/* **Which chat this is, while the tab shows a task** (#1486): first in the line, and
               in no row of its own. */}
-          {crumbs &&
-            (crumbMenu === undefined ? (
-              <PaneCrumbs crumbs={crumbs} onShow={onShowChat} />
-            ) : (
-              <Menued
-                on={{ on: "listed", session: crumbMenu.session }}
-                offers={crumbMenu.offers}
-                onPress={crumbMenu.onPress}
-              >
+            {crumbs &&
+              (crumbMenu === undefined ? (
                 <PaneCrumbs crumbs={crumbs} onShow={onShowChat} />
-              </Menued>
-            ))}
-          {/* **Brief** (#1494): what the task on screen was sent. Right after the breadcrumb,
+              ) : (
+                <Menued
+                  on={{ on: "listed", session: crumbMenu.session }}
+                  offers={crumbMenu.offers}
+                  onPress={crumbMenu.onPress}
+                >
+                  <PaneCrumbs crumbs={crumbs} onShow={onShowChat} />
+                </Menued>
+              ))}
+            {/* **Brief** (#1494): what the task on screen was sent. Right after the breadcrumb,
               before anything else the line holds for a task. */}
-          {crumbs && <BriefButton of={briefOfShown(crumbs)} />}
-          {crumbs && ending}
-          <ChatGauge usage={usage} />
-          {harness && <HarnessChip glance={harness} onOpen={() => onOpenCard(harness)} />}
-          {from && <span className="pane-from">{from}</span>}
-          {workItem && <span className="pane-work-item">{workItemSaid(workItem)}</span>}
+            {crumbs && <BriefButton of={briefOfShown(crumbs)} />}
+            {crumbs && ending}
+            <ChatGauge usage={usage} />
+            {harness && <HarnessChip glance={harness} onOpen={() => onOpenCard(harness)} />}
+            {from && <span className="pane-from">{from}</span>}
+            {workItem && <span className="pane-work-item">{workItemSaid(workItem)}</span>}
+          </div>
         </div>
-        <PaneNotices notices={notices} asked={asked} others={others} onShowChat={onShowChat} />
+        <div className="pane-corner at-end">{doing}</div>
+        {children}
       </div>
-      <div className="pane-corner at-end">{doing}</div>
-      {children}
     </div>
   );
 }
@@ -8938,8 +8948,8 @@ type HiddenChat = {
 };
 
 /**
- * **What purlis has to say on a pane, one Notice under another** (#1481), inside the pane at
- * any width and scrolling when together they are taller than it.
+ * **What purlis has to say on a pane, one Notice under another** (#1481), in the pane's own row
+ * above its terminal, two at a time and the rest behind "+N more" (`NoticePaneRow`, #1647).
  *
  * **Of every chat that lives in the pane, whichever one it shows** (#1486, the train-1 part of
  * V100-56). A session's tab shows one of its chats at a time: the session's own, or a task
@@ -8962,7 +8972,7 @@ function PaneNotices({
   onShowChat: (session: number) => void;
 }) {
   return (
-    <div className="pane-notices">
+    <NoticePaneRow>
       {notices}
       {asked}
       {others.map((other) => (
@@ -8976,7 +8986,7 @@ function PaneNotices({
           {other.notices}
         </NoticeOfChat>
       ))}
-    </div>
+    </NoticePaneRow>
   );
 }
 
@@ -9728,47 +9738,50 @@ function LayoutPanes({
       const last = gone.crumbs.path[gone.crumbs.path.length - 1].session;
       return (
         <div className="pane-frame" onPointerDown={() => onFocus(layout.pane)}>
-          <div className="pane-corner at-start">
-            <div className="pane-chips">
-              <PaneCrumbs
-                crumbs={gone.crumbs}
-                onShow={onShowChat}
-                // One that is still running says what it is doing; one that ended, how.
-                state={
-                  gone.why === "ended" && ended !== undefined ? (
-                    <StateShown shown={ended} />
-                  ) : undefined
-                }
-                gone={(session) => !hidden.some((other) => other.session === session)}
-              />
-              {/* A task that has ended is read by its finished row's record (#1494), and has
-                  no Brief here once that row is gone; one still running, by its chat. */}
-              {(gone.why !== "ended" || row !== undefined) && (
-                <BriefButton
-                  of={
-                    gone.why === "ended" && row !== undefined
-                      ? { dispatch: row.id, name: row.name }
-                      : briefOfShown(gone.crumbs)
+          {/* As `PaneFrame` draws them: a row of their own, above what the pane shows. */}
+          <PaneNotices
+            notices={null}
+            asked={asked[layout.pane]}
+            others={hidden}
+            onShowChat={onShowChat}
+          />
+          <div className="pane-body">
+            <div className="pane-corner at-start">
+              <div className="pane-chips">
+                <PaneCrumbs
+                  crumbs={gone.crumbs}
+                  onShow={onShowChat}
+                  // One that is still running says what it is doing; one that ended, how.
+                  state={
+                    gone.why === "ended" && ended !== undefined ? (
+                      <StateShown shown={ended} />
+                    ) : undefined
                   }
+                  gone={(session) => !hidden.some((other) => other.session === session)}
                 />
-              )}
+                {/* A task that has ended is read by its finished row's record (#1494), and has
+                  no Brief here once that row is gone; one still running, by its chat. */}
+                {(gone.why !== "ended" || row !== undefined) && (
+                  <BriefButton
+                    of={
+                      gone.why === "ended" && row !== undefined
+                        ? { dispatch: row.id, name: row.name }
+                        : briefOfShown(gone.crumbs)
+                    }
+                  />
+                )}
+              </div>
             </div>
-            <PaneNotices
-              notices={null}
-              asked={asked[layout.pane]}
-              others={hidden}
-              onShowChat={onShowChat}
+            <div className="pane-corner at-end">{doing}</div>
+            <TaskAway
+              away={gone}
+              focused={layout.pane === focused}
+              report={row?.report}
+              finished={row && { state: ended, more: qualifierOf(row) }}
+              onBack={() => onBack(layout.pane)}
+              onOpenAlone={() => onShowChat(last)}
             />
           </div>
-          <div className="pane-corner at-end">{doing}</div>
-          <TaskAway
-            away={gone}
-            focused={layout.pane === focused}
-            report={row?.report}
-            finished={row && { state: ended, more: qualifierOf(row) }}
-            onBack={() => onBack(layout.pane)}
-            onOpenAlone={() => onShowChat(last)}
-          />
         </div>
       );
     }
