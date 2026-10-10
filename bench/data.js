@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791620139434,
+  "lastUpdate": 1791622847294,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -5712,6 +5712,48 @@ window.BENCHMARK_DATA = {
             "value": 101.862476,
             "unit": "ms",
             "extra": "median of 5 runs: 100.179, 101.229, 101.862, 102.009, 102.945 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "eyehollow@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "dbrownsimple"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "27f647d0f9e43f67987796142f257915dcc4ae09",
+          "message": "Scan each Rust source once, in linear time, in the copy check\n\nThe Rust copy check timed out on CI at 5s. Its literal scanner copied the\nrest of the source at every character and counted lines from the top for\nevery literal, so each file cost quadratic time, and the command-error\nplaces scanned every file of the app again in each of three cases.\n\nThe scanner now matches sticky patterns at the current offset, counts\nlines on from the last literal, and keeps each source's scan in a map.\nThe command-error case drops from about 2.5s to about 0.12s locally.\n\nRefs #1156\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nAssisted-by: claude-code:claude-opus-5-5\nPurlis-Chat: 01M4AREQXXRGBAEWM0SZ0N0WBN\nPurlis-Persona: steward",
+          "timestamp": "2026-10-10T12:52:59+04:00",
+          "tree_id": "aba81bb568ff23a4c287dd87347441ed765e0892",
+          "url": "https://github.com/purlis/purlis/commit/27f647d0f9e43f67987796142f257915dcc4ae09"
+        },
+        "date": 1791622846103,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.518076,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.502, 0.510, 0.518, 0.524, 0.534 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.685288999999997,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.433, 16.539, 16.685, 17.131, 17.205 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 104.654235,
+            "unit": "ms",
+            "extra": "median of 5 runs: 103.250, 103.846, 104.654, 104.910, 105.321 ms"
           }
         ]
       }
