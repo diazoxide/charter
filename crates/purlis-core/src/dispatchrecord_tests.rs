@@ -2330,3 +2330,32 @@ fn a_task_whose_asking_chat_comes_back_resumed_keeps_its_row_and_its_words() {
     assert!(!settled.cleared);
     assert_eq!(settled.talk[0].text, "The words.");
 }
+
+/// #1698: a folder named by its whole path is handed to `moved` and written as it answers; a
+/// folder in the project (relative) and one `moved` does not know are left as they were.
+#[test]
+fn a_folder_named_by_its_whole_path_follows_a_move() {
+    let (_d, root) = project();
+    let with = |folder: &str| {
+        let mut opening = a_handoff();
+        opening.place.folder = Some(folder.to_owned());
+        open(&root, opening, at("2026-10-07T12:00:00Z")).unwrap().id
+    };
+    let old = with("/old/place/workspaces/beta");
+    let elsewhere = with("/somewhere/else");
+    let relative = with("workspaces/beta");
+
+    let rewritten = folders_moved(&root, |folder| {
+        folder
+            .strip_prefix("/old/place")
+            .ok()
+            .map(|rest| rest.display().to_string())
+    })
+    .unwrap();
+
+    assert_eq!(rewritten, 1);
+    let folder = |id: &str| read(&root, id).unwrap().place.folder.unwrap();
+    assert_eq!(folder(&old), "workspaces/beta");
+    assert_eq!(folder(&elsewhere), "/somewhere/else");
+    assert_eq!(folder(&relative), "workspaces/beta");
+}

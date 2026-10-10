@@ -14,8 +14,8 @@
 //! - **A pointer is left at the old place** (a link to the new one) the moment the rename is
 //!   made, so anything that still names the old path finds the project.
 //! - **Then what names the old path is pointed at the new one**: the git links between each clone
-//!   and its worktrees, the record of the chats that were open, and this machine's remembered
-//!   projects and windows.
+//!   and its worktrees, the record of the chats that were open, the records of its tasks (#1698),
+//!   and this machine's remembered projects and windows.
 //! - **The pointer goes only once every one of those is done** and the project reads as a
 //!   project in its new place. Until then it stays, and the next launch finishes the rest.
 //! - **A journal says a move was started** (`<config>/purlis/local-project-move`), written before
@@ -354,6 +354,11 @@ fn finish(places: &Places, olds: &[PathBuf]) -> Moved {
             "the record of its open chats could not be rewritten ({e})"
         ));
     }
+    if let Err(e) = task_records(&to, olds, &real) {
+        failed.push(format!(
+            "the records of its tasks could not be rewritten ({e})"
+        ));
+    }
     if let Err(e) = machine_store(&places.config_root, olds, &real) {
         failed.push(format!(
             "this machine's remembered projects could not be rewritten ({e})"
@@ -575,6 +580,17 @@ fn reopen_record(root: &Path, olds: &[PathBuf], new: &Path) -> std::io::Result<(
         crate::reopen::write(root, &record)?;
     }
     Ok(())
+}
+
+/// The records of the project's tasks ([`crate::dispatchrecord`]), with each folder in the old
+/// place that one names by its whole path named in the new place, as a path in the project
+/// (#1698). The store is in the project, so it moved with it; a record is read and written
+/// through no link, as the reopen record is.
+fn task_records(root: &Path, olds: &[PathBuf], new: &Path) -> std::io::Result<()> {
+    crate::dispatchrecord::folders_moved(root, |folder| {
+        rebased(folder, olds, new).map(|moved| crate::dispatchrecord::folder_of(new, &moved))
+    })
+    .map(|_| ())
 }
 
 /// This machine's remembered projects and windows, with the old place named as the new one.
