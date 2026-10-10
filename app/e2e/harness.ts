@@ -335,6 +335,21 @@ export function built(name: string): string {
 }
 
 /**
+ * A folder of programs a spec stands in for an installed one with, first on the app's `PATH`
+ * (`wdio.conf.ts`) and empty unless a spec has put one there for its own length.
+ *
+ * **Beside the built binaries, never in the run's tree** (#1670): a project that runs its chats
+ * sandboxed refuses a program a chat could write, and the run's tree, its `$HOME` among it, is
+ * in the temp directory every sandboxed chat may write. The built binaries are in the checkout,
+ * which no chat writes.
+ */
+export function theRunsStandIns(): string {
+  const at = built("e2e-stand-ins");
+  mkdirSync(at, { recursive: true });
+  return at;
+}
+
+/**
  * A writable copy of a fixture plane for the app to be started in.
  *
  * The fixtures are committed and the app writes to a plane, so a scenario test never runs

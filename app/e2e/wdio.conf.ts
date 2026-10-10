@@ -1,3 +1,4 @@
+import { delimiter } from "node:path";
 import process from "node:process";
 import {
   anEmptyRecord,
@@ -8,6 +9,7 @@ import {
   declareAProfile,
   launchedUnderLaunchdsLimit,
   theRunsEnvironment,
+  theRunsStandIns,
   writeForgeCache,
   writeShell,
 } from "./harness.js";
@@ -121,6 +123,9 @@ export const config: WebdriverIO.Config = {
         env: theRunsEnvironment(plane, {
           SHELL: writeShell(built("fake-harness")),
           CHARTER_PANIC_LOG: PANIC_LOG,
+          // A spec's stand-in for an installed harness is found first, outside every folder a
+          // sandboxed chat may write (`theRunsStandIns`).
+          PATH: [theRunsStandIns(), process.env.PATH ?? ""].join(delimiter),
         }),
       },
     ],

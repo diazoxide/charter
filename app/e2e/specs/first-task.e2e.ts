@@ -18,6 +18,7 @@ import {
   THE_RUNS_GIT_CONFIG,
   THE_RUNS_HOME,
   THE_RUNS_TREE,
+  theRunsStandIns,
 } from "../harness.js";
 import { closeProject } from "../opening.js";
 import { ask } from "../switching.js";
@@ -33,10 +34,13 @@ import { ask } from "../switching.js";
  * chat, the task typed into it and not sent, each chat on a branch of its own, the second
  * chat's briefing as its harness received it, and the shell tab each diff opens.
  *
- * **The stand-in is found where Claude Code's installer puts it** (`~/.local/bin/claude` in the
- * run's own `$HOME`), because the first run offers the task only beside a harness this machine
+ * **The stand-in is found on the app's `PATH`, in a folder outside every one a chat may write**
+ * (`theRunsStandIns`), because the first run offers the task only beside a harness this machine
  * has (FR-29): the local project declares no profile, so its chats run charter's built-in
- * Claude Code profile, which finds the stand-in by that search. The stand-in reports its
+ * Claude Code profile, which finds the stand-in by that search. The local project runs its
+ * chats sandboxed (#1670), and a sandboxed start refuses a program a chat could write, which
+ * the run's `$HOME`, in the temp directory, is; it also asks the program its version, which the
+ * stand-in answers as Claude Code does. The stand-in reports its
  * `SessionStart` through the real `charter hook`, as Claude Code does, so the core types the
  * task once it is at its prompt; and it says in its own pane whether the briefing that hook
  * answered carries the first chat's lesson.
@@ -46,7 +50,7 @@ import { ask } from "../switching.js";
  * first chat's own folder as its agent would run it.
  *
  * **One app process serves the whole run**, so everything this spec adds goes again: the
- * stand-in is taken out of the run's `$HOME` (it would otherwise be a built-in row in every
+ * stand-in is taken off the app's `PATH` (it would otherwise be a built-in row in every
  * picker after this spec), the local project is closed by its own `×`, which ends its chats,
  * and the machine store forgets it.
  */
@@ -58,8 +62,8 @@ const TABS = '[data-strip="Tabs"]';
 const LESSON_MARK = "e2e-first-task-lesson";
 const LESSON = `shop's checks run with make test (${LESSON_MARK})`;
 
-/** The stand-in Claude Code, where its installer puts it. */
-const STAND_IN = join(THE_RUNS_HOME, ".local", "bin", "claude");
+/** The stand-in Claude Code, first on the app's `PATH` and where no chat can write. */
+const STAND_IN = join(theRunsStandIns(), "claude");
 
 /** A repo nobody has opened in purlis: one commit, and an `origin` that names its forge. */
 const repo = (() => {
@@ -102,6 +106,8 @@ function theStandIn(): string {
   return [
     "#!/bin/sh",
     "# Written by the scenario tests: Claude Code, as far as the first task needs it.",
+    // A sandboxed start asks the program whether it is Claude Code before it runs it.
+    'for word in "$@"; do [ "$word" = "--version" ] && { echo "2.1.0 (Claude Code)"; exit 0; }; done',
     'while [ $# -gt 0 ]; do [ "$1" = "--session-id" ] && CLAUDE_CODE_SESSION_ID=$2; shift; done',
     "export CLAUDE_CODE_SESSION_ID",
     `exec ${singleQuoted(built("fake-harness"))} --sentinel ${singleQuoted(READY)} \\`,
@@ -229,7 +235,6 @@ describe("the first task, from its tab", function () {
   before(async () => {
     first = (await ask<string[]>("open_planes"))[0];
     if (existsSync(STAND_IN)) hadOne = readFileSync(STAND_IN, "utf8");
-    mkdirSync(join(THE_RUNS_HOME, ".local", "bin"), { recursive: true });
     writeFileSync(STAND_IN, theStandIn());
     chmodSync(STAND_IN, 0o755);
   });

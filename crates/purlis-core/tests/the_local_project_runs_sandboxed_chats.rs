@@ -46,6 +46,7 @@ fn local_project(machine: &Machine) -> PathBuf {
 
 #[test]
 fn a_sandboxed_chat_starts_in_the_local_project() {
+    purlis_core::unsteered!();
     let dir = tempfile::tempdir().expect("a directory");
     let base = dir.path().canonicalize().expect("the directory");
     let machine = machine(&base);
