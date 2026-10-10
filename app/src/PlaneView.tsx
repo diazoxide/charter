@@ -985,15 +985,18 @@ export const PlaneView = memo(function PlaneView({
     show: showSide,
   } = useArrangement(plane);
   /** A view shown by its key or its palette row, and the keyboard given to it once it is drawn:
-   *  the stop of its tree, as an editor's ⌘⇧E lands in the explorer (#1673). */
+   *  the stop of its first tree drawn, as an editor's ⌘⇧E lands in the explorer (#1673) — past
+   *  the headings of Explorer's sections (#1677) — or its first stop, in a view with no tree. */
   const showSideView = useCallback(
     (view: ViewId) => {
       showSide(view);
-      requestAnimationFrame(() =>
-        document
-          .querySelector<HTMLElement>(`[role="tabpanel"][data-view="${view}"] [tabindex="0"]`)
-          ?.focus(),
-      );
+      requestAnimationFrame(() => {
+        const panel = `[role="tabpanel"][data-view="${view}"]`;
+        (
+          document.querySelector<HTMLElement>(`${panel} [role="tree"] [tabindex="0"]`) ??
+          document.querySelector<HTMLElement>(`${panel} [tabindex="0"]`)
+        )?.focus();
+      });
     },
     [showSide],
   );
@@ -7669,6 +7672,7 @@ export const PlaneView = memo(function PlaneView({
           explorer: (
             <Explorer
               plane={plane}
+              workspaces={strips}
               workspace={ofWorkspace}
               live={ofWorkspace !== undefined && liveOf(ofWorkspace)}
               state={workspaceState}

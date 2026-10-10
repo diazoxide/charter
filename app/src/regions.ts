@@ -10,6 +10,12 @@ import {
   type ChatsListPrefs,
 } from "./chatsListPrefs";
 import { forgetYourEditor, onYourEditor, yourEditor } from "./yourEditor";
+import {
+  explorerSectionsDocument,
+  forgetExplorerSections,
+  onExplorerSections,
+  type SectionId,
+} from "./explorerSections";
 import { forgetGroups } from "./settings/links";
 import { forgetEntering } from "./settings/entering";
 import { forgetDismissals } from "./dismissals";
@@ -216,6 +222,8 @@ type Document = {
   editor?: YourEditor;
   /** How the Chats list is drawn (`chatsListPrefs.ts`, #1499), when it is not the default. */
   chats?: ChatsListPrefs;
+  /** Explorer's folded sections (`explorerSections.ts`, #1677), when any is. */
+  explorer?: { closed: SectionId[] };
 };
 
 /** A document read field by field, and what had to be put right to read it. */
@@ -393,6 +401,7 @@ export function forgetThisLaunch(): void {
   forgetTextSizes();
   forgetYourEditor();
   forgetChatsListPrefs();
+  forgetExplorerSections();
   forgetDismissals();
   forgetGroups();
   forgetEntering();
@@ -455,6 +464,7 @@ const where = (path: string) => path || "the layout file";
 const asDocument = (regions: Arrangement): Document => {
   const editor = yourEditor();
   const chats = chatsListPrefs();
+  const explorer = explorerSectionsDocument();
   return {
     version: VERSION,
     regions,
@@ -468,6 +478,7 @@ const asDocument = (regions: Arrangement): Document => {
     text: textSizes(),
     ...(editor !== undefined ? { editor } : {}),
     ...(isDefaultChatsList(chats) ? {} : { chats }),
+    ...(explorer !== undefined ? { explorer } : {}),
   };
 };
 
@@ -488,6 +499,9 @@ onYourEditor(() => remember(remembered()));
 
 /** How the Chats list is drawn was changed (#1499): one change, written at once. */
 onChatsListPrefs(() => remember(remembered()));
+
+/** One of Explorer's sections was folded or opened (#1677): one change, written at once. */
+onExplorerSections(() => remember(remembered()));
 
 /** Every write, in the order the window made it. Tauri runs commands on a thread pool, and two
  *  writes that raced there could land the older one last. */

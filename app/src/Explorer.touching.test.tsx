@@ -102,7 +102,8 @@ function draw(focus?: Place) {
           reading: false,
         }}
         chats={[WORKING, ELSEWHERE]}
-        spot={undefined}
+        // Branch `one`, picked: the Files section draws its files (#1677).
+        spot={{ repo: "svc", piece: "one", path: ONE.path }}
         onPick={() => {}}
         offers={new Map()}
         onPress={() => {}}
@@ -128,8 +129,12 @@ const rowOf = (id: string) => {
 const markOn = (id: string) =>
   rowOf(id).querySelector(".touch-mark")?.getAttribute("aria-label") ?? undefined;
 
+/** The live mark on the Files section's heading, which stands for the branch's own folder. */
+const markOnTheBranch = () =>
+  document.querySelector('[data-section="files"] h2 .touch-mark')?.getAttribute("aria-label") ??
+  undefined;
+
 async function openSrc() {
-  await userEvent.click(rowOf("file:svc/one:"));
   await userEvent.click(await within(document.body).findByRole("treeitem", { name: /^src/ }));
   await screen.findByRole("treeitem", { name: /^lib\.rs/ });
 }
@@ -148,7 +153,7 @@ describe("the file a chat is touching", () => {
     const said = "fix login is working here now";
     expect(markOn("file:svc/one:src/lib.rs")).toBe(said);
     expect(markOn("file:svc/one:src")).toBe(said);
-    expect(markOn("file:svc/one:")).toBe(said);
+    expect(markOnTheBranch()).toBe(said);
     expect(markOn("file:svc/one:README.md")).toBeUndefined();
     expect(
       rowOf("file:svc/one:src/lib.rs").querySelector(".touch-mark")?.getAttribute("title"),
@@ -177,13 +182,12 @@ describe("the file a chat is touching", () => {
     await touch(9, "src/lib.rs");
 
     expect(markOn("file:svc/one:src/lib.rs")).toBeUndefined();
-    expect(markOn("file:svc/one:")).toBeUndefined();
+    expect(markOnTheBranch()).toBeUndefined();
   });
 
   it("marks a folder that is closed, so a touch deep in it still shows", async () => {
     core();
     draw();
-    await userEvent.click(rowOf("file:svc/one:"));
     await screen.findByRole("treeitem", { name: /^src/ });
 
     await touch(3, "src/deep/inside/x.rs");

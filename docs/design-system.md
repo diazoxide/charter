@@ -244,6 +244,7 @@ has it; nothing reads the key after that.
   "text": { "window": 15, "terminal": 14 },
   "editor": "zed",
   "chats": { "lines": 1, "grouped": true, "tabbed": true, "away": false },
+  "explorer": { "closed": ["workspaces"] },
   "dismissed": { "/home/me/project": ["pin-dormant:ide", "chat-fresh:3"] }
 }
 ```
@@ -303,6 +304,12 @@ has it; nothing reads the key after that.
   while all are the defaults. A value that is neither is the default, and the alerts drawer says so. Settings
   writes it (`app/src/chatsListPrefs.ts`). It is in this file because it is how one person
   likes their window, and a project would carry it to every clone.
+- **`explorer`** is Explorer's folded sections, on this machine (#1677): **`closed`** lists
+  the sections folded on their headings, out of `workspaces`, `repos` (the focused workspace's
+  repos and branches) and `files`. Leave it out, as purlis does, while every section is open. A
+  name that is not a section is left out, and the alerts drawer says so. Folding a section
+  writes it (`app/src/explorerSections.ts`). It is the machine's and not a project's: which
+  sections a person keeps open is a habit, where a side's view is about the project in front.
 - **`dismissed`** is the Notices you dismissed (NO-2, V91j), per project by its path, each
   by its cause. A Notice stays hidden while its cause is kept here, and the window lets the
   cause go once the project answers without it, so the Notice shows again if the cause comes

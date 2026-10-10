@@ -132,16 +132,12 @@ const ONE = { workspace: "alpha", repo: "svc", piece: "one" };
 const asks = (asked: Asked[], cmd: string) =>
   asked.filter((one) => one.cmd === cmd).map((one) => one.args);
 
-/** Opens the branch's files, then the menu on `name`'s row, and presses `row` in it. */
+/** Picks the branch, so Explorer's Files section draws its files (#1677), then opens the menu
+ *  on `name`'s row and presses `row` in it. */
 async function fromTheMenu(name: string, row: string | RegExp) {
-  await showTheExplorer();
-  const tree = await screen.findByRole("tree", { name: "Repos and branches" });
-  const files = await waitFor(() => {
-    const found = tree.querySelector<HTMLElement>('[data-row="file:svc/one:"]');
-    if (found === null) throw new Error("the branch's Files row is not drawn yet");
-    return found;
-  });
-  if (files.getAttribute("aria-expanded") !== "true") await userEvent.click(files);
+  const explorer = await showTheExplorer();
+  await userEvent.click(await within(explorer).findByRole("treeitem", { name: /^one in svc/ }));
+  const tree = await screen.findByRole("tree", { name: "Files of one in svc" });
   fireEvent.contextMenu(
     await within(tree).findByRole("treeitem", { name: new RegExp(`^${name}`) }),
   );

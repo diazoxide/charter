@@ -6,7 +6,7 @@ import { cleanup, render, screen, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { Explorer, type Spot } from "./Explorer";
 import { ChatsHere, fixedChats, nothingKnown, type ChatStates } from "./chatState";
-import { catalogue, catalogued, type Catalogued, type Offer } from "./actions";
+import { catalogue, catalogued, OUTSIDE, type Catalogued, type Offer } from "./actions";
 import { noTabs } from "./tabs";
 import type { OpenChat, Panels as PanelsModel, Piece } from "./bindings";
 import type { WorkspaceState } from "./workspaceState";
@@ -80,6 +80,7 @@ function draw(on: {
   spot?: Spot;
   onPick?: (spot: Spot | undefined) => void;
   workspace?: string;
+  workspaces?: readonly string[];
   /** The catalogue a piece row's menu is drawn out of. Empty here for every test but the one
    *  about the menu: `Menued` draws nothing for an item the catalogue has no rows for, so the
    *  tree these tests are about is the tree they were always about. */
@@ -92,6 +93,7 @@ function draw(on: {
     // the one `PlaneView` provides; here it is one that holds `states` and never moves.
     <ChatsHere.Provider value={fixedChats(on.states ?? nothingKnown)}>
       <Explorer
+        workspaces={on.workspaces}
         workspace={"workspace" in on ? on.workspace : "alpha"}
         state={on.state ?? state()}
         chats={on.chats ?? []}
@@ -122,13 +124,18 @@ describe("the explorer", () => {
     expect(screen.getByTestId("clone-tool")).toHaveTextContent("No branches cut here");
   });
 
-  it("does not list every workspace, because the strip above already answers that", () => {
-    // ADR 0038: the sidebar used to draw every workspace with its vision text, under
-    // the strip that had just been made the axis. That duplication is what this region
-    // replaced, and a test is the only thing that keeps it replaced.
-    draw({});
+  it("lists the workspaces as a way to the strip, never a second strip of them (#1677)", () => {
+    // ADR 0036: the strip is the axis. The old sidebar drew every workspace with its vision
+    // text as a tablist; the Workspaces section is a tree of names whose press is the strip's.
+    draw({ workspaces: [OUTSIDE, "alpha", "beta"] });
 
-    expect(screen.queryByText("beta")).not.toBeInTheDocument();
+    const listed = screen.getByRole("tree", { name: "Workspaces of this project" });
+    expect(
+      within(listed)
+        .getAllByRole("treeitem")
+        .map((one) => one.textContent),
+    ).toEqual(["Plane root", "alpha", "beta"]);
+    expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
     expect(screen.getByTestId("explorer")).not.toHaveTextContent("vision");
   });
 
@@ -459,7 +466,7 @@ describe("a clone row's menu", () => {
   it("opens from the keyboard on the clone's row, which the arrows reach", async () => {
     const pressed: string[] = [];
     draw({ offers: offers(), onPress: (offer) => pressed.push(offer.id) });
-    await userEvent.tab();
+    screen.getByRole("treeitem", { name: /^alpha/ }).focus();
     await userEvent.keyboard("{ArrowDown}");
     expect(heading()).toHaveFocus();
 
@@ -550,9 +557,8 @@ describe("the explorer's tree guides", () => {
  * View" pattern: `role="tree"` and `treeitem`, each row's level and place among its siblings,
  * `aria-expanded` on the rows that fold, and the keys that open, close and climb.
  *
- * The tree drawn here is `alpha` → `svc` (→ `one` → the chat `seven`; `two`) and `tool`, which
- * has no branches. Each repo and each branch also has its *Files* row first among its children
- * (FM-1), closed until opened.
+ * The tree drawn here is `alpha` → `svc` (→ `one`, `two`) and `tool`, which has no branches.
+ * Their files are the *Files* section's own tree (#1677).
  */
 describe("the explorer is a WAI-ARIA tree", () => {
   // A chat working in a branch, which the tree no longer draws (#1673): its shape is the same
@@ -560,12 +566,6 @@ describe("the explorer is a WAI-ARIA tree", () => {
   const withAChat = () => draw({ chats: [chat(7, "seven", `${CUT}/one`)] });
   const tree = () => screen.getByRole("tree", { name: "Repos and branches" });
   const item = (name: RegExp) => within(tree()).getByRole("treeitem", { name });
-  /** A row by the id the tree knows it by: the *Files* rows all share a name. */
-  const row = (id: string) => {
-    const found = tree().querySelector<HTMLElement>(`[data-row="${id}"]`);
-    if (found === null) throw new Error(`no row ${id}`);
-    return found;
-  };
   /** A treeitem as its first word, its level and its place among its siblings. */
   const shape = (row: HTMLElement) =>
     [
@@ -580,13 +580,9 @@ describe("the explorer is a WAI-ARIA tree", () => {
     expect(within(tree()).getAllByRole("treeitem").map(shape)).toEqual([
       "alpha 1 1/1",
       "svc 2 1/2",
-      "Files 3 1/3",
-      "one 3 2/3",
-      "Files 4 1/1",
-      "two 3 3/3",
-      "Files 4 1/1",
+      "one 3 1/2",
+      "two 3 2/2",
       "tool 2 2/2",
-      "Files 3 1/1",
     ]);
   });
 
@@ -598,10 +594,9 @@ describe("the explorer is a WAI-ARIA tree", () => {
     expect(item(/^tool/)).toHaveAttribute("aria-expanded", "true");
     // Parents that cannot fold are always open, and say so.
     expect(item(/^alpha/)).toHaveAttribute("aria-expanded", "true");
-    expect(item(/^one/)).toHaveAttribute("aria-expanded", "true");
-    expect(item(/^two/)).toHaveAttribute("aria-expanded", "true");
-    // A branch's files fold, and are closed until opened.
-    expect(row("file:svc/one:")).toHaveAttribute("aria-expanded", "false");
+    // A branch is a leaf here: its files are the Files section's (#1677).
+    expect(item(/^one/)).not.toHaveAttribute("aria-expanded");
+    expect(item(/^two/)).not.toHaveAttribute("aria-expanded");
 
     await userEvent.click(item(/^svc/));
     expect(item(/^svc/)).toHaveAttribute("aria-expanded", "false");
@@ -616,14 +611,11 @@ describe("the explorer is a WAI-ARIA tree", () => {
     expect(item(/^svc/)).toHaveAttribute("aria-expanded", "true");
     expect(item(/^svc/)).toHaveFocus();
 
-    // Its first child is the repo's own Files row.
+    // Its first child is its first branch, a leaf, where Right stays.
     await userEvent.keyboard("{ArrowRight}");
-    expect(row("file:svc/:")).toHaveFocus();
-    await userEvent.keyboard("{ArrowDown}");
     expect(item(/^one/)).toHaveFocus();
-    // A branch is a parent that is always open: Right goes in, to its Files row first.
     await userEvent.keyboard("{ArrowRight}");
-    expect(row("file:svc/one:")).toHaveFocus();
+    expect(item(/^one/)).toHaveFocus();
   });
 
   it("Right on the workspace row moves to its first child", async () => {
@@ -636,10 +628,8 @@ describe("the explorer is a WAI-ARIA tree", () => {
 
   it("Left moves to the parent, closes an open clone, and stops at the workspace row", async () => {
     withAChat();
-    row("file:svc/one:").focus();
+    item(/^one/).focus();
 
-    await userEvent.keyboard("{ArrowLeft}");
-    expect(item(/^one/)).toHaveFocus();
     await userEvent.keyboard("{ArrowLeft}");
     expect(item(/^svc/)).toHaveFocus();
     await userEvent.keyboard("{ArrowLeft}");
@@ -661,7 +651,7 @@ describe("the explorer is a WAI-ARIA tree", () => {
     await userEvent.keyboard("{Home}");
     expect(item(/^alpha/)).toHaveFocus();
     await userEvent.keyboard("{End}");
-    expect(row("file:tool/:")).toHaveFocus();
+    expect(item(/^tool/)).toHaveFocus();
   });
 
   it("a typed letter moves to the next row whose name starts with it, and wraps", async () => {

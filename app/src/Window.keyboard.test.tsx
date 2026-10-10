@@ -91,6 +91,9 @@ function core({
     const a = (args ?? {}) as Record<string, unknown>;
     asked.push(cmd);
     if (cmd === "plane_at_launch") return { plane: PLANE, from: PLANE, why: null };
+    // A picked branch's files are drawn in Explorer's Files section (#1677), with its changes.
+    if (cmd === "branch_tree") return { entries: [], more: 0 };
+    if (cmd === "branch_status") return { changes: [], folders: [], more: 0, base: "main" };
     if (cmd === "opened_chats") return chats;
     // The operator has pinned every workspace, so every one is on the strip and can be
     // clicked there: the strip draws what is pinned and the one you are in (ADR 0054).
@@ -371,26 +374,24 @@ const rowsIn = (region: HTMLElement) => [
 describe("a list is one Tab stop", () => {
   it("the explorer: the current row is the stop, and Up, Down, Home and End move", async () => {
     await theWholeWindow();
-    const explorer = await showTheExplorer();
-    const rows = rowsIn(explorer);
-    // The workspace row, the clone, its own files, its one branch and that branch's files
-    // (FM-1). No chat: the Chats view lists them (#1673).
+    await showTheExplorer();
+    const rows = rowsIn(screen.getByRole("tree", { name: "Repos and branches" }));
+    // The workspace row, the clone and its one branch. No chat: the Chats view lists them
+    // (#1673); no files: the Files section draws them (#1677).
     expect(rows.map(said)).toEqual([
       expect.stringMatching(/^treeitem alpha/),
       "treeitem svc1",
-      "treeitem Files",
       "treeitem one in svc",
-      "treeitem Files",
     ]);
-    expect(rows.map((row) => row.getAttribute("tabindex"))).toEqual(["0", "-1", "-1", "-1", "-1"]);
+    expect(rows.map((row) => row.getAttribute("tabindex"))).toEqual(["0", "-1", "-1"]);
 
     rows[0].focus();
     await userEvent.keyboard("{ArrowDown}");
     await waitFor(() => expect(rows[1]).toHaveFocus());
     await userEvent.keyboard("{End}");
-    await waitFor(() => expect(rows[4]).toHaveFocus());
+    await waitFor(() => expect(rows[2]).toHaveFocus());
     await userEvent.keyboard("{ArrowUp}");
-    await waitFor(() => expect(rows[3]).toHaveFocus());
+    await waitFor(() => expect(rows[1]).toHaveFocus());
     await userEvent.keyboard("{Home}");
     await waitFor(() => expect(rows[0]).toHaveFocus());
     // And it is a tree (#238): Right goes into the workspace row, Left climbs back out. The

@@ -127,6 +127,7 @@ function draw({
     <ChatsHere.Provider value={fixedChats(nothingKnown)}>
       <Explorer
         plane={PLANE}
+        workspaces={["alpha", "beta"]}
         workspace="alpha"
         state={STATE}
         chats={[WORKING, ELSEWHERE]}
@@ -162,6 +163,18 @@ describe("the branch cockpit", () => {
     expect(rows[0].textContent).toContain("Files");
     expect(rows[0].getAttribute("aria-expanded")).toBe("true");
     await within(tree).findByRole("treeitem", { name: /README\.md/ });
+  });
+
+  it("keeps the Workspaces section above the cockpit, the focused one current (#1677)", async () => {
+    core({ ahead: 0, behind: 0, base: "main" });
+    draw();
+    const listed = await screen.findByRole("tree", { name: "Workspaces of this project" });
+
+    expect(within(listed).getByRole("treeitem", { name: /^alpha/ })).toHaveAttribute(
+      "aria-current",
+      "true",
+    );
+    expect(screen.queryByRole("tree", { name: "Repos and branches" })).not.toBeInTheDocument();
   });
 
   it("says a branch with no base recorded has none, rather than a count", async () => {
