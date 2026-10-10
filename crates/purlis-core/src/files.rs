@@ -11,7 +11,10 @@
 //!
 //! **Nothing the repo's configuration names runs.** Every branch is a folder an agent can write
 //! (ADR 0084 §2), and every git call here goes through `worktree::git`'s hardened runner, which
-//! turns off the fsmonitor and hooks on the command line.
+//! turns off the fsmonitor and hooks on the command line. The app starts none of them: its file
+//! commands go through a [`Root`] the bounded reader found, and ask that reader's child for what
+//! git would answer — the offered list, what is ignored, the submodules (#1189, FM-11); the
+//! command line and the tests keep the git calls here.
 //!
 //! **What opens is what a review can show**: a file git tracks, or one it does not track and
 //! does not ignore. The tree names an ignored file, so the operator can see that a build output
@@ -39,6 +42,9 @@ pub use reader::{
     AT_ONCE, Answer, Ask, GRACE, MEMORY, OUTPUT, READ_ARG, READ_FAILED, Reader, ahead_behind,
     serve_if_asked, status, was_busy,
 };
+// The file commands' git reads, in the same bounded child (#1189, FM-11).
+mod offered;
+pub use offered::{Ignored, Offered};
 // The one diff engine (RC-2): every comparison, read in the same bounded child.
 mod compare;
 pub use compare::{
@@ -241,11 +247,11 @@ pub struct Folder {
 /// a link out of the branch or to an ignored file, something that is not a file (a FIFO, a
 /// socket), anything inside another repository nested in this one, and an ignored file.
 pub fn tree(plane: &Path, branch: Branch<'_>, folder: &str) -> Result<Folder, Refused> {
-    tree_in(&base_of(plane, branch)?, branch, folder)
+    tree_in(Via::Here, &base_of(plane, branch)?, branch, folder)
 }
 
 /// [`tree`] in a branch whose folder is already resolved to `base`.
-fn tree_in(base: &Path, branch: Branch<'_>, folder: &str) -> Result<Folder, Refused> {
+fn tree_in(via: Via<'_>, base: &Path, branch: Branch<'_>, folder: &str) -> Result<Folder, Refused> {
     let relative = folder_in(base, folder)?;
     let base = base.to_path_buf();
     let dir = base.join(&relative);
@@ -333,7 +339,34 @@ fn tree_in(base: &Path, branch: Branch<'_>, folder: &str) -> Result<Folder, Refu
             above.extend(prefixes(parent));
         }
     }
-    let submodules = gitlinks(&base, &above, branch)?;
+    // Here, git is asked twice: the index for the submodules, then the ignore check for what is
+    // left, since git refuses a question about a path inside a submodule. The reader's child
+    // answers both in one ask, for every path, and the answers about paths the submodules rule
+    // out are not used.
+    let (submodules, told) = match via {
+        Via::Here => (gitlinks(&base, &above, branch)?, None),
+        Via::Reader { reader, plane } => {
+            let paths: Vec<PathBuf> = asked
+                .iter()
+                .chain(targets.iter())
+                .map(|(path, _)| path.clone())
+                .collect();
+            let answer = ignored_by(reader, plane, branch, paths, above)?;
+            let (of_asked, of_targets) = answer
+                .ignored
+                .split_at_checked(asked.len())
+                .filter(|(_, rest)| rest.len() == targets.len())
+                .ok_or_else(answered_else)?;
+            let of = |each: &[(PathBuf, usize)], ignored: &[bool]| {
+                each.iter()
+                    .zip(ignored)
+                    .map(|((_, at), ignored)| (*at, *ignored))
+                    .collect::<std::collections::HashMap<usize, bool>>()
+            };
+            let told = (of(&asked, of_asked), of(&targets, of_targets));
+            (answer.gitlinks.into_iter().collect(), Some(told))
+        }
+    };
     let in_submodule = |path: &Path| prefixes(path).iter().any(|one| submodules.contains(one));
     if !nested && in_submodule(&relative) {
         nested = true;
@@ -354,12 +387,25 @@ fn tree_in(base: &Path, branch: Branch<'_>, folder: &str) -> Result<Folder, Refu
         !inside
     });
 
-    let all: Vec<&Path> = asked
-        .iter()
-        .chain(targets.iter())
-        .map(|(path, _)| path.as_path())
-        .collect();
-    let ignored = ignored_of(&base, &all, branch)?;
+    let ignored = match told {
+        Some((of_asked, of_targets)) => asked
+            .iter()
+            .map(|(_, at)| of_asked.get(at).copied().unwrap_or(false))
+            .chain(
+                targets
+                    .iter()
+                    .map(|(_, at)| of_targets.get(at).copied().unwrap_or(false)),
+            )
+            .collect(),
+        None => {
+            let all: Vec<&Path> = asked
+                .iter()
+                .chain(targets.iter())
+                .map(|(path, _)| path.as_path())
+                .collect();
+            ignored_of(&base, &all, branch)?
+        }
+    };
     let (of_entries, of_targets) = ignored.split_at(asked.len());
     for ((_, at), ignored) in asked.iter().zip(of_entries) {
         if *ignored {
@@ -629,7 +675,17 @@ fn folder_of_in(base: &Path, folder: &str) -> Result<PathBuf, Refused> {
 /// lot rather than one per folder. At most [`WATCHED`] are resolved; the rest are answered as
 /// refused.
 pub fn folders(plane: &Path, branch: Branch<'_>, named: &[&str]) -> Vec<Result<PathBuf, Refused>> {
-    let base = match base_of(plane, branch) {
+    folders_in(base_of(plane, branch), branch, named)
+}
+
+/// [`folders`] in a branch whose folder resolved to `base`, or refused: every one of `named` is
+/// then refused with its sentence.
+fn folders_in(
+    base: Result<PathBuf, Refused>,
+    branch: Branch<'_>,
+    named: &[&str],
+) -> Vec<Result<PathBuf, Refused>> {
+    let base = match base {
         Ok(base) => base,
         Err(refused) => {
             let said = refused.to_string();
@@ -742,6 +798,73 @@ fn files_in_until(
         return Ok(None);
     }
     offered_of(&listed, branch).map(Some)
+}
+
+/// **Who reads a branch's git for a file command** (#1189, FM-11): this process, through the
+/// hardened git runner — the command line, `guest.rs` and the tests — or the bounded reader's
+/// child, by gitoxide ([`offered`]) — the app, whose process starts no git to read a branch an
+/// agent can write. Either answers the same lists; only who reads them differs.
+#[derive(Debug, Clone, Copy)]
+enum Via<'a> {
+    Here,
+    Reader { reader: &'a Reader, plane: &'a Path },
+}
+
+impl Via<'_> {
+    /// The offered list of `branch`, whose folder is resolved to `base`: [`list`]'s answer.
+    fn offered(self, base: &Path, branch: Branch<'_>) -> Result<Vec<String>, Refused> {
+        match self {
+            Via::Here => files_in(base, branch),
+            Via::Reader { reader, plane } => {
+                match reader.ask(plane, branch, Ask::Offered { most: None })? {
+                    Answer::Offered(offered) => Ok(offered.files),
+                    _ => Err(answered_else()),
+                }
+            }
+        }
+    }
+}
+
+/// The offered list of `branch`, read by `reader`'s child ([`Ask::Offered`]): at most `most` of
+/// it, with how long it was; `Ok(None)` when `stop` was raised first (#1137).
+fn offered_by(
+    reader: &Reader,
+    plane: &Path,
+    branch: Branch<'_>,
+    most: Option<usize>,
+    stop: &std::sync::atomic::AtomicBool,
+) -> Result<Option<Offered>, Refused> {
+    match reader.ask_until(plane, branch, Ask::Offered { most }, stop)? {
+        None => Ok(None),
+        Some(Answer::Offered(offered)) => Ok(Some(offered)),
+        Some(_) => Err(answered_else()),
+    }
+}
+
+/// Whether git ignores each of `paths`, and which of `folders` are submodules, read by
+/// `reader`'s child ([`Ask::Ignored`]); nothing is asked when there is nothing to ask.
+fn ignored_by(
+    reader: &Reader,
+    plane: &Path,
+    branch: Branch<'_>,
+    paths: Vec<PathBuf>,
+    folders: Vec<PathBuf>,
+) -> Result<Ignored, Refused> {
+    if paths.is_empty() && folders.is_empty() {
+        return Ok(Ignored {
+            ignored: Vec::new(),
+            gitlinks: Vec::new(),
+        });
+    }
+    match reader.ask(plane, branch, Ask::Ignored { paths, folders })? {
+        Answer::Ignored(ignored) => Ok(ignored),
+        _ => Err(answered_else()),
+    }
+}
+
+/// What a reader that answered another question than the one asked is refused with.
+fn answered_else() -> Refused {
+    Refused::Read("the reader answered something else".into())
 }
 
 /// The offered list in `listed`, git's answer to [`LS_FILES`], sorted and once each.
@@ -1007,12 +1130,12 @@ fn natural(a: &str, b: &str) -> std::cmp::Ordering {
 /// (through a link) to somewhere outside the branch. A link to another offered file of the same
 /// branch opens, as `CLAUDE.md` linked to `AGENTS.md` does in many repos.
 pub fn open(plane: &Path, branch: Branch<'_>, path: &str) -> Result<Opened, Refused> {
-    open_in(&base_of(plane, branch)?, branch, path)
+    open_in(Via::Here, &base_of(plane, branch)?, branch, path)
 }
 
 /// [`open`] in a branch whose folder is already resolved to `base`.
-fn open_in(base: &Path, branch: Branch<'_>, path: &str) -> Result<Opened, Refused> {
-    let resolved = locate(base, branch, path)?;
+fn open_in(via: Via<'_>, base: &Path, branch: Branch<'_>, path: &str) -> Result<Opened, Refused> {
+    let resolved = locate(via, base, branch, path)?;
     // The resolved path has no link on it, so the open refuses one planted since.
     let mut file = crate::contain::open_no_link(base, &resolved).map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
@@ -1263,11 +1386,20 @@ pub fn in_your_editor(
     editor: Editor,
     var: &dyn Fn(&str) -> Option<String>,
 ) -> Result<Launch, Refused> {
-    in_your_editor_in(&base_of(plane, branch)?, branch, path, line, editor, var)
+    in_your_editor_in(
+        Via::Here,
+        &base_of(plane, branch)?,
+        branch,
+        path,
+        line,
+        editor,
+        var,
+    )
 }
 
 /// [`in_your_editor`] in a branch whose folder is already resolved to `base`.
 fn in_your_editor_in(
+    via: Via<'_>,
     base: &Path,
     branch: Branch<'_>,
     path: &str,
@@ -1275,7 +1407,7 @@ fn in_your_editor_in(
     editor: Editor,
     var: &dyn Fn(&str) -> Option<String>,
 ) -> Result<Launch, Refused> {
-    let resolved = locate(base, branch, path)?;
+    let resolved = locate(via, base, branch, path)?;
     // A submodule is offered by its path and is a folder; a FIFO is no file to edit.
     if !resolved.is_file() {
         return Err(Refused::NotAFile(path.to_string()));
@@ -1286,13 +1418,13 @@ fn in_your_editor_in(
 /// The resolved file `path` names in the branch whose folder is resolved to `base`, once every
 /// check has passed: a plain relative path, offered by the list, inside the branch, not git's,
 /// and through a link only to another offered file.
-fn locate(base: &Path, branch: Branch<'_>, path: &str) -> Result<PathBuf, Refused> {
+fn locate(via: Via<'_>, base: &Path, branch: Branch<'_>, path: &str) -> Result<PathBuf, Refused> {
     let relative = inside(path)?;
     // **Only what the list offers opens** (ADR 0084 §2, ADR 0052): a file git tracks, or one
     // it does not track and does not ignore. An ignored `.env`, or a secret materialised into
     // the branch, is not something a review shows, and `piece_file` hands the window no
-    // value the vault keeps out of it. One more git call per open.
-    let offered = files_in(base, branch)?;
+    // value the vault keeps out of it. One more read of the branch per open.
+    let offered = via.offered(base, branch)?;
     let offers = |relative: &Path| offered.binary_search(&slashed(relative)).is_ok();
     if !offers(relative) {
         return Err(Refused::NotOffered(path.to_string()));
@@ -1326,25 +1458,43 @@ fn locate(base: &Path, branch: Branch<'_>, path: &str) -> Result<PathBuf, Refuse
 /// below then confines its path and reads against that folder in this process, refused exactly
 /// as its free-standing namesake refuses: the app's commands read a branch this way, and the
 /// command line and the tests keep the free-standing ones, which find the folder here.
+///
+/// **What git would answer is the child's to read too** (FM-11): the offered list [`open`] and
+/// [`in_your_editor`] check a path against ([`Ask::Offered`]), and what [`tree`] marks ignored
+/// and which folders are submodules ([`Ask::Ignored`]), each asked of `reader`.
 impl Root {
     /// The folder as the disk spells it now: the reader's answer, resolved again here.
     fn base(&self) -> Result<PathBuf, Refused> {
         resolved(self.path(), self.branch())
     }
 
-    /// [`tree`], on this branch.
-    pub fn tree(&self, folder: &str) -> Result<Folder, Refused> {
-        tree_in(&self.base()?, self.branch(), folder)
+    /// Who reads this branch's git: `reader`'s child.
+    fn via<'a>(&'a self, reader: &'a Reader) -> Via<'a> {
+        Via::Reader {
+            reader,
+            plane: self.plane(),
+        }
     }
 
-    /// [`open`], on this branch.
-    pub fn open(&self, path: &str) -> Result<Opened, Refused> {
-        open_in(&self.base()?, self.branch(), path)
+    /// [`tree`], on this branch, its ignored entries and submodules read by `reader`.
+    pub fn tree(&self, reader: &Reader, folder: &str) -> Result<Folder, Refused> {
+        tree_in(self.via(reader), &self.base()?, self.branch(), folder)
+    }
+
+    /// [`open`], on this branch, its offered list read by `reader`.
+    pub fn open(&self, reader: &Reader, path: &str) -> Result<Opened, Refused> {
+        open_in(self.via(reader), &self.base()?, self.branch(), path)
     }
 
     /// [`folder`], on this branch.
     pub fn folder(&self, folder: &str) -> Result<PathBuf, Refused> {
         folder_of_in(&self.base()?, folder)
+    }
+
+    /// [`folders`], on this branch: the folders a window's explorer has expanded, resolved for
+    /// its folder watch (#1189).
+    pub fn resolve(&self, named: &[&str]) -> Vec<Result<PathBuf, Refused>> {
+        folders_in(self.base(), self.branch(), named)
     }
 
     /// [`place`], on this branch.
@@ -1357,15 +1507,24 @@ impl Root {
         named_in(&self.base()?, path)
     }
 
-    /// [`in_your_editor`], on this branch.
+    /// [`in_your_editor`], on this branch, its offered list read by `reader`.
     pub fn in_your_editor(
         &self,
+        reader: &Reader,
         path: &str,
         line: u32,
         editor: Editor,
         var: &dyn Fn(&str) -> Option<String>,
     ) -> Result<Launch, Refused> {
-        in_your_editor_in(&self.base()?, self.branch(), path, line, editor, var)
+        in_your_editor_in(
+            self.via(reader),
+            &self.base()?,
+            self.branch(),
+            path,
+            line,
+            editor,
+            var,
+        )
     }
 
     /// [`place_branch_folder`], on this branch: the folder by the name the workspace gives it,
@@ -1397,15 +1556,6 @@ pub fn named_by(
 ) -> Result<String, Refused> {
     spelled_inside(path)?;
     root(reader, plane, branch)?.named(path)
-}
-
-/// The branch's folder, found by `reader`'s child when there is one ([`root`]), else in this
-/// process ([`folder_of`]): how ⌘P and ⌘⇧F find each branch of their scope (#1189).
-fn found(reader: Option<&Reader>, plane: &Path, branch: Branch<'_>) -> Result<PathBuf, Refused> {
-    match reader {
-        Some(reader) => root(reader, plane, branch).map(|root| root.path().to_path_buf()),
-        None => folder_of(plane, branch),
-    }
 }
 
 /// The branch's folder: a piece found the way the Explorer finds it, among the pieces git has;
@@ -1502,6 +1652,175 @@ mod tests {
             ["-c", &script, super::READ_ARG].map(std::ffi::OsString::from),
         );
         (dir, reader)
+    }
+
+    /// #1189 (FM-11): a reader whose child answers [`super::Ask::Root`] with `root`,
+    /// [`super::Ask::Offered`] with `offered` and [`super::Ask::Ignored`] with `ignored` (each the
+    /// child's JSON), told apart by the question on its standard input.
+    #[cfg(unix)]
+    fn reader_answering_each(
+        root: &str,
+        offered: &str,
+        ignored: &str,
+    ) -> (tempfile::TempDir, super::Reader) {
+        let dir = tempfile::tempdir().unwrap();
+        for (name, answer) in [("root", root), ("offered", offered), ("ignored", ignored)] {
+            std::fs::write(
+                dir.path().join(name),
+                format!("\u{1e}charter-read\u{1e}{answer}\n"),
+            )
+            .unwrap();
+        }
+        let at = dir.path().display();
+        let script = format!(
+            "q=$(cat); case \"$q\" in *'\"Offered\"'*) cat '{at}/offered';; \
+             *'\"Ignored\"'*) cat '{at}/ignored';; *) cat '{at}/root';; esac"
+        );
+        let reader = super::Reader::new(
+            "/bin/sh".into(),
+            ["-c", &script, super::READ_ARG].map(std::ffi::OsString::from),
+        );
+        (dir, reader)
+    }
+
+    #[cfg(unix)]
+    fn offered(files: &[&str]) -> String {
+        serde_json::json!({ "Ok": { "Offered": { "files": files, "total": files.len() } } })
+            .to_string()
+    }
+
+    #[cfg(unix)]
+    fn ignored(ignored: &[bool], gitlinks: &[&str]) -> String {
+        serde_json::json!({ "Ok": { "Ignored": { "ignored": ignored, "gitlinks": gitlinks } } })
+            .to_string()
+    }
+
+    #[cfg(unix)]
+    fn refusing(said: &str) -> String {
+        serde_json::json!({ "Err": said }).to_string()
+    }
+
+    /// #1189 (FM-11): the light editor and the editor hand-off check a path against the offered
+    /// list the reader's child answers: what it offers opens, and what it does not is refused
+    /// in today's sentence.
+    #[cfg(unix)]
+    #[test]
+    fn a_file_opens_only_when_the_readers_offered_list_has_it() {
+        let (_dir, plane, folder) = project();
+        std::fs::write(folder.join("b.txt"), "b\n").unwrap();
+        let (_answers, reader) =
+            reader_answering_each(&found_at(&folder), &offered(&["a.txt"]), &ignored(&[], &[]));
+        let root = super::root(&reader, &plane, REPO).unwrap();
+
+        assert_eq!(
+            root.open(&reader, "a.txt").unwrap(),
+            super::Opened::Text { text: "a\n".into() }
+        );
+        let refused = "'b.txt' is not one of the branch's files: the light editor opens what git \
+                       tracks there and what it does not ignore";
+        assert_eq!(
+            root.open(&reader, "b.txt").unwrap_err().to_string(),
+            refused
+        );
+        let editor = root
+            .in_your_editor(
+                &reader,
+                "b.txt",
+                1,
+                crate::youreditor::Editor::VsCode,
+                &|_| None,
+            )
+            .unwrap_err();
+        assert_eq!(editor.to_string(), refused);
+    }
+
+    /// #1189 (FM-11): a branch whose offered list the reader refuses is refused, for the light
+    /// editor and the editor hand-off alike, in the reader's own sentence.
+    #[cfg(unix)]
+    #[test]
+    fn a_file_whose_list_the_reader_refuses_is_refused_in_its_sentence() {
+        let (_dir, plane, folder) = project();
+        let said = "purlis could not read 'the files of thing': the index is not one";
+        let (_answers, reader) =
+            reader_answering_each(&found_at(&folder), &refusing(said), &ignored(&[], &[]));
+        let root = super::root(&reader, &plane, REPO).unwrap();
+
+        assert_eq!(root.open(&reader, "a.txt").unwrap_err().to_string(), said);
+        let editor = root
+            .in_your_editor(
+                &reader,
+                "a.txt",
+                1,
+                crate::youreditor::Editor::VsCode,
+                &|_| None,
+            )
+            .unwrap_err();
+        assert_eq!(editor.to_string(), said);
+    }
+
+    /// #1189 (FM-11): one folder level is marked as the reader's child answers, by position:
+    /// folders first, then files.
+    #[cfg(unix)]
+    #[test]
+    fn a_folder_level_is_marked_ignored_as_the_reader_answers() {
+        let (_dir, plane, folder) = project();
+        let (_answers, reader) = reader_answering_each(
+            &found_at(&folder),
+            &offered(&[]),
+            &ignored(&[true, false], &[]),
+        );
+        let root = super::root(&reader, &plane, REPO).unwrap();
+
+        let level = root.tree(&reader, "").unwrap();
+
+        let marks: Vec<(&str, bool, Option<&str>)> = level
+            .entries
+            .iter()
+            .map(|one| (one.name.as_str(), one.ignored, one.refused.as_deref()))
+            .collect();
+        assert_eq!(marks, [("src", true, None), ("a.txt", false, None)]);
+    }
+
+    /// #1189 (FM-11): a folder the reader's child names a submodule has nothing in it open.
+    #[cfg(unix)]
+    #[test]
+    fn a_folder_the_reader_names_a_submodule_opens_nothing() {
+        let (_dir, plane, folder) = project();
+        std::fs::write(folder.join("src/lib.rs"), "\n").unwrap();
+        let (_answers, reader) = reader_answering_each(
+            &found_at(&folder),
+            &offered(&[]),
+            &ignored(&[false], &["src"]),
+        );
+        let root = super::root(&reader, &plane, REPO).unwrap();
+
+        let level = root.tree(&reader, "src").unwrap();
+
+        assert_eq!(
+            level.entries[0].refused.as_deref(),
+            Some("inside another git repository, whose files purlis does not open here")
+        );
+    }
+
+    /// #1189 (FM-11): a folder level the reader refuses is refused in its sentence, and one it
+    /// answers for the wrong number of paths is refused rather than marked out of place.
+    #[cfg(unix)]
+    #[test]
+    fn a_folder_level_the_reader_refuses_or_miscounts_is_refused() {
+        let (_dir, plane, folder) = project();
+        let said = "purlis could not read 'the files of thing': the index is not one";
+        let (_answers, reader) =
+            reader_answering_each(&found_at(&folder), &offered(&[]), &refusing(said));
+        let root = super::root(&reader, &plane, REPO).unwrap();
+        assert_eq!(root.tree(&reader, "").unwrap_err().to_string(), said);
+
+        let (_answers, reader) =
+            reader_answering_each(&found_at(&folder), &offered(&[]), &ignored(&[true], &[]));
+        let root = super::root(&reader, &plane, REPO).unwrap();
+        assert_eq!(
+            root.tree(&reader, "").unwrap_err().to_string(),
+            "the reader answered something else"
+        );
     }
 
     /// A project holding the repo `alpha/thing` as a plain folder, with `a.txt` and `src/`.

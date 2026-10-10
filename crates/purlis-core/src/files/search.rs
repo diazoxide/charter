@@ -167,7 +167,8 @@ pub struct Search {
     at: usize,
     walking: Option<Walking>,
     budget: Duration,
-    /// What finds each branch's folder: the bounded reader's child, or, with none, this process.
+    /// What finds and lists each branch: the bounded reader's child, or, with none, this
+    /// process.
     reader: Option<super::Reader>,
 }
 
@@ -254,8 +255,8 @@ impl Search {
         self
     }
 
-    /// The same search, finding each branch's folder by `reader`'s child, so walking a branch
-    /// starts no git to find its folder in this process (#1189).
+    /// The same search, finding and listing each branch by `reader`'s child, so walking a
+    /// branch starts no git in this process (#1189, FM-11).
     pub fn reading_with(mut self, reader: super::Reader) -> Self {
         self.reader = Some(reader);
         self
@@ -640,7 +641,8 @@ fn file_hits(
 /// walk descends only into a folder that holds an offered path, so `target/` and
 /// `node_modules/` are never walked, and it opens nothing but folders.
 ///
-/// **The listing hears `stop`** (#1137): `Ok(None)` when it was raised while git listed.
+/// **The listing hears `stop`** (#1137): `Ok(None)` when it was raised while git or the
+/// reader's child listed, and the child is killed.
 fn walking(
     reader: Option<&super::Reader>,
     plane: &Path,
@@ -649,9 +651,23 @@ fn walking(
 ) -> Result<Option<Walking>, String> {
     let branch = named.branch();
     let ready = || -> Result<Option<Walking>, Refused> {
-        let folder = super::found(reader, plane, branch)?;
-        let Some(offered) = super::files_in_until(&folder, branch, stop)? else {
-            return Ok(None);
+        // With a reader, its child finds the folder and lists it, so this process starts no git
+        // (#1189); with none, both are done here. Either hears `stop`.
+        let (folder, offered) = match reader {
+            Some(reader) => {
+                let folder = super::root(reader, plane, branch)?.path().to_path_buf();
+                let Some(offered) = super::offered_by(reader, plane, branch, None, stop)? else {
+                    return Ok(None);
+                };
+                (folder, offered.files)
+            }
+            None => {
+                let folder = super::folder_of(plane, branch)?;
+                let Some(offered) = super::files_in_until(&folder, branch, stop)? else {
+                    return Ok(None);
+                };
+                (folder, offered)
+            }
         };
         let offered = std::sync::Arc::new(offered);
         let unreadable = |e: std::io::Error| Refused::Unreadable {

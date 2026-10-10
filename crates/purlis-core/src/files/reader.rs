@@ -36,6 +36,7 @@ use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Condvar, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -110,18 +111,39 @@ impl Gate {
 
     /// A place, waiting at most `within` for one, behind every ask that came first; nothing
     /// when none came free in time.
+    #[cfg(test)]
     fn enter(&self, within: Duration) -> Option<Permit<'_>> {
+        self.enter_until(within, None)
+    }
+
+    /// [`Self::enter`], given up as soon as `stop` is raised (#1137): a search a person stopped
+    /// does not wait out a place, looked at every [`STOP_HEARD`].
+    fn enter_until(&self, within: Duration, stop: Option<&AtomicBool>) -> Option<Permit<'_>> {
+        let until = Instant::now() + within;
         // The line is plain numbers, right whatever a holder did, so a poisoned lock is read.
         let mut line = self.line.lock().unwrap_or_else(PoisonError::into_inner);
         let me = line.next;
         line.next = line.next.wrapping_add(1);
         line.waiting.push_back(me);
         let my_turn = |line: &Line| line.waiting.front() == Some(&me) && line.inside < self.permits;
-        let (mut line, _) = self
-            .moved
-            .wait_timeout_while(line, within, |line| !my_turn(line))
-            .unwrap_or_else(PoisonError::into_inner);
-        let entered = my_turn(&line);
+        let stopped = || stop.is_some_and(|stop| stop.load(Ordering::Relaxed));
+        loop {
+            let left = until.saturating_duration_since(Instant::now());
+            if my_turn(&line) || left.is_zero() || stopped() {
+                break;
+            }
+            let slice = if stop.is_some() {
+                left.min(STOP_HEARD)
+            } else {
+                left
+            };
+            line = self
+                .moved
+                .wait_timeout_while(line, slice, |line| !my_turn(line))
+                .unwrap_or_else(PoisonError::into_inner)
+                .0;
+        }
+        let entered = my_turn(&line) && !stopped();
         if entered {
             line.waiting.pop_front();
             line.inside += 1;
@@ -150,6 +172,10 @@ impl Drop for Permit<'_> {
 /// be started (#1605). With less, the read could only fail as one that "stopped without an
 /// answer", which says nothing true; it is answered as [`busy`] instead.
 const LEAST_LEFT: Duration = Duration::from_millis(250);
+
+/// How often an ask that can be stopped looks at its stop while it waits for a place: a stop
+/// is heard within this, as the child's own wait hears it within its 5 ms look.
+const STOP_HEARD: Duration = Duration::from_millis(20);
 
 /// How long a branch whose reads ran into their bounds [`STRIKES`] times in a row waits before
 /// it is read again, the first time; the pause doubles with each further strike, up to
@@ -305,6 +331,15 @@ pub enum Ask {
     /// One file, by its path relative to the branch's folder, against the branch's base, the
     /// folder found and the path confined here too: "Show what changed" in one ask (#1189).
     WhatChanged { path: String },
+    /// Its offered list: what `git ls-files --cached --others --exclude-standard` lists, sorted,
+    /// at most `most` of it (#1189).
+    Offered { most: Option<usize> },
+    /// Whether git ignores each of `paths`, and which of `folders` are submodules, all relative
+    /// to its folder: what one folder level of the tree asks (#1189).
+    Ignored {
+        paths: Vec<PathBuf>,
+        folders: Vec<PathBuf>,
+    },
 }
 
 /// What the child answers.
@@ -318,6 +353,8 @@ pub enum Answer {
     Compared(super::Compared),
     FileDiff(super::FileDiff),
     WhatChanged(super::Shown),
+    Offered(super::offered::Offered),
+    Ignored(super::offered::Ignored),
 }
 
 /// One question, as it crosses to the child.
@@ -380,6 +417,33 @@ impl Reader {
     /// branch whose reads keep running into their bounds is paused ([`Strikes`]), and answered
     /// at once, taking no place.
     pub fn ask(&self, plane: &Path, branch: Branch<'_>, ask: Ask) -> Result<Answer, Refused> {
+        self.asked(plane, branch, ask, None)?
+            .ok_or_else(|| Refused::Read(format!("{READ_FAILED}the read was stopped")))
+    }
+
+    /// [`Self::ask`], called off when `stop` is raised (#1137): `Ok(None)` when it was, while
+    /// the ask waited for a place or before its child answered, and the child is killed. A
+    /// search a person stopped does not wait on a read an ignore file planted as a FIFO hangs.
+    /// A stopped read is no strike against its branch.
+    pub fn ask_until(
+        &self,
+        plane: &Path,
+        branch: Branch<'_>,
+        ask: Ask,
+        stop: &AtomicBool,
+    ) -> Result<Option<Answer>, Refused> {
+        self.asked(plane, branch, ask, Some(stop))
+    }
+
+    /// [`Self::ask`] and [`Self::ask_until`].
+    fn asked(
+        &self,
+        plane: &Path,
+        branch: Branch<'_>,
+        ask: Ask,
+        stop: Option<&AtomicBool>,
+    ) -> Result<Option<Answer>, Refused> {
+        let stopped = || stop.is_some_and(|stop| stop.load(Ordering::Relaxed));
         let key: BranchKey = (
             plane.to_path_buf(),
             branch.ws.to_string(),
@@ -390,14 +454,16 @@ impl Reader {
             return Err(paused(times, left));
         }
         let queued = Instant::now();
-        let _permit = READERS
-            .enter(self.deadline)
-            .ok_or_else(|| busy(self.deadline))?;
+        let permit = READERS.enter_until(self.deadline, stop);
+        if stopped() {
+            return Ok(None);
+        }
+        let _permit = permit.ok_or_else(|| busy(self.deadline))?;
         let deadline = self.deadline.saturating_sub(queued.elapsed());
         if deadline < LEAST_LEFT {
             return Err(busy(self.deadline));
         }
-        let read = self.read(plane, branch, ask, deadline);
+        let read = self.read(plane, branch, ask, deadline, stop);
         match &read {
             Ended::Answered(_) => strikes(|struck| struck.answered(&key)),
             ended if a_strike(ended, deadline, self.deadline) => {
@@ -406,13 +472,21 @@ impl Reader {
             _ => {}
         }
         match read {
-            Ended::Answered(answered) => answered,
+            Ended::Answered(answered) => answered.map(Some),
+            Ended::Stopped => Ok(None),
             Ended::PastDeadline(why) | Ended::PastMemory(why) | Ended::Failed(why) => Err(why),
         }
     }
 
-    /// One child, given `deadline`, asked `ask`.
-    fn read(&self, plane: &Path, branch: Branch<'_>, ask: Ask, deadline: Duration) -> Ended {
+    /// One child, given `deadline`, asked `ask`, killed when `stop` is raised.
+    fn read(
+        &self,
+        plane: &Path,
+        branch: Branch<'_>,
+        ask: Ask,
+        deadline: Duration,
+        stop: Option<&AtomicBool>,
+    ) -> Ended {
         let question = Question {
             plane: plane.to_path_buf(),
             ws: branch.ws.to_string(),
@@ -469,6 +543,11 @@ impl Reader {
         let exited = loop {
             match child.try_wait() {
                 Ok(Some(status)) => break status,
+                Ok(None) if stop.is_some_and(|stop| stop.load(Ordering::Relaxed)) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Ended::Stopped;
+                }
                 Ok(None) if started.elapsed() >= deadline + GRACE => {
                     let _ = child.kill();
                     let _ = child.wait();
@@ -530,7 +609,7 @@ fn a_strike(ended: &Ended, given: Duration, deadline: Duration) -> bool {
     match ended {
         Ended::PastMemory(_) => true,
         Ended::PastDeadline(_) => a_fair_try(given, deadline),
-        Ended::Answered(_) | Ended::Failed(_) => false,
+        Ended::Answered(_) | Ended::Failed(_) | Ended::Stopped => false,
     }
 }
 
@@ -545,6 +624,8 @@ enum Ended {
     PastMemory(Refused),
     /// It failed otherwise: it could not start, or its answer did not read.
     Failed(Refused),
+    /// The asker's stop was raised before it answered, and it was killed: never a strike.
+    Stopped,
 }
 
 /// The exit code of a child that stopped itself past its memory cap.
@@ -620,6 +701,12 @@ fn serve() -> i32 {
         }
         Ask::WhatChanged { path } => {
             super::compare::what_changed_here(plane, branch, &path).map(Answer::WhatChanged)
+        }
+        Ask::Offered { most } => {
+            super::offered::offered_here(plane, branch, most).map(Answer::Offered)
+        }
+        Ask::Ignored { paths, folders } => {
+            super::offered::ignored_here(plane, branch, &paths, &folders).map(Answer::Ignored)
         }
     }
     .map_err(|refused| refused.to_string());
@@ -790,6 +877,86 @@ mod tests {
             .expect_err("no answer");
 
         assert!(was_busy(&said), "{said:?}");
+    }
+
+    /// #1137, #1189: a read that can be stopped, stopped while its child hangs, ends at once
+    /// with no answer and the child killed, and is no strike against its branch.
+    #[cfg(unix)]
+    #[test]
+    fn a_stopped_read_ends_at_once_and_is_no_strike() {
+        let reader = Reader::new(
+            PathBuf::from("/bin/sh"),
+            ["-c", "cat >/dev/null; exec sleep 20", READ_ARG].map(OsString::from),
+        );
+        let plane = tempfile::tempdir().unwrap();
+        let branch = Branch::repo("alpha", "stopped");
+        let stop = Arc::new(AtomicBool::new(false));
+        let raise = {
+            let stop = stop.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(200));
+                stop.store(true, Ordering::SeqCst);
+            })
+        };
+        let started = Instant::now();
+
+        let read = reader.ask_until(plane.path(), branch, Ask::Offered { most: None }, &stop);
+
+        raise.join().unwrap();
+        assert!(matches!(read, Ok(None)), "{read:?}");
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "{:?}",
+            started.elapsed()
+        );
+        let key: BranchKey = (plane.path().into(), "alpha".into(), "stopped".into(), None);
+        assert!(strikes(|struck| !struck.by_branch.contains_key(&key)));
+    }
+
+    /// #1137: an ask whose stop is already raised starts no child.
+    #[test]
+    fn an_ask_already_stopped_starts_no_child() {
+        // A program that does not exist: a child started would fail as one that could not start.
+        let reader = Reader::new(
+            PathBuf::from("/nonexistent/purlis-reader"),
+            [OsString::from(READ_ARG)],
+        );
+        let plane = tempfile::tempdir().unwrap();
+        let stop = AtomicBool::new(true);
+
+        let read = reader.ask_until(
+            plane.path(),
+            Branch::repo("alpha", "svc"),
+            Ask::Offered { most: None },
+            &stop,
+        );
+
+        assert!(matches!(read, Ok(None)), "{read:?}");
+    }
+
+    /// #1137: a wait for a place gives up when its stop is raised, and leaves the line.
+    #[test]
+    fn a_wait_for_a_place_gives_up_when_stopped() {
+        let gate = Arc::new(Gate::new(1));
+        let held = gate
+            .enter(Duration::from_secs(1))
+            .expect("the first is let in");
+        let stop = Arc::new(AtomicBool::new(false));
+        let waiting = {
+            let (gate, stop) = (gate.clone(), stop.clone());
+            std::thread::spawn(move || {
+                gate.enter_until(Duration::from_secs(20), Some(&stop))
+                    .is_some()
+            })
+        };
+        std::thread::sleep(Duration::from_millis(50));
+        let started = Instant::now();
+        stop.store(true, Ordering::SeqCst);
+
+        assert!(!waiting.join().unwrap());
+        assert!(started.elapsed() < Duration::from_secs(5));
+        assert_eq!(gate.line.lock().unwrap().waiting.len(), 0);
+        drop(held);
     }
 
     /// #1605: only a child given at least half the deadline counts against its branch.
