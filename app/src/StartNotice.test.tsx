@@ -5,6 +5,7 @@ import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
 import type { TheirAgentsMd } from "./bindings";
+import { SETTINGS_LINK, type SettingsLinkAsk } from "./settings/links";
 import { forgetYourEditor, setYourEditor } from "./yourEditor";
 
 /**
@@ -146,6 +147,47 @@ describe("a chat's start notice", () => {
       expect(named(asked, "open_their_agents_md").map((one) => one.args)).toEqual([
         expect.objectContaining({ workspace: "alpha", repo: "svc", piece: null, editor: "zed" }),
       ]),
+    );
+  });
+
+  it("links to Settings › You › Editor when Open file has no editor to open it in", async () => {
+    const asked = core([HIDDEN], [SVC]);
+    const links: SettingsLinkAsk[] = [];
+    const heard = (event: Event) => links.push((event as CustomEvent<SettingsLinkAsk>).detail);
+    window.addEventListener(SETTINGS_LINK, heard);
+    try {
+      render(<App />);
+      await openAChat();
+
+      await userEvent.click(within(await startNotice()).getByRole("button", { name: "Open file" }));
+
+      const note = await startNotice();
+      expect(note).toHaveTextContent("Choose your editor in Settings first.");
+      await userEvent.click(within(note).getByRole("button", { name: "Choose your editor" }));
+      expect(links).toEqual([
+        { plane: PLANE, link: { group: "you.editor", setting: "you.editor.yours" } },
+      ]);
+      expect(named(asked, "open_their_agents_md")).toEqual([]);
+    } finally {
+      window.removeEventListener(SETTINGS_LINK, heard);
+    }
+  });
+
+  it("offers no link to Settings once an editor is chosen", async () => {
+    setYourEditor("zed");
+    core([HIDDEN], [SVC]);
+    render(<App />);
+    await openAChat();
+
+    await userEvent.click(within(await startNotice()).getByRole("button", { name: "Open file" }));
+
+    await waitFor(() =>
+      expect(
+        within(screen.getByRole("status", { name: "What this chat's start found" })).queryByRole(
+          "button",
+          { name: "Choose your editor" },
+        ),
+      ).toBeNull(),
     );
   });
 
