@@ -2030,9 +2030,11 @@ file `memstore.write` could have written in its new store.
   the short hostname the Python charter used: `socket.gethostname().split(".")[0]` with every
   character outside `[A-Za-z0-9_-]` removed, truncated to 32, `"unknown"` when empty
   (`charter/change.py:142`, `charter/pieces.py:71`). Writing a line never mints the id
-  (`purlis_core::dispatch::log_name`). A file named by a hostname that an earlier version
-  wrote is still read beside the new one, since every reader reads every file in the
-  directory; FR-9 renames those (#607). The line is
+  (`purlis_core::dispatch::log_name`). The app mints it at launch, and so does the one CLI
+  command that writes the work link log (`purlis ws todo promote`), so a machine that only runs
+  the CLI's other commands keeps writing under its hostname until one of those mints the id. A
+  file named by a hostname that an earlier version wrote is still read beside the new one,
+  since every reader reads every file in the directory; FR-9 renames those (#607). The line is
   `contain.json_line(line, sort_keys=True) + "\n"` — **keys sorted, `ensure_ascii=True`**
   (`charter/commands_change.py:1099`, `charter/contain.py:473`), written with
   `os.open(..., O_WRONLY|O_CREAT|O_APPEND, 0o644)` (`charter/commands_change.py:1100`).
@@ -3135,8 +3137,9 @@ An unknown key is a warning, as it is in `persona.md`, and a repeated key is an 
   reactively **only** when `[memory] share` is `commit`/`push` (default `local` → left
   uncommitted for the operator).
 - **Encoding details:**
-  - Path: `personas/_dispatch/{when:%Y-%m}.{host}.jsonl` (`charter/dispatch.py:60`-`:62`),
-    `when` is UTC now (`:56`).
+  - Path: `personas/_dispatch/{when:%Y-%m}.<device>.jsonl`, `when` UTC now
+    (`charter/dispatch.py:56`). The Python charter named the second part `{host}`
+    (`:60`-`:62`); in purlis it is a device id, not a hostname (FD-25, below).
   - `<device>` is the device's name for its logs, as the landing log names its file (FD-25:
     the device id from the machine store, never minted by a hook). Only before an id is
     minted, or where the store keeps none, is it Python's `host`: `socket.gethostname()`
