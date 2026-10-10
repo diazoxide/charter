@@ -113,11 +113,15 @@ apt() {
 
 # From the cache: the files themselves, and nothing downloaded.
 if [ -n "$cache" ] && ls "$cache"/*.deb > /dev/null 2>&1; then
-  if apt "$OFFLINE_SECONDS" install --no-download "$cache"/*.deb; then
+  offline=0
+  said=$(apt "$OFFLINE_SECONDS" install --no-download "$cache"/*.deb 2>&1) || offline=$?
+  printf '%s\n' "$said"
+  if [ "$offline" -eq 0 ]; then
     say "$count packages installed in $(elapsed) s from the cache, without asking the mirror."
     exit 0
   fi
-  echo "::warning title=Linux packages::the cached .deb files do not install on this image; installing from the mirror instead"
+  why=$(grep -E '^(E|W):' <<< "$said" | head -n 4 | tr '\n' ' ' || true)
+  echo "::warning title=Linux packages::the cached .deb files do not install on this image; installing from the mirror instead. apt-get said: ${why:-nothing on its error lines}"
 fi
 
 # From the mirror, twice at the most.
