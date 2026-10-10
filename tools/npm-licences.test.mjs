@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { allowedIn, check, satisfies } from "./npm-licences.mjs";
+import { allowedIn, check, satisfies, waysOutIn } from "./npm-licences.mjs";
 
 const ALLOWED = [
   "MIT",
@@ -94,6 +94,217 @@ test("fails a vendored asset outside the list, or one shipped without its licenc
     "the vendored bare has no LICENSE beside it in bare",
     "the vendored copyleft is GPL-3.0-only, which deny.toml does not allow",
   ]);
+});
+
+/** The exceptions file as `waysOutIn` reads it. */
+const waysOut = (exceptions = [], clarify = []) =>
+  waysOutIn(JSON.stringify({ exceptions, clarify }));
+
+test("an exception passes only the package it names", () => {
+  const said = check({
+    lock: lock({
+      "node_modules/fonts": { version: "1.0.0", license: "CC-BY-4.0" },
+      "node_modules/other": { version: "2.0.0", license: "CC-BY-4.0" },
+      "node_modules/@scope/nested/node_modules/fonts": {
+        version: "0.9.0",
+        license: "CC-BY-4.0",
+      },
+    }),
+    allowed: ALLOWED,
+    vendored: [],
+    waysOut: waysOut([
+      { name: "fonts", allow: ["CC-BY-4.0"], reason: "glyph data" },
+    ]),
+  });
+  assert.deepEqual(said.failures, [
+    "node_modules/other is CC-BY-4.0, which deny.toml does not allow",
+  ]);
+});
+
+test("an exception allows only its own licences, and a package's other terms still count", () => {
+  const said = check({
+    lock: lock({
+      "node_modules/fonts": {
+        version: "1.0.0",
+        license: "CC-BY-4.0 AND GPL-3.0-only",
+      },
+    }),
+    allowed: ALLOWED,
+    vendored: [],
+    waysOut: waysOut([
+      { name: "fonts", allow: ["CC-BY-4.0"], reason: "glyph data" },
+    ]),
+  });
+  assert.deepEqual(said.failures, [
+    "node_modules/fonts is CC-BY-4.0 AND GPL-3.0-only, which deny.toml does not allow",
+    "the exception for fonts is stale: it lets no package in the lock pass",
+  ]);
+});
+
+test("a clarification overrides only the version it names", () => {
+  const said = check({
+    lock: lock({
+      "node_modules/quiet": { version: "1.2.3" },
+      "node_modules/a/node_modules/quiet": { version: "1.2.4" },
+    }),
+    allowed: ALLOWED,
+    vendored: [],
+    waysOut: waysOut(
+      [],
+      [
+        {
+          name: "quiet",
+          version: "1.2.3",
+          licence: "MIT",
+          reason: "its LICENSE file is MIT",
+        },
+      ],
+    ),
+  });
+  assert.deepEqual(said.failures, [
+    "node_modules/a/node_modules/quiet names no licence",
+  ]);
+});
+
+test("a clarification is held to the list like the lock's own word", () => {
+  const said = check({
+    lock: lock({ "node_modules/quiet": { version: "1.2.3", license: "MIT" } }),
+    allowed: ALLOWED,
+    vendored: [],
+    waysOut: waysOut(
+      [],
+      [
+        {
+          name: "quiet",
+          version: "1.2.3",
+          licence: "GPL-3.0-only",
+          reason: "relicensed",
+        },
+      ],
+    ),
+  });
+  assert.deepEqual(said.failures, [
+    "node_modules/quiet is GPL-3.0-only (clarified), which deny.toml does not allow",
+  ]);
+});
+
+test("an entry nothing in the lock uses is reported as stale, and fails", () => {
+  const said = check({
+    lock: lock({
+      "node_modules/fine": { version: "1.0.0", license: "MIT" },
+      "node_modules/quiet": { version: "1.2.4" },
+    }),
+    allowed: ALLOWED,
+    vendored: [],
+    waysOut: waysOut(
+      [
+        { name: "gone", allow: ["CC-BY-4.0"], reason: "was a dependency" },
+        {
+          name: "fine",
+          allow: ["CC-BY-4.0"],
+          reason: "its licence changed since",
+        },
+      ],
+      [
+        {
+          name: "quiet",
+          version: "1.2.3",
+          licence: "MIT",
+          reason: "an older release",
+        },
+        {
+          name: "fine",
+          version: "1.0.0",
+          licence: "MIT",
+          reason: "the lock says so now",
+        },
+      ],
+    ),
+  });
+  assert.deepEqual(said.failures, [
+    "node_modules/quiet names no licence",
+    "the exception for gone is stale: it lets no package in the lock pass",
+    "the exception for fine is stale: it lets no package in the lock pass",
+    "the clarification of quiet@1.2.3 is stale: no package in the lock is that version and says otherwise",
+    "the clarification of fine@1.0.0 is stale: no package in the lock is that version and says otherwise",
+  ]);
+});
+
+test("an exception for a development-only package is used by it, and silences its note", () => {
+  const said = check({
+    lock: lock({
+      "node_modules/caniuse-lite": {
+        version: "1.0.0",
+        license: "CC-BY-4.0",
+        dev: true,
+      },
+    }),
+    allowed: ALLOWED,
+    vendored: [],
+    waysOut: waysOut([
+      { name: "caniuse-lite", allow: ["CC-BY-4.0"], reason: "data" },
+    ]),
+  });
+  assert.deepEqual(said, { failures: [], notes: [] });
+});
+
+test("the exceptions file is read strictly: one package each, an exact version, a reason", () => {
+  const read = waysOutIn(
+    JSON.stringify({
+      exceptions: [
+        { name: "a", allow: ["X"] },
+        { name: "", allow: ["X"], reason: "r" },
+        { name: "b", allow: [], reason: "r" },
+        { name: "c", allow: ["X"], reason: "r" },
+        { name: "c", allow: ["Y"], reason: "r" },
+      ],
+      clarify: [
+        { name: "d", version: "^1.2.3", licence: "MIT", reason: "r" },
+        { name: "e", version: "1.x", licence: "MIT", reason: "r" },
+        { name: "f", version: "1.0.0", reason: "r" },
+        { name: "g", version: "1.0.0-beta.1", licence: "MIT", reason: "r" },
+      ],
+      extra: [],
+    }),
+  );
+  assert.deepEqual(read.problems, [
+    "npm-licences.json has extra, which it does not know",
+    "npm-licences.json exceptions[0] needs a name, a reason, and the licences it allows",
+    "npm-licences.json exceptions[1] needs a name, a reason, and the licences it allows",
+    "npm-licences.json exceptions[2] needs a name, a reason, and the licences it allows",
+    "npm-licences.json exceptions[4] names c again",
+    "npm-licences.json clarify[0] needs a name, an exact version, a licence and a reason",
+    "npm-licences.json clarify[1] needs a name, an exact version, a licence and a reason",
+    "npm-licences.json clarify[2] needs a name, an exact version, a licence and a reason",
+  ]);
+  assert.deepEqual(
+    read.exceptions.map((one) => one.name),
+    ["c"],
+  );
+  assert.deepEqual(
+    read.clarify.map((one) => `${one.name}@${one.version}`),
+    ["g@1.0.0-beta.1"],
+  );
+  assert.deepEqual(
+    check({
+      lock: lock({}),
+      allowed: ALLOWED,
+      vendored: [],
+      waysOut: read,
+    }).failures.slice(0, 1),
+    ["npm-licences.json has extra, which it does not know"],
+  );
+});
+
+test("an exceptions file that is not JSON fails the check, and none at all is no exception", () => {
+  assert.deepEqual(waysOutIn("{ not json").problems, [
+    "npm-licences.json is not JSON",
+  ]);
+  assert.deepEqual(waysOutIn(undefined), {
+    exceptions: [],
+    clarify: [],
+    problems: [],
+  });
 });
 
 test("this repository's app passes, as CI runs it", () => {
