@@ -68,6 +68,9 @@ function core() {
       return { repos: [{ name: "api", path: "acme/api", description: "" }], trouble: [] };
     if (cmd === "take_repos") return null;
     if (cmd === "clone_repo") throw "api: clone failed — no access.";
+    // The link opens Settings at the workspace's Repos, which reads the workspace: refused here,
+    // so the level says so rather than drawing a read this core never made.
+    if (cmd === "workspace_settings") throw "not read in this test";
     if (cmd === "workspace_create") {
       made.push(String(got.name));
       return [`✓ Workspace '${String(got.name)}' ready (LOCAL) → workspaces/${String(got.name)}/`];
