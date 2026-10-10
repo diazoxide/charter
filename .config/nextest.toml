@@ -19,3 +19,8 @@ test-group = "floods"
 # A test that failed prints its output again at the end of the run, where the job log ends.
 final-status-level = "fail"
 failure-output = "immediate-final"
+
+# The run's report, at `target/nextest/ci/junit.xml`: `tools/slowest-tests.mjs` reads each
+# test's time from it and annotates the run with the slowest tests and binaries.
+[profile.ci.junit]
+path = "junit.xml"
