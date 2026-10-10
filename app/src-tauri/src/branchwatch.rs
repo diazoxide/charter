@@ -794,7 +794,7 @@ fn find_refs_again<W: notify::Watcher + Send + 'static>(
     let reader = reader.clone();
     let at = root.path().to_path_buf();
     let started = std::thread::Builder::new()
-        .name("charter-cockpit-refs".into())
+        .name("purlis-cockpit-refs".into())
         .spawn(move || {
             loop {
                 // Outside the lock: this is the read that can take until the reader's deadline.
