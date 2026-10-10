@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ChevronRight, CircleCheck, GitBranch, GitMerge } from "lucide-react";
+import { ChevronRight, CircleCheck, FolderGit2, GitBranch, GitMerge } from "lucide-react";
 import { commands, type AheadBehind, type PlaneId } from "./bindings";
 import type { BranchRef, StatusRead } from "./branchStatus";
 import type { Catalogued, Offer } from "./actions";
@@ -19,7 +19,10 @@ import type { WorkspaceState } from "./workspaceState";
  * explorer and the window both read (FM-5). It stands while its repo's branches are still being
  * listed, so a focus a launch put back is the cockpit from the first frame; it does not when the
  * listing came back without it, when the listing was refused, or when the repo is gone from the
- * workspace. A focus on no branch folder (a repo's own) never stands.
+ * workspace.
+ *
+ * **A focus on a repo's own folder** (#1152) stands while the workspace holds the clone: before
+ * the plane is read, and while its repos list it. Its branches' listing says nothing of it.
  *
  * @returns The branch as listed (absent while its repo is still being listed), or `undefined`
  *   when the focus does not stand.
@@ -28,10 +31,10 @@ export function focusStands(
   state: WorkspaceState,
   focus: Place,
 ): { piece: Piece | undefined } | undefined {
-  if (focus.piece === null) return undefined;
-  if (state.piecesRefused[focus.repo] !== undefined) return undefined;
   const repos = state.panels?.repos;
   if (repos !== undefined && !repos.includes(focus.repo)) return undefined;
+  if (focus.piece === null) return { piece: undefined };
+  if (state.piecesRefused[focus.repo] !== undefined) return undefined;
   const listed = state.pieces[focus.repo];
   if (listed === undefined) return { piece: undefined };
   const piece = listed.find((one) => one.piece === focus.piece);
@@ -107,7 +110,8 @@ function changesSaid(read: StatusRead | undefined): string {
 
 /**
  * The way back out: the workspace, the repo and the branch, the branch being where the explorer
- * is. The workspace and the repo each step back out to the whole workspace, as Esc does.
+ * is. The workspace and the repo each step back out to the whole workspace, as Esc does. On a
+ * repo's own folder (#1152, `name` absent) the repo is where the explorer is.
  */
 export function Breadcrumb({
   workspace,
@@ -117,9 +121,26 @@ export function Breadcrumb({
 }: {
   workspace: string;
   repo: string;
-  name: string;
+  /** The branch; absent for the repo's own folder. */
+  name?: string;
   onLeave: () => void;
 }) {
+  if (name === undefined)
+    return (
+      <nav className="cockpit-crumbs" aria-label="Breadcrumb">
+        <ol>
+          <li>
+            <button type="button" onClick={onLeave} title="Back to the whole workspace (Esc)">
+              {workspace}
+            </button>
+          </li>
+          <li>
+            <ChevronRight className="node-icon" />
+            <span aria-current="location">{repo}</span>
+          </li>
+        </ol>
+      </nav>
+    );
   return (
     <nav className="cockpit-crumbs" aria-label="Breadcrumb">
       <ol>
@@ -148,6 +169,10 @@ export function Breadcrumb({
  * explorer's own Merge and Done rows (`worktree.merge:` and `worktree.done:` in the catalogue),
  * pressed as the row menu presses them. A row the catalogue cannot run is drawn disabled, with
  * why.
+ *
+ * **On a repo's own folder** (#1152, `piece` null) it says the branch the clone has checked out
+ * and how far that is from its upstream, and has no Merge or Done: both act on a branch folder
+ * purlis cut, and the clone is the person's own checkout (D-1152-3).
  */
 export function CockpitHeader({
   name,
@@ -158,15 +183,30 @@ export function CockpitHeader({
   offers,
   onPress,
 }: {
-  /** What the branch is called: git's branch name, or the folder's when it is on none. */
+  /** What the branch is called: git's branch name, or the folder's when it is on none. For a
+   *  repo's own folder, the branch it has checked out, where git said. */
   name: string;
   repo: string;
-  piece: string;
+  /** The branch folder, or `null` for the repo's own folder. */
+  piece: string | null;
   apart: AheadBehindRead | undefined;
   status: StatusRead | undefined;
   offers: Catalogued;
   onPress: (offer: Offer) => void;
 }) {
+  if (piece === null)
+    return (
+      <section className="cockpit-head" aria-label={`Repo ${repo}`}>
+        <h2 className="cockpit-name">
+          <FolderGit2 className="node-icon" />
+          <span>{repo}</span>
+        </h2>
+        <p className="cockpit-facts">
+          <ApartLine apart={apart} on={name === "" ? undefined : name} />
+          <span className="cockpit-changes">{changesSaid(status)}</span>
+        </p>
+      </section>
+    );
   const at = `${repo}/${piece}`;
   const action = (id: string, label: string, Icon: typeof GitMerge) => {
     const offer = offers.get(id);
@@ -191,9 +231,7 @@ export function CockpitHeader({
         <span>{name}</span>
       </h2>
       <p className="cockpit-facts">
-        <span className="cockpit-apart" role={apart?.trouble !== undefined ? "alert" : undefined}>
-          {apartSaid(apart)}
-        </span>
+        <ApartLine apart={apart} />
         <span className="cockpit-changes">{changesSaid(status)}</span>
       </p>
       <div className="cockpit-actions">
@@ -201,5 +239,15 @@ export function CockpitHeader({
         {action(`worktree.done:${at}`, "Done", CircleCheck)}
       </div>
     </section>
+  );
+}
+
+/** How far the branch is from its base, an alert where it could not be read; on a repo's own
+ *  folder, after the branch it has checked out (`on`, #1152). */
+function ApartLine({ apart, on }: { apart: AheadBehindRead | undefined; on?: string }) {
+  return (
+    <span className="cockpit-apart" role={apart?.trouble !== undefined ? "alert" : undefined}>
+      {on === undefined ? apartSaid(apart) : `on ${on} · ${apartSaid(apart)}`}
+    </span>
   );
 }
