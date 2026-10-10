@@ -77,6 +77,24 @@ pub struct Referrer {
     /// Whether a rename everywhere (#1380) changes it too, in the one write that renames the
     /// entry. One that does not keeps a rename refused, whichever way it is asked.
     pub follows: bool,
+    /// Where it is changed, when that is not the level the entry is at (#1241): a persona's
+    /// own definition, say. `None` for one changed at the entry's own level, whose
+    /// [`Referrer::group`] is then a group of that level.
+    pub elsewhere: Option<Elsewhere>,
+}
+
+/// **The level a referrer is changed at**, when it is not the entry's own (#1241): what the
+/// window follows to reach it, through the place a link of that level lands.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Elsewhere {
+    /// The project's own settings.
+    Project,
+    /// The settings of the workspace of this name.
+    Workspace(String),
+    /// The persona of this name: its definition, in its own tab.
+    Persona(String),
+    /// This machine's settings, the same in every project.
+    You,
 }
 
 /// Every reason an add or a remove wrote nothing. At least one part is not empty.

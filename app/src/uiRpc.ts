@@ -3457,12 +3457,21 @@ export type EntryKind = "folder" | "file" |
 /**
  *  Something that uses an entry, which stops its removal. `group` is the Settings group it is
  *  changed in (`project.saving`) when it is a setting; `follows`, whether a rename everywhere
- *  (#1380) changes it too, in the one write that renames the entry.
+ *  (#1380) changes it too, in the one write that renames the entry. `level` and `target` say
+ *  where it is changed when that is not the entry's own level (#1241): a persona's tab, a
+ *  workspace's settings. Both null for one changed at the entry's own level.
  */
 export type EntryReferrer = {
 	what: string,
 	group: string | null,
 	follows: boolean,
+	/**
+	 *  Optional on the wire, so a referrer written before #1241 still reads as one changed
+	 *  at the entry's own level.
+	 */
+	level?: ReferrerLevel | null,
+	/**  The workspace or the persona, by name, at those levels. */
+	target?: string | null,
 };
 
 /**  One field of a collection entry, as the Add form holds it: a list is one entry per line. */
@@ -5944,6 +5953,12 @@ export type Recents = {
 	 */
 	forgetful: string | null,
 };
+
+/**
+ *  The level a referrer is changed at, when it is not the entry's own
+ *  (`purlis_core::settings::collection::Elsewhere`).
+ */
+export type ReferrerLevel = "project" | "workspace" | "persona" | "you";
 
 /**
  *  Why a delete made nothing — **and the reading it was refused on** (charter-app#182).

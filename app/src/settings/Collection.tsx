@@ -1,6 +1,9 @@
 import { useEffect, useId, useRef, useState, type ReactNode, type RefObject } from "react";
 import { Choice, Field, SettingActions, SettingRow } from "./components";
-import type { Driven, EntryRefused, EntryRefusal } from "./driver";
+import type { PlaneId } from "../bindings";
+import type { Driven, EntryReferrer, EntryRefused, EntryRefusal } from "./driver";
+import { askSettingsLink, referrerElsewhere } from "./links";
+import { OutLink } from "./OutLink";
 import type { Collection, CollectionEntry, EntryField, Setting } from "./groups";
 
 /**
@@ -10,8 +13,8 @@ import type { Collection, CollectionEntry, EntryField, Setting } from "./groups"
  * entries were drawn from (`collection.base`); nothing is checked here, and every label is the
  * core's. What the core refuses is said where it belongs: a field's refusal under that field, a
  * Remove's referrers under the entry (by its identity) with a link to the group each is changed
- * in, an Undo's at the head of the collection. The last add or remove offers its Undo at the
- * head, saying what it did.
+ * in, or to where it is changed at another level (a persona's tab, #1241), an Undo's at the head
+ * of the collection. The last add or remove offers its Undo at the head, saying what it did.
  *
  * **An entry with a page of its own** (ST-4, V91e: a harness profile) is drawn on its
  * collection's group as a heading that opens the page, with its Remove; the page draws that entry
@@ -152,7 +155,13 @@ export function CollectionView({
             </>
           )}
           {refused && atHead && (
-            <Refused noun={noun} refused={refused} onGo={onGo} reachable={reachable} />
+            <Refused
+              noun={noun}
+              refused={refused}
+              onGo={onGo}
+              reachable={reachable}
+              plane={driver.plane}
+            />
           )}
         </div>
       )}
@@ -251,7 +260,13 @@ export function CollectionView({
             />
           )}
           {refused?.entry === entry.id && (
-            <Refused noun={noun} refused={refused} onGo={onGo} reachable={reachable} />
+            <Refused
+              noun={noun}
+              refused={refused}
+              onGo={onGo}
+              reachable={reachable}
+              plane={driver.plane}
+            />
           )}
           {ofEntry(entry).map(row)}
         </div>
@@ -302,11 +317,14 @@ function Refused({
   refused,
   onGo,
   reachable,
+  plane,
 }: {
   noun: string;
   refused: EntryRefused;
   onGo: (group: string) => void;
   reachable: (group: string) => boolean;
+  /** The project whose window follows a link to another level (#1241). */
+  plane: PlaneId;
 }) {
   const { refusal } = refused;
   const users = refusal.referrers.length;
@@ -327,25 +345,57 @@ function Refused({
       {refusal.referrers.map((one, at) => (
         <p key={at}>
           {one.what}
-          {one.group !== null && reachable(one.group) && (
-            <>
-              {" "}
-              <button
-                type="button"
-                className="ui-setting-reset"
-                tabIndex={0}
-                onClick={() => onGo(one.group ?? "")}
-              >
-                Fix it in Settings
-              </button>
-            </>
-          )}
+          <ReferrerLink referrer={one} onGo={onGo} reachable={reachable} plane={plane} />
         </p>
       ))}
       {refusal.reasons.map((why, at) => (
         <p key={`reason-${at}`}>{why}</p>
       ))}
     </div>
+  );
+}
+
+/** The link after a referrer's sentence: its group at this level, as before #1241, or where it
+ *  is changed at another level (`links.ts`, {@link referrerElsewhere}). None where it names no
+ *  place this window can follow. */
+function ReferrerLink({
+  referrer,
+  onGo,
+  reachable,
+  plane,
+}: {
+  referrer: EntryReferrer;
+  onGo: (group: string) => void;
+  reachable: (group: string) => boolean;
+  plane: PlaneId;
+}) {
+  const elsewhere = referrerElsewhere(referrer);
+  const { group } = referrer;
+  if (elsewhere === null) return null;
+  if (elsewhere !== undefined && "action" in elsewhere)
+    return (
+      <>
+        {" "}
+        <OutLink plane={plane} action={elsewhere.action}>
+          {elsewhere.label}
+        </OutLink>
+      </>
+    );
+  if (elsewhere === undefined && (group === null || !reachable(group))) return null;
+  return (
+    <>
+      {" "}
+      <button
+        type="button"
+        className="ui-setting-reset"
+        tabIndex={0}
+        onClick={() =>
+          elsewhere === undefined ? onGo(group ?? "") : askSettingsLink(plane, elsewhere.link)
+        }
+      >
+        Fix it in Settings
+      </button>
+    </>
   );
 }
 
