@@ -218,6 +218,10 @@ pub const WINDOW_ONLY: &[&str] = &[
     "never_dispatch",
     // Keep blocked on a sandbox host ask (#1690): the person's no, told to the app.
     "forget_sandbox_block",
+    // The Inbox's updates (#1693): what happened to the person's chats, and what they put away.
+    "inbox_updates",
+    "note_inbox_updates",
+    "settle_inbox_updates",
     // Settings' table: every change of what stands.
     "lift_dispatch_never",
     "allow_dispatch_to_any",

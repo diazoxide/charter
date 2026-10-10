@@ -2628,7 +2628,8 @@ button.show-more:focus-visible {
   padding: 0;
 }
 .inbox-chat + .inbox-chat,
-.inbox-recent {
+.inbox-recent,
+.inbox-updates {
   margin-top: 0.75rem;
 }
 .inbox-chain {
@@ -2673,7 +2674,9 @@ button.show-more:focus-visible {
   min-width: 0;
   font: inherit;
 }
-.inbox-ask button {
+.inbox-ask button,
+.inbox-update button,
+.inbox-updates-head button {
   padding: 0.1rem 0.5rem;
   font: inherit;
   color: var(--text-primary);
@@ -2682,10 +2685,14 @@ button.show-more:focus-visible {
   border-radius: 4px;
   cursor: pointer;
 }
-.inbox-ask button:hover:not(:disabled) {
+.inbox-ask button:hover:not(:disabled),
+.inbox-update button:hover:not(:disabled),
+.inbox-updates-head button:hover:not(:disabled) {
   border-color: var(--accent-base);
 }
-.inbox-ask button.inbox-go {
+.inbox-ask button.inbox-go,
+.inbox-update button.inbox-go,
+.inbox-updates-head button.inbox-go {
   align-self: flex-start;
   color: var(--text-secondary);
   background: none;
@@ -2701,14 +2708,44 @@ button.show-more:focus-visible {
   margin: 0.25rem 0;
   color: var(--text-secondary);
 }
-.inbox-list-link {
-  padding: 0;
-  font: inherit;
-  color: var(--accent-base);
-  background: none;
-  border: none;
-  text-decoration: underline;
-  cursor: pointer;
+/* **Updates** (#1693): after the asks, newest first. Information and not a decision, so a quiet
+   border and no waiting colour; one the person has read is drawn in the secondary text. */
+.inbox-updates-head {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin-bottom: 0.35rem;
+}
+.inbox-updates-head .inbox-chain {
+  flex: 1 1 auto;
+  margin: 0;
+}
+.inbox-update {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+}
+.inbox-update + .inbox-update {
+  margin-top: 0.35rem;
+}
+.inbox-update[data-read] .ask-says {
+  color: var(--text-secondary);
+}
+.inbox-update time {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+.inbox-unread {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.inbox-more {
+  margin: 0;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
 }
 .inbox-recent li {
   padding: 0.1rem 0;

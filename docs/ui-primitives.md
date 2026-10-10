@@ -1156,6 +1156,12 @@ presses the focused button as it does anywhere, and Escape gives the keyboard ba
 front. A dispatch's Notice drawn in it keeps its own buttons as Tab stops. There is no key of a
 single letter (I-11).
 
+**Its updates follow the asks** (#1693), on the same roving focus: Mark all read and Dismiss all,
+then each update and its buttons. With no ask, the keyboard comes in on the first update, never
+on a button. An answer that grants something (a refused dispatch's Allow from now on) pressed
+within `SETTLE_MS` of its update being drawn or moved by what came in above it is not sent, and
+the update says why, as a dispatch's Notice does when its question changes.
+
 **The keys for the chats inside a tab take nothing either** (#1487, `taskKeys.taskKeyOf`).
 
 |                                                               | On a Mac      | Everywhere else                 |

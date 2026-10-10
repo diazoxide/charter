@@ -663,6 +663,12 @@ impl Chat {
         self.needs_you || !self.failed.is_empty()
     }
 
+    /// Whether it needs the person for a reason of its own, leaving out the tasks of its that
+    /// came to nothing: those are updates in the Inbox, and ask nothing of the person (#1693).
+    pub fn needs_you_for_itself(&self) -> bool {
+        self.needs_you
+    }
+
     /// Whether its turn ended waiting on its tasks or on its asker, and no item was raised for
     /// it ([`Waits`]).
     pub fn held(&self) -> bool {
@@ -1395,6 +1401,14 @@ impl Board {
             .get(&number)
             .map(|tracked| tracked.chat.failed_tasks().to_vec())
             .unwrap_or_default()
+    }
+
+    /// Whether chat `number` needs the person for a reason of its own
+    /// ([`Chat::needs_you_for_itself`]): not only for tasks of its that came to nothing.
+    pub fn needs_you_for_itself(&self, number: u32) -> bool {
+        self.chats
+            .get(&number)
+            .is_some_and(|tracked| tracked.chat.needs_you_for_itself())
     }
 
     /// The person looked at what failed below chat `number` ([`Chat::failures_seen`]).
@@ -3828,6 +3842,8 @@ mod tests {
             )
         ));
         assert_eq!(board.needs_you(), vec![7]);
+        // In the queue for the failure alone: nothing of its own asks the person (#1693).
+        assert!(!board.needs_you_for_itself(7));
         assert_eq!(
             board.failed_tasks(7),
             vec![FailedTask {

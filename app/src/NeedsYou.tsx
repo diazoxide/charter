@@ -1,11 +1,11 @@
 /** What a chat is doing, as the tab draws it, and the queue of chats asking for you. */
 import { Hand, X } from "lucide-react";
 import * as Menu from "@radix-ui/react-dropdown-menu";
-import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { Offer } from "./actions";
 import { backSaid, type State } from "./chatState";
 import { PersonaMark, type PersonaMarkData } from "./PersonaMark";
-import { AwayRows, GONE, awayKey, type AwayItem } from "./AwayRefusals";
+import { GONE } from "./AwayRefusals";
 import { useArrived } from "./lib/arrived";
 import { moveAlong } from "./tabSequence";
 import { deletes } from "./tabKeys";
@@ -174,8 +174,9 @@ export type Asking = {
    *  go. Said first, before anything about the chats it started. */
   needed?: string;
   /**
-   * Why the chat needs the operator when it is not that it asked: its Smart close stopped
-   * without a record (SI-8f). Its row then says `<name>: <why>`, and Go is still the chat.
+   * Why the chat needs the operator when it is not that it asked: a commit of its refused
+   * (SQ-16). Its row then says `<name>: <why>`, and Go is still the chat. A Smart close that
+   * stopped is an update in the Inbox (#1693).
    */
   why?: string;
   /** The catalogue's `needs.show:<session>`: the chat to the front, its workspace with it. */
@@ -240,7 +241,6 @@ export type Quiet = {
 type Opened = {
   items: readonly Needing[];
   asks: readonly PermissionAsk[];
-  away: readonly AwayItem[];
   /** The chats the person ignored from the list since it opened: they leave, never dimmed. */
   ignored: readonly string[];
 };
@@ -283,8 +283,9 @@ function quietSaid(quiet: readonly Quiet[]): string {
  * that project's tab and nothing more. The title bar is the window's, so it can hold them all.
  *
  * **Where the window has a project in front, a press opens the Inbox instead** (#1692, I-2,
- * ADR 0038 as amended 2026-10-11): the hand is the Inbox's count and its way in, and this list
- * opens only where something asks it open (`openAsked`), until #1693 and #1695 retire it.
+ * ADR 0038 as amended 2026-10-11): the hand is the Inbox's count and its way in. A dispatch
+ * refused while nobody was there and a Smart close that stopped are updates in the Inbox
+ * (#1693), and never rows here.
  *
  * **A Radix menu** (ADR 0037), with the show-more menu's two decisions (`docs/ui-primitives.md`):
  * not modal, and a click outside closes it. So the keyboard is the primitive's — Enter opens it
@@ -311,12 +312,7 @@ export function NeedsYouMenu({
   asks = [],
   onAnswer,
   onOpen,
-  away = [],
-  onAllowAway,
-  onDismissAway,
-  onNeverAway,
   onLook,
-  openAsked,
   asked,
   others = [],
   onOpenOther,
@@ -333,22 +329,8 @@ export function NeedsYouMenu({
   onAnswer?: (ask: PermissionAsk, option: string) => void;
   /** Puts the chat that asked in front, where its own prompt shows the ask whole. */
   onOpen?: (ask: PermissionAsk) => void;
-  /**
-   * The dispatches refused while nobody was there (#1507), across every project: items of
-   * their own, attached to no chat. Counted in the hand's number and listed nowhere else.
-   */
-  away?: readonly AwayItem[];
-  /** Allow from now on: the standing grant for the one pair the item names. */
-  onAllowAway?: (item: AwayItem) => void;
-  /** Dismiss: the item is put away and nothing is granted. */
-  onDismissAway?: (item: AwayItem) => void;
-  /** Never for this pair: the person's never, on this machine. */
-  onNeverAway?: (item: AwayItem) => void;
   /** The person is coming to the list, or leaving it: what it holds is read again. */
   onLook?: () => void;
-  /** A count that goes up each time the list is asked open from elsewhere: the away
-   *  summary's part for the dispatches refused while nobody was there (#1551). */
-  openAsked?: number;
   /**
    * **The registry's count of asks** (#1690): what the hand's number says, across every
    * project. Where the core has said none yet, the number counts the rows, as it always did.
@@ -360,9 +342,7 @@ export function NeedsYouMenu({
   onOpenOther?: (ask: OtherAsk) => void;
   /**
    * **Opens the Inbox** (#1692, I-2): where there is one, a press of the hand, or Enter on it,
-   * opens the Inbox and not this list. The list is still opened where something asks for it
-   * (`openAsked`): the away summary's dispatches refused while nobody was there, until they
-   * move into the Inbox too (#1693, #1695).
+   * opens the Inbox and not this list.
    */
   onInbox?: () => void;
 }) {
@@ -387,9 +367,8 @@ export function NeedsYouMenu({
   const anchor = useRef<HTMLSpanElement>(null);
   const held = useRef(false);
   const trigger = useRef<HTMLButtonElement>(null);
-  const chats = items.length + asks.length + others.length;
-  const rows = chats + away.length;
-  // The registry's count where it has one; a refusal kept while nobody was there is no ask.
+  const rows = items.length + asks.length + others.length;
+  // The registry's count where it has one.
   const count = asked ?? rows;
   const asking = rows > 0 || count > 0;
   const none = !asking && quiet.length === 0;
@@ -408,16 +387,9 @@ export function NeedsYouMenu({
     if (trigger.current) trigger.current.focus();
     else if (anchor.current) moveAlong(anchor.current, false);
   }, [asking]);
-  // A refusal kept while nobody was there is no chat needing you: the chat was told no and
-  // went on. Alone, the hand says what they are; beside chats, it counts things.
-  // What the rows are, where the registry counts none of them: a refusal kept while nobody
-  // was there, or a row the registry has not read yet. Never "0 things".
-  const rowsSaid =
-    away.length === 0
-      ? `${rows} ${rows === 1 ? "chat needs" : "chats need"} you`
-      : chats === 0
-        ? `${rows} ${rows === 1 ? "dispatch was" : "dispatches were"} refused while you were away`
-        : `${rows} things need you`;
+  // What the rows are, where the registry counts none of them: a row the registry has not
+  // read yet. Never "0 things".
+  const rowsSaid = `${rows} ${rows === 1 ? "chat needs" : "chats need"} you`;
   const said = !asking
     ? quietSaid(quiet)
     : asked !== undefined && count > 0
@@ -434,31 +406,12 @@ export function NeedsYouMenu({
    */
   const [frozen, setFrozen] = useState<Opened | null>(null);
   const show = (up: boolean) => {
-    setFrozen(up ? { items, asks, away, ignored: [] } : null);
+    setFrozen(up ? { items, asks, ignored: [] } : null);
     onLook?.();
     setOpen(up);
   };
   if (!open && frozen !== null) setFrozen(null);
-  // **Asked open from elsewhere** (#1551): opened as a press opens it, on what it holds now;
-  // a list with nothing in it stays shut. Adjusted while rendering, as the rest of it is; and,
-  // as a press does, what it holds is read again (`onLook`), after the render.
-  const [openedFor, setOpenedFor] = useState(openAsked);
-  if (openAsked !== openedFor) {
-    setOpenedFor(openAsked);
-    if (!none) {
-      setFrozen({ items, asks, away, ignored: [] });
-      setOpen(true);
-    }
-  }
-  const lookedFor = useRef(openAsked);
-  useEffect(() => {
-    if (openAsked === lookedFor.current) return;
-    lookedFor.current = openAsked;
-    onLook?.();
-  }, [openAsked, onLook]);
   const heldRows = open ? frozen : null;
-  const drawnAway = heldRows?.away ?? away;
-  const listedNow = new Set(away.map(awayKey));
   // With nothing left to answer, nothing is held: the chats that went leave, and the keyboard
   // goes back to the hand as it did before anything was held.
   // Let go for good, not for as long as nothing is asked: a chat that asks while the list is
@@ -651,13 +604,6 @@ export function NeedsYouMenu({
                   </Menu.Group>
                 );
               })}
-              <AwayRows
-                items={drawnAway}
-                gone={(item) => !listedNow.has(awayKey(item))}
-                onAllow={onAllowAway}
-                onDismiss={onDismissAway}
-                onNever={onNeverAway}
-              />
               {quiet.length > 0 && (
                 <Menu.Group className="needs-you-quiet" aria-label="Can't say they're waiting">
                   {quiet.map((one) => (

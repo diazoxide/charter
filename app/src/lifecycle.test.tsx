@@ -1,11 +1,22 @@
 import { StrictMode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render as renderBare, screen, within } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  configure,
+  render as renderBare,
+  screen,
+  within,
+} from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
 import type { Moved, NotStarted, OpenChat } from "./bindings";
 import { stripNamed } from "./test-strips";
+
+// The Inbox lists a chat that came back as an update too (#1693), in the side whether or not it is shown:
+// these tests are about the Notice, so the Inbox's copy is not what they find.
+configure({ defaultIgnore: 'script, style, [data-view="inbox"] *' });
 
 /** What the picker draws. One profile, so picking is one click. */
 const START_OPTIONS = {

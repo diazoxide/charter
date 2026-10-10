@@ -1,24 +1,38 @@
-import { afterEach, describe, expect, it } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { useState } from "react";
 import type { AwayRefusal } from "./bindings";
-import type { Offer } from "./actions";
-import { awaySaid, awayWhere, clipped, GONE, type AwayItem } from "./AwayRefusals";
+import { awaySaid, awayRow, clipped, oftenSaid } from "./AwayRefusals";
 import { useAwayRefusals } from "./dispatchAway";
-import { NeedsYouMenu, type Needing } from "./NeedsYou";
+import { Inbox, type UpdateRow } from "./Inbox";
+import { awayUpdateKey } from "./inboxUpdates";
+import { SETTLE_MS } from "./TaskBlocksNotice";
 
 /**
- * **A dispatch refused while nobody was there, in the title bar's needs-you list** (#1507):
- * the item, its three answers, a list that holds still while it is open, and the pair the
- * person said never to by the time they look.
+ * **A dispatch refused while nobody was there, an update in the Inbox** (#1507, #1693): the
+ * item, its three answers, a grant that is never sent from a row that just moved, and the pair
+ * the person said never to by the time they look.
  */
+
+const START = Date.parse("2026-10-11T10:00:00Z");
+let user: ReturnType<typeof userEvent.setup>;
+
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(START);
+  user = userEvent.setup();
+});
 
 afterEach(() => {
   cleanup();
   clearMocks();
+  vi.useRealTimers();
 });
+
+/** Time passes past the grant's guard, as a person reading the row lets it. */
+const read = () => act(() => vi.setSystemTime(Date.now() + SETTLE_MS + 1));
 
 const PLANE = "/home/dev/plane";
 const NOW = 1_800_000_000;
@@ -44,58 +58,53 @@ const refusal = (over: Partial<AwayRefusal> = {}): AwayRefusal => ({
   ...over,
 });
 
-const item = (over: Partial<AwayRefusal> = {}): AwayItem => ({
-  ...refusal(over),
-  plane: PLANE,
-  project: "charter",
-});
+/** The rows the Inbox draws for `refused`, each answered through `answer`. */
+const rowsOf = (
+  refused: readonly AwayRefusal[],
+  answer: (one: AwayRefusal, how: "allow" | "dismiss" | "never") => void = () => {},
+): UpdateRow[] =>
+  refused.map((one) => ({
+    update: {
+      key: awayUpdateKey(one),
+      kind: "refused-away",
+      at: one.latest,
+      session: null,
+      chain: [],
+      says: awaySaid(one),
+      read: false,
+    },
+    ...awayRow(one, answer, () => {}),
+  }));
 
-/** A chat asking, as a project reports it. */
-function chat(session: number): Needing {
-  const name = `ide.${session}`;
-  const offer = (id: string, title: string, does: Offer["does"]): Offer => ({
-    id,
-    title,
-    available: true,
-    reason: "",
-    does,
-    name,
-  });
-  return {
-    plane: PLANE,
-    session,
-    name,
-    workspace: "ide",
-    project: "charter",
-    go: offer(`needs.show:${session}`, `Show ${name}, which needs you`, {
-      verb: "showChat",
-      session,
-    }),
-    ignore: offer(`needs.ignore:${session}`, `Ignore ${name} until it asks again`, {
-      verb: "ignoreNeedsYou",
-      session,
-    }),
-  };
+/** The Inbox with these refused dispatches as its updates and no asks. */
+function Updated({
+  refused,
+  answer,
+}: {
+  refused: readonly AwayRefusal[];
+  answer?: (one: AwayRefusal, how: "allow" | "dismiss" | "never") => void;
+}) {
+  return (
+    <Inbox
+      plane={PLANE}
+      asks={[]}
+      onGo={() => {}}
+      onLeave={() => {}}
+      updates={{ rows: rowsOf(refused, answer), onMarkAllRead: () => {}, onDismissAll: () => {} }}
+    />
+  );
 }
 
-const hand = () => screen.getByRole("button", { name: /refused while you were away$/ });
-/** The pairs drawn, top to bottom. */
-const rows = () =>
-  screen
-    .getAllByRole("group")
-    .map((group) => group.querySelector(".needs-you-name")?.textContent ?? "")
-    .filter((said) => said.includes(" wanted "));
+/** The update of the pair `said` names. */
+const updateOf = (said: RegExp) =>
+  screen.getAllByRole("listitem").find((row) => said.test(row.textContent ?? "")) as HTMLElement;
 
 describe("what the item says", () => {
-  it("says who wanted whom, how often and when, the workspace and the project", () => {
-    expect(awaySaid(item())).toBe("steward wanted devops while you were away");
-    expect(awayWhere(item(), NOW)).toBe("3 times, last 2h ago · ide · charter");
-    expect(awayWhere(item({ times: 1, latest: NOW - 300 }), NOW)).toBe(
-      "once, 5m ago · ide · charter",
-    );
-    expect(awayWhere(item({ times: 2, latest: NOW - 30, workspace: null }), NOW)).toBe(
-      "twice, last 30s ago · charter",
-    );
+  it("says who wanted whom, and how often, for which workspace", () => {
+    expect(awaySaid(refusal())).toBe("steward wanted devops while you were away");
+    expect(oftenSaid(refusal())).toBe("Refused 3 times, for work in ide");
+    expect(oftenSaid(refusal({ times: 1, workspace: null }))).toBe("Refused once");
+    expect(oftenSaid(refusal({ times: 2 }))).toBe("Refused twice, for work in ide");
   });
 
   it("clips a long name and says it is cut", () => {
@@ -118,77 +127,61 @@ describe("what the item says", () => {
   });
 });
 
-describe("a dispatch refused while nobody was there, in the title bar's list", () => {
-  it("is an item of its own: counted by the hand, with no Go and no chat to ignore", async () => {
-    render(<NeedsYouMenu quiet={[]} items={[]} away={[item()]} onPress={() => {}} />);
-
-    const button = screen.getByRole("button", {
-      name: "1 dispatch was refused while you were away",
-    });
-    expect(button).toHaveTextContent("1");
-    await userEvent.click(button);
-
-    const group = await screen.findByRole("group", {
-      name: /^steward wanted devops while you were away · 3 times, last .* ago · ide · charter$/,
-    });
-    expect(group).toHaveTextContent("steward wanted devops while you were away");
+describe("a dispatch refused while nobody was there, in the Inbox's updates", () => {
+  it("is an update of its own, with no Go: Never for this pair, Allow from now on, and Dismiss", () => {
+    render(<Updated refused={[refusal()]} />);
+    const row = updateOf(/steward wanted devops/);
     expect(
-      within(group)
-        .getAllByRole("menuitem")
+      within(row)
+        .getAllByRole("button")
         .map((one) => one.textContent),
-    ).toEqual(["Dismiss", "Never for this pair", "Allow from now on"]);
-    expect(screen.queryByRole("menuitem", { name: /^Go to/ })).toBeNull();
-    expect(screen.queryByRole("button", { name: /^Ignore/ })).toBeNull();
+    ).toEqual(["Never for this pair", "Allow from now on", "Dismiss"]);
+    expect(within(row).queryByRole("button", { name: /^Go to/ })).toBeNull();
   });
 
-  it("says what Allow from now on allows and reaches, before the press and in the button's name", async () => {
-    render(<NeedsYouMenu quiet={[]} items={[]} away={[item()]} onPress={() => {}} />);
-    await userEvent.click(hand());
-
-    const group = await screen.findByRole("group", { name: /^steward wanted devops/ });
+  it("says what Allow from now on allows and reaches, before the press and in the button's name", () => {
+    render(<Updated refused={[refusal()]} />);
+    const row = updateOf(/steward wanted devops/);
     // The core's sentence, whole: the pair, the workspace it holds in, a chat nobody is at,
     // and what the target works with, onward reach included.
-    expect(group).toHaveTextContent(ALLOWS);
-    const allow = within(group).getByRole("menuitem", { name: ALLOW });
+    expect(row).toHaveTextContent(ALLOWS);
+    const allow = within(row).getByRole("button", { name: ALLOW });
     expect(allow).toHaveAttribute("title", ALLOWS);
-    expect(allow.getAttribute("aria-label")).toContain("for work in ide only");
     expect(allow.getAttribute("aria-label")).not.toContain("every workspace");
     // Nothing wider is offered from here.
-    expect(within(group).queryByRole("menuitem", { name: /everyone|any persona/i })).toBe(null);
+    expect(within(row).queryByRole("button", { name: /everyone|any persona/i })).toBe(null);
   });
 
-  it("names the grant for a refusal at the project's root as one that holds in any workspace", async () => {
+  it("names the grant for a refusal at the project's root as one that holds in any workspace", () => {
     // #1505: there is no workspace to limit that grant to, and the button says what it is.
-    const root = item({
+    const root = refusal({
+      target: "qa",
       workspace: null,
       allows: ALLOWS.replace("for work in ide only", "in any workspace"),
     });
-    render(<NeedsYouMenu quiet={[]} items={[]} away={[item(), root]} onPress={() => {}} />);
-    await userEvent.click(hand());
-
-    const names = (await screen.findAllByRole("menuitem", { name: /^Allow from now on/ })).map(
-      (one) => one.getAttribute("aria-label"),
-    );
-    expect(names).toEqual([
+    render(<Updated refused={[refusal(), root]} />);
+    expect(
+      screen
+        .getAllByRole("button", { name: /^Allow from now on/ })
+        .map((one) => one.getAttribute("aria-label")),
+    ).toEqual([
       ALLOW,
-      "Allow from now on: steward chats dispatch to devops, for you on this machine, in any workspace",
+      "Allow from now on: steward chats dispatch to qa, for you on this machine, in any workspace",
     ]);
   });
 
-  it("says on the button that Allow keeps nothing where the item's workspace is gone", async () => {
-    const gone = item({
+  it("says on the button that Allow keeps nothing where the item's workspace is gone", () => {
+    const gone = refusal({
       workspace: "old",
       nowhere: "old is not a workspace of this project now, so purlis keeps no grant for it.",
       allows:
         "old is not a workspace of this project now, so purlis keeps no grant for it. So Allow from now on keeps nothing for this item; put it away with Dismiss.",
     });
-    render(<NeedsYouMenu quiet={[]} items={[]} away={[gone]} onPress={() => {}} />);
-    await userEvent.click(hand());
-
-    const group = await screen.findByRole("group", { name: /^steward wanted devops/ });
-    expect(group).toHaveTextContent("So Allow from now on keeps nothing for this item");
+    render(<Updated refused={[gone]} />);
+    const row = updateOf(/steward wanted devops/);
+    expect(row).toHaveTextContent("So Allow from now on keeps nothing for this item");
     expect(
-      within(group).getByRole("menuitem", {
+      within(row).getByRole("button", {
         name: "Allow from now on: steward chats dispatch to devops, for you on this machine, which keeps nothing: old is not a workspace of this project now",
       }),
     ).toBeInTheDocument();
@@ -197,37 +190,23 @@ describe("a dispatch refused while nobody was there, in the title bar's list", (
   it("answers with each of the three, each for its own item", async () => {
     const answered: string[] = [];
     const away = [
-      item(),
-      item({ target: "qa", workspace: null, times: 1 }),
-      item({ asking: "qa", target: "prod" }),
+      refusal(),
+      refusal({ target: "qa", workspace: null, times: 1 }),
+      refusal({ asking: "qa", target: "prod" }),
     ];
-    const said = (one: AwayItem) => `${one.asking}>${one.target}@${one.workspace ?? "root"}`;
-    render(
-      <NeedsYouMenu
-        quiet={[]}
-        items={[]}
-        away={away}
-        onPress={() => {}}
-        onAllowAway={(one) => answered.push(`allow ${said(one)}`)}
-        onDismissAway={(one) => answered.push(`dismiss ${said(one)}`)}
-        onNeverAway={(one) => answered.push(`never ${said(one)}`)}
-      />,
-    );
+    const said = (one: AwayRefusal) => `${one.asking}>${one.target}@${one.workspace ?? "root"}`;
+    render(<Updated refused={away} answer={(one, how) => answered.push(`${how} ${said(one)}`)} />);
+    await read();
 
-    await userEvent.click(hand());
-    await userEvent.click(
-      await screen.findByRole("menuitem", {
-        name: "Dismiss: steward wanted qa while you were away",
-      }),
+    await user.click(
+      screen.getByRole("button", { name: "Dismiss: steward wanted qa while you were away" }),
     );
-    await userEvent.click(hand());
-    await userEvent.click(
-      await screen.findByRole("menuitem", {
+    await user.click(
+      screen.getByRole("button", {
         name: "Never for this pair: qa chats never dispatch to prod, for you on this machine",
       }),
     );
-    await userEvent.click(hand());
-    await userEvent.click(await screen.findByRole("menuitem", { name: ALLOW }));
+    await user.click(screen.getByRole("button", { name: ALLOW }));
 
     expect(answered).toEqual([
       "dismiss steward>qa@root",
@@ -235,213 +214,83 @@ describe("a dispatch refused while nobody was there, in the title bar's list", (
       "allow steward>devops@ide",
     ]);
   });
-
-  it("is counted beside the chats that ask, and is no chat's row", async () => {
-    render(<NeedsYouMenu quiet={[]} items={[chat(3)]} away={[item()]} onPress={() => {}} />);
-
-    await userEvent.click(screen.getByRole("button", { name: "2 things need you" }));
-
-    expect(await screen.findByRole("menuitem", { name: "Go to ide.3 · ide · charter" })).toBe(
-      screen.getAllByRole("menuitem")[0],
-    );
-    expect(screen.getByRole("group", { name: /^steward wanted devops/ })).toBeInTheDocument();
-  });
 });
 
-describe("the keyboard never lands on Allow from now on by itself", () => {
-  it("opens from the keyboard on Dismiss, and Allow is the last answer the arrows reach", async () => {
+describe("a grant is never sent from a row that just moved", () => {
+  it("sends no Allow pressed just after the row was drawn, and says why", async () => {
     const answered: string[] = [];
-    render(
-      <NeedsYouMenu
-        quiet={[]}
-        items={[]}
-        away={[item()]}
-        onPress={() => {}}
-        onAllowAway={() => answered.push("allow")}
-        onDismissAway={() => answered.push("dismiss")}
-      />,
-    );
-    hand().focus();
-
-    await userEvent.keyboard("{Enter}");
-
-    const dismiss = await screen.findByRole("menuitem", { name: /^Dismiss:/ });
-    await waitFor(() => expect(dismiss).toHaveFocus());
-    await userEvent.keyboard("{ArrowDown}");
-    expect(screen.getByRole("menuitem", { name: /^Never for this pair:/ })).toHaveFocus();
-    await userEvent.keyboard("{ArrowDown}");
-    expect(screen.getByRole("menuitem", { name: ALLOW })).toHaveFocus();
+    render(<Updated refused={[refusal()]} answer={(_, how) => answered.push(how)} />);
+    await user.click(screen.getByRole("button", { name: ALLOW }));
     expect(answered).toEqual([]);
+    expect(screen.getByRole("status")).toHaveTextContent("nothing was allowed");
+
+    await read();
+    await user.click(screen.getByRole("button", { name: ALLOW }));
+    expect(answered).toEqual(["allow"]);
   });
 
-  it("Enter twice on the hand dismisses, and grants nothing", async () => {
+  it("sends no Allow pressed just after another update came in above it and moved it", async () => {
     const answered: string[] = [];
-    render(
-      <NeedsYouMenu
-        quiet={[]}
-        items={[]}
-        away={[item(), item({ target: "qa" })]}
-        onPress={() => {}}
-        onAllowAway={() => answered.push("allow")}
-        onDismissAway={(one) => answered.push(`dismiss ${one.target}`)}
-      />,
-    );
-    hand().focus();
-
-    await userEvent.keyboard("{Enter}");
-    await waitFor(() =>
-      expect(screen.getAllByRole("menuitem", { name: /^Dismiss:/ })[0]).toHaveFocus(),
-    );
-    await userEvent.keyboard("{Enter}");
-
-    expect(answered).toEqual(["dismiss devops"]);
-  });
-});
-
-describe("the list holds still while it is open", () => {
-  /** A list the test changes from outside, as the core's event does. */
-  function Changing({ first }: { first: readonly AwayItem[] }) {
-    const [away, setAway] = useState(first);
-    const [answered, setAnswered] = useState<string[]>([]);
-    return (
-      <>
-        <NeedsYouMenu
-          quiet={[]}
-          items={[]}
-          away={away}
-          onPress={() => {}}
-          onAllowAway={(one) => setAnswered((was) => [...was, `allow ${one.target}`])}
-        />
-        <button
-          type="button"
-          data-testid="core-says"
-          onClick={(event) =>
-            setAway(JSON.parse(event.currentTarget.dataset.next ?? "[]") as AwayItem[])
-          }
-        />
-        <output>{answered.join(",")}</output>
-      </>
-    );
-  }
-  /** The core says the list anew, without the pointer or the keyboard going anywhere. */
-  function coreSays(next: readonly AwayItem[]) {
-    const say = screen.getByTestId("core-says");
-    say.dataset.next = JSON.stringify(next);
-    fireEvent.click(say);
-  }
-
-  it("draws no row a chat brought, moves none, and counts none up, until it is closed", async () => {
-    const planner = item({ asking: "planner", target: "reviewer" });
-    const steward = item();
-    render(<Changing first={[planner, steward]} />);
-    await userEvent.click(hand());
-    await screen.findByRole("group", { name: /^planner wanted reviewer/ });
-    const before = rows();
-    expect(before).toEqual([
-      "planner wanted reviewer while you were away",
-      "steward wanted devops while you were away",
-    ]);
-
-    // A chat asks again and for another persona: a new row, another order, a higher count.
-    coreSays([item({ target: "qa" }), { ...steward, times: 99 }, planner]);
-
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: /^3 dispatches were refused/ })).toBeTruthy(),
-    );
-    expect(rows()).toEqual(before);
-    expect(screen.getByRole("group", { name: /^steward wanted devops/ })).toHaveTextContent(
-      "3 times",
-    );
-    // A press where the person aimed is the pair they read.
-    await userEvent.click(
-      screen.getByRole("menuitem", {
-        name: /^Allow from now on: planner chats dispatch to reviewer/,
-      }),
-    );
-    expect(screen.getByRole("status")).toHaveTextContent("allow reviewer");
-
-    // Opened again, it is the core's list as it stands, in the core's order.
-    await userEvent.click(screen.getByRole("button", { name: /^3 dispatches were refused/ }));
-    await screen.findByRole("group", { name: /^steward wanted qa/ });
-    expect(rows()).toEqual([
-      "steward wanted qa while you were away",
-      "steward wanted devops while you were away",
-      "planner wanted reviewer while you were away",
-    ]);
-  });
-
-  it("marks a row that went and keeps it in its place, with its answers off", async () => {
-    const planner = item({ asking: "planner", target: "reviewer" });
-    const answered: string[] = [];
-    function Going() {
-      const [away, setAway] = useState<readonly AwayItem[]>([item(), planner]);
+    function Moving() {
+      const [refused, setRefused] = useState([refusal({ asking: "planner", target: "reviewer" })]);
       return (
         <>
-          <NeedsYouMenu
-            quiet={[]}
-            items={[]}
-            away={away}
-            onPress={() => {}}
-            onAllowAway={(one) => answered.push(`allow ${one.target}`)}
-            onDismissAway={(one) => answered.push(`dismiss ${one.target}`)}
-            onNeverAway={(one) => answered.push(`never ${one.target}`)}
+          <Updated refused={refused} answer={(one, how) => answered.push(`${how} ${one.target}`)} />
+          <button
+            type="button"
+            data-testid="came"
+            onClick={() => setRefused((was) => [refusal({ target: "qa" }), ...was])}
           />
-          <button type="button" data-testid="went" onClick={() => setAway([planner])} />
         </>
       );
     }
-    render(<Going />);
-    await userEvent.click(hand());
-    await screen.findByRole("group", { name: /^steward wanted devops/ });
-    const before = rows();
-
-    fireEvent.click(screen.getByTestId("went"));
-
-    const gone = await screen.findByRole("group", { name: /^steward wanted devops/ });
-    await waitFor(() => expect(gone).toHaveTextContent(GONE));
-    expect(rows()).toEqual(before);
-    expect(gone).not.toHaveTextContent(ALLOWS);
-    for (const answer of within(gone).getAllByRole("menuitem")) {
-      expect(answer).toHaveAttribute("aria-disabled", "true");
-      await userEvent.click(answer);
-    }
+    render(<Moving />);
+    await read();
+    // A chat is refused again for another pair, which comes in above.
+    await user.click(screen.getByTestId("came"));
+    const allow = screen.getByRole("button", {
+      name: /^Allow from now on: planner chats dispatch to reviewer/,
+    });
+    await user.click(allow);
     expect(answered).toEqual([]);
-    // The row under it is where it was, and answers.
-    await userEvent.click(
-      screen.getByRole("menuitem", { name: /^Dismiss: planner wanted reviewer/ }),
-    );
-    expect(answered).toEqual(["dismiss reviewer"]);
+
+    await read();
+    await user.click(allow);
+    expect(answered).toEqual(["allow reviewer"]);
+  });
+
+  it("never lands the keyboard on Allow by itself: it comes in on the update", async () => {
+    const answered: string[] = [];
+    render(<Updated refused={[refusal()]} answer={(_, how) => answered.push(how)} />);
+    await read();
+    await user.tab();
+    expect(document.activeElement?.tagName).not.toBe("BUTTON");
+    await user.keyboard("{Enter}");
+    expect(answered).toEqual([]);
   });
 });
 
-/** The list as the window holds it for one project, with its answers and what was said. */
+/** The list as the window holds it for one project, in the Inbox, with what was said. */
 function Held() {
   const away = useAwayRefusals([PLANE]);
   const [said, setSaid] = useState<string[]>([]);
-  const answer = (how: "allow" | "dismiss" | "never") => (one: AwayItem) =>
-    void away[how](one.plane, one).then((answered) => {
+  const answer = (one: AwayRefusal, how: "allow" | "dismiss" | "never") =>
+    void away[how](PLANE, one).then((answered) => {
       if (answered)
         setSaid((was) => [...was, `${answered.refused ? "refused" : "said"}: ${answered.words}`]);
     });
   return (
     <>
-      <NeedsYouMenu
-        quiet={[]}
-        items={[]}
-        away={(away.held[PLANE] ?? []).map((one) => ({ ...one, plane: PLANE, project: "charter" }))}
-        onPress={() => {}}
-        onAllowAway={answer("allow")}
-        onDismissAway={answer("dismiss")}
-        onNeverAway={answer("never")}
-        onLook={away.read}
-      />
+      <Updated refused={away.held[PLANE] ?? []} answer={answer} />
       <output>{said.join("\n")}</output>
     </>
   );
 }
 
 describe("the list, read from the core and answered through it", () => {
-  const found = () => screen.findByRole("button", { name: /refused while you were away$/ });
+  /** The pairs drawn, top to bottom. */
+  const rows = () =>
+    screen.queryAllByRole("listitem").map((row) => row.querySelector(".ask-says")?.textContent);
 
   it("keeps the core's order, which no later refusal moves", async () => {
     mockIPC((cmd) =>
@@ -451,9 +300,7 @@ describe("the list, read from the core and answered through it", () => {
     );
     render(<Held />);
 
-    await userEvent.click(await found());
-
-    await screen.findByRole("group", { name: /^steward wanted qa/ });
+    await screen.findByText("steward wanted qa while you were away");
     expect(rows()).toEqual([
       "steward wanted devops while you were away",
       "steward wanted qa while you were away",
@@ -474,8 +321,9 @@ describe("the list, read from the core and answered through it", () => {
     });
     render(<Held />);
 
-    await userEvent.click(await found());
-    await userEvent.click(await screen.findByRole("menuitem", { name: ALLOW }));
+    const allow = await screen.findByRole("button", { name: ALLOW });
+    await read();
+    await user.click(allow);
 
     await waitFor(() =>
       expect(screen.getByRole("status")).toHaveTextContent("said: Allowed for me on this machine."),
@@ -485,9 +333,7 @@ describe("the list, read from the core and answered through it", () => {
     );
     // No level and no wildcard is the window's to send.
     expect(asked.some((one) => /allow_dispatch$|allow_dispatch_to_any/.test(one.cmd))).toBe(false);
-    expect(
-      await screen.findByRole("button", { name: "1 dispatch was refused while you were away" }),
-    ).toBeInTheDocument();
+    await waitFor(() => expect(rows()).toEqual(["steward wanted qa while you were away"]));
   });
 
   it("Never for this pair sends the pair, says the core's sentence, and allows nothing", async () => {
@@ -504,8 +350,7 @@ describe("the list, read from the core and answered through it", () => {
     });
     render(<Held />);
 
-    await userEvent.click(await found());
-    await userEvent.click(await screen.findByRole("menuitem", { name: /^Never for this pair:/ }));
+    await user.click(await screen.findByRole("button", { name: /^Never for this pair:/ }));
 
     await waitFor(() =>
       expect(screen.getByRole("status")).toHaveTextContent(
@@ -516,7 +361,7 @@ describe("the list, read from the core and answered through it", () => {
       [{ plane: PLANE, asking: "steward", target: "devops", workspace: "ide" }],
     );
     expect(asked.some((one) => one.cmd === "allow_dispatch_away")).toBe(false);
-    await waitFor(() => expect(screen.queryByRole("button")).toBeNull());
+    await waitFor(() => expect(rows()).toEqual([]));
   });
 
   it("Dismiss puts the item away and allows nothing", async () => {
@@ -533,36 +378,13 @@ describe("the list, read from the core and answered through it", () => {
     });
     render(<Held />);
 
-    await userEvent.click(await found());
-    await userEvent.click(
-      await screen.findByRole("menuitem", { name: /^Dismiss: steward wanted devops/ }),
+    await user.click(
+      await screen.findByRole("button", { name: /^Dismiss: steward wanted devops/ }),
     );
 
-    await waitFor(() => expect(screen.queryByRole("button")).toBeNull());
+    await waitFor(() => expect(rows()).toEqual([]));
     expect(asked).toContain("dismiss_dispatch_away");
     expect(asked).not.toContain("allow_dispatch_away");
-    expect(screen.getByRole("status")).toHaveTextContent("");
-  });
-
-  it("drops a pair you said never to by the time you look, without a word", async () => {
-    let listed = [refusal(), refusal({ target: "qa" })];
-    mockIPC((cmd) => (cmd === "dispatch_away" ? listed : undefined));
-    render(<Held />);
-    expect(
-      await screen.findByRole("button", { name: "2 dispatches were refused while you were away" }),
-    ).toBeInTheDocument();
-
-    // Never for steward to devops, said in Settings since: the core no longer lists it. The
-    // list is read again as the pointer comes to the hand, before it is opened.
-    listed = [refusal({ target: "qa" })];
-    await userEvent.hover(hand());
-    const one = await screen.findByRole("button", {
-      name: "1 dispatch was refused while you were away",
-    });
-    await userEvent.click(one);
-
-    await screen.findByRole("group", { name: /^steward wanted qa/ });
-    expect(screen.queryByRole("group", { name: /^steward wanted devops/ })).toBeNull();
     expect(screen.getByRole("status")).toHaveTextContent("");
   });
 
@@ -580,21 +402,11 @@ describe("the list, read from the core and answered through it", () => {
     });
     render(<Held />);
 
-    await userEvent.click(await found());
-    await userEvent.click(await screen.findByRole("menuitem", { name: ALLOW }));
+    const allow = await screen.findByRole("button", { name: ALLOW });
+    await read();
+    await user.click(allow);
 
     await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent(`refused: ${never}`));
     await waitFor(() => expect(screen.queryByRole("button")).toBeNull());
-  });
-});
-
-describe("the hand's number is the asks registry's (#1690)", () => {
-  it("does not count a dispatch refused while you were away: nothing waits on it", () => {
-    render(<NeedsYouMenu quiet={[]} items={[]} away={[item()]} asked={0} onPress={() => {}} />);
-
-    const button = screen.getByRole("button", {
-      name: "1 dispatch was refused while you were away",
-    });
-    expect(button.querySelector(".needs-you-number")).toBeNull();
   });
 });

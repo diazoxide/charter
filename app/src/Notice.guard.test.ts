@@ -179,10 +179,10 @@ const NOT_NOTICES: Record<string, { count: number; why: string }> = {
     why: ACTION,
   },
   "Inbox.tsx": {
-    count: 2,
+    count: 3,
     why:
       ACTION +
-      ". An ask's answer, or a reply, the source refused: said in that ask's own row, which stays (#1692)",
+      ". An ask's answer, or a reply, the source refused: said in that ask's own row, which stays (#1692); a grant pressed on an update that just moved, said in that update's row (#1693)",
   },
   "KillSwitch.tsx": {
     count: 1,

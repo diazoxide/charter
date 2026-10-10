@@ -141,6 +141,23 @@ function theChip(name: string): HTMLElement {
 }
 
 /** The chat strip as the operator reads it, left to right: a chip by its tooltip. */
+/**
+ * **The Smart close that stopped, as the Inbox lists it** (#1693): an update about its chat,
+ * saying why. The hand's list has no row for it.
+ */
+async function stoppedUpdate(name: RegExp) {
+  // Pressed only where it is not shown already: a press on the view in front puts the side away.
+  if (screen.queryByRole("tabpanel", { name: "Inbox" }) === null)
+    await userEvent.click(
+      within(screen.getByRole("tablist", { name: "Attention" })).getByRole("tab", {
+        name: "Inbox",
+      }),
+    );
+  const inbox = await screen.findByRole("tabpanel", { name: "Inbox" });
+  const updates = await within(inbox).findByRole("region", { name: "Updates" });
+  return within(updates).findByText(name);
+}
+
 const strip = () =>
   within(stripNamed("Tabs"))
     .getAllByRole("tab")
@@ -556,7 +573,7 @@ describe("a chat put into the background (SI-8f)", () => {
     expect(screen.queryByText(/^Session saved — Ship it/)).toBeNull();
   });
 
-  it("comes back in its old place when no record arrives, and the needs-you menu says why", async () => {
+  it("comes back in its old place when no record arrives, and the Inbox says why", async () => {
     coreWith();
     render(<App />);
     await waitFor(() => expect(strip()).toEqual(["one", "two", "three"]));
@@ -571,12 +588,10 @@ describe("a chat put into the background (SI-8f)", () => {
         "No session record arrived from two within five minutes, so it was left open.",
       ),
     ).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "1 chat needs you" }));
     expect(
-      await screen.findByRole("menuitem", {
-        name: /^Go to two: Smart close stopped — no session record arrived/,
-      }),
+      await stoppedUpdate(/^two: Smart close stopped — no session record arrived/),
     ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /needs you/ })).toBeNull();
   });
 
   it("comes back in its old place when the chat ends before its record, listed too", async () => {
@@ -589,10 +604,7 @@ describe("a chat put into the background (SI-8f)", () => {
     await step(1, "ended");
 
     await waitFor(() => expect(strip()).toEqual(["one", "two", "three"]));
-    await userEvent.click(screen.getByRole("button", { name: "1 chat needs you" }));
-    expect(
-      await screen.findByRole("menuitem", { name: /^Go to one: Smart close stopped — it ended/ }),
-    ).toBeInTheDocument();
+    expect(await stoppedUpdate(/^one: Smart close stopped — it ended/)).toBeInTheDocument();
   });
 
   it("comes back in its old place when its queued prompt could not be sent, and says so", async () => {
@@ -608,11 +620,8 @@ describe("a chat put into the background (SI-8f)", () => {
     expect(
       screen.getByText("Smart close could not send two its prompt, so it was left open."),
     ).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "1 chat needs you" }));
     expect(
-      await screen.findByRole("menuitem", {
-        name: /^Go to two: Smart close stopped — its prompt could not be sent/,
-      }),
+      await stoppedUpdate(/^two: Smart close stopped — its prompt could not be sent/),
     ).toBeInTheDocument();
   });
 
@@ -627,10 +636,7 @@ describe("a chat put into the background (SI-8f)", () => {
 
     expect(await screen.findByText("That chat is not open any more.")).toBeInTheDocument();
     await waitFor(() => expect(strip()).toEqual(["one", "two", "three"]));
-    await userEvent.click(screen.getByRole("button", { name: "1 chat needs you" }));
-    expect(
-      await screen.findByRole("menuitem", { name: /^Go to two: Smart close did not start/ }),
-    ).toBeInTheDocument();
+    expect(await stoppedUpdate(/^two: Smart close did not start/)).toBeInTheDocument();
   });
 
   it("comes back in its old place when cancelled, and nothing is listed", async () => {
