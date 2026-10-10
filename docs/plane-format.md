@@ -5142,9 +5142,12 @@ down rather than read off the code.
 
 ### `app/sandbox-blocks.json`
 - **What:** the sandbox blocks this machine's app heard from this project's chats in the last
-  seven days (#1338), each as when, an operation and the kind of path or host, and whether it
-  was purlis's own operation. **No path, argument, host or output**: the chat's hook sorted the
-  block and kept none of it. **Local only, never sent**: `purlis doctor`'s `sandbox blocks` row
+  seven days (#1338), each as when, an operation and the kind of path or host, whether it
+  was purlis's own operation, and the host it named where it named one (#1663, which settled
+  #1353's open question: the host travels). **No path, argument or output**: the chat's hook
+  sorted the block and kept none of it. A host is kept only once it passes the check a grant
+  makes of a host (no wildcard, no loopback, link-local or metadata address, no single-label
+  name), in that check's canonical form. **Local only, never sent**: `purlis doctor`'s `sandbox blocks` row
   counts it, and a Report of a block is drafted from the window's Notice, not from this file.
 - **Format:** JSON, pretty-printed, trailing `\n`, read and replaced whole under purlis's lock on
   the directory (`rewrite::update`). A file that is not this shape reads as empty, and the next
@@ -5156,10 +5159,16 @@ down rather than read off the code.
   "write"|"read"|"connect"|"lookup"|"run"|"file"|"other", "kind": "project-files"|
   "project-state"|"protected-file"|"chat-folder"|"toolchain-cache"|"home"|"temp"|
   "system-temp"|"system-cache"|"system"|"host"|"local-socket"|"certificate-check"|
-  "system-service", "ours": <bool>}`. A block older than seven days is let go of when the next
+  "system-service", "ours": <bool>, "host"?: "<host>[:<port>]", "looked_up"?: "<host>"}`.
+  `host` is only on a refused connection to a host (`connect` + `host`): what the Notice
+  offered to allow. `looked_up` is only on a refused lookup (`lookup` + `host`): the host the
+  program said it looked up, which a program's own printed words named, so **it is never one
+  to offer to allow**. Both are optional; a build that does not know them reads the block
+  without them. A block older than seven days is let go of when the next
   is kept, and at most 1000 are held.
 - **Who writes it:** the app, as each block arrives on the hook channel
-  (`purlis_core::sandboxblock::record`), at most once a minute for one chat's same block and
+  (`purlis_core::sandboxblock::record_naming`), or as purlis's own proxy beside a chat it
+  wraps, or a brokered run's, refuses a host, at most once a minute for one chat's same block and
   ten a minute per chat (`sandboxblock::Throttle`). A sandboxed chat cannot: `.purlis/app/` is the
   integrity class's.
 - **Tier:** Clone state — deleting it empties the doctor's count, and nothing else (ADR 0069).

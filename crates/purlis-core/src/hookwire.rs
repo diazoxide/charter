@@ -1665,10 +1665,12 @@ pub struct SandboxBlocked {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub harness: Option<String>,
     /// What a grant would name, for the Notice's Allow (#1342,
-    /// [`crate::sandboxblock::detect_with_targets`]): a host, or a whole path. Held by the app in
-    /// memory for the Notice and checked again before anything is granted; never kept with the
-    /// block, counted or reported. A chat can send any, which buys only a Notice asking the
-    /// person on its own tab.
+    /// [`crate::sandboxblock::detect_with_targets`]): a host, or a whole path; for a refused
+    /// lookup, the host it was of, shown and never offered (#1663). Held by the app in memory
+    /// for the Notice and checked again before anything is granted. A host is kept with the
+    /// block once checked as a grant checks one ([`crate::sandboxblock::Kept`]); a path never
+    /// is, and neither is counted or reported. A chat can send any, which buys only a Notice
+    /// asking the person on its own tab.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target: Option<String>,
 }

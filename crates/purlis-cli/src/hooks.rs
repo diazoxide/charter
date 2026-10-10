@@ -200,7 +200,7 @@ pub fn blocks(
     let here = Where::here();
     let cwd = absolute(payload["cwd"].as_str().map(str::to_owned)).unwrap_or_else(|| chat.clone());
     let home = absolute(env("HOME"));
-    detect(
+    let found = detect(
         payload,
         &Place {
             root: &here.root,
@@ -208,6 +208,11 @@ pub fn blocks(
             cwd: &cwd,
             home: home.as_deref(),
         },
+    );
+    // A chat purlis wraps has its refused hosts told by purlis's own proxy, by name (#1663).
+    purlis_core::sandboxblock::the_hooks_own(
+        found,
+        env(purlis_core::hookwire::HARNESS_ENV).as_deref(),
     )
 }
 

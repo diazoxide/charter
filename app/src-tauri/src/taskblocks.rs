@@ -112,6 +112,9 @@ impl HeldBlock {
 #[derive(Default)]
 pub struct Blocks {
     held: Mutex<HashMap<u32, Vec<HeldBlock>>>,
+    /// The turn each open chat last had a block Notice raised in, by the count of turns its
+    /// board had then (#1663): what the chat that asked for it is told it waits on.
+    noticed: Mutex<HashMap<u32, u32>>,
 }
 
 impl Blocks {
@@ -164,6 +167,7 @@ impl Blocks {
 
     /// `block` of chat `session` was answered: it is held no longer.
     pub fn answered(&self, session: u32, block: &HeldBlock) {
+        self.noticed().remove(&session);
         let mut held = self.held();
         if let Some(mine) = held.get_mut(&session) {
             mine.retain(|one| one != block);
@@ -176,6 +180,25 @@ impl Blocks {
     /// Chat `session` ended: nothing is held for it.
     pub fn ended(&self, session: u32) {
         self.held().remove(&session);
+        self.noticed().remove(&session);
+    }
+
+    fn noticed(&self) -> std::sync::MutexGuard<'_, HashMap<u32, u32>> {
+        self.noticed.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// A Notice went up for a block of chat `session`, in the turn its board counts as `turn`
+    /// (#1663), whatever the Notice offers.
+    pub fn raised(&self, session: u32, turn: u32) {
+        self.noticed().insert(session, turn);
+    }
+
+    /// **Whether chat `session` waits on the person over a block's Notice** (#1663): a Notice
+    /// went up in the turn its board counts as `turn` now, and that turn has ended
+    /// (`waiting`). A new turn, a start again (whose count begins anew), an answer and an end
+    /// each move it on.
+    pub fn waits_on_a_notice(&self, session: u32, turn: u32, waiting: bool) -> bool {
+        waiting && self.noticed().get(&session) == Some(&turn)
     }
 }
 

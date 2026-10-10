@@ -26,10 +26,19 @@
 //!   said more, and only for a path outside what the chat may write (its folder and the temporary
 //!   folders): inside them, the sandbox did not refuse it.
 //!
-//! The last two are read from a command's **standard error alone** (`PostToolUse`'s
-//! `tool_response.stderr`). A failed command's `error` holds its standard output as well, so on
-//! that path only the violation block is read: a chat that prints a file or greps purlis's own
-//! sources is not refused anything.
+//! The last two are read from a command's **standard error** (`PostToolUse`'s
+//! `tool_response.stderr`) wherever they are on a line. **A refusal of the network is read from
+//! standard output too** (#1663): a command run with `2>&1`, a failed command's `error` (which
+//! holds both streams), and a background command's output file a chat reads back with `cat`.
+//! There a line counts only when it ends where the refusal's own words do
+//! ([`ends_as_a_refusal`]), so a file that quotes them (a test's source, a log about one, a grep
+//! through this module) is not refused anything; and a program's own refusal of a path is never
+//! read there at all.
+//!
+//! **What a command printed on standard output never names a host to allow**: a file or a
+//! server's page can say any host. A refused lookup names the host the program said it looked
+//! up, from either stream ([`detect_with_targets`]): it is shown, and never offered to allow,
+//! since a host the project allows would not let such a program through.
 //!
 //! **Each harness's adapter hands its result over in that shape** (#1353). opencode returns a
 //! shell command's standard output and error as one text, with its exit status beside it. Its
@@ -39,7 +48,10 @@
 //! wider than Claude Code's route: a failing command that prints a refusal's words raises a
 //! block. So from a mixed stream nothing but a violation line names a target for a grant
 //! ([`detect_with_targets`]): such a Notice names no host or path, and the person types it.
-//! Codex arms no hook after a command, so a Codex chat's blocks are not read.
+//! Codex arms no hook after a command. A chat of either runs behind purlis's own proxy
+//! (`crate::sandbox::egress`), which tells the app each host it refused by name, as a brokered
+//! run's does; their hook leaves a refused host to it ([`the_proxy_tells_hosts`]), so one
+//! refusal is one Notice.
 //!
 //! # Whose operation it was
 //!
@@ -52,9 +64,11 @@
 //!
 //! # What is kept of it
 //!
-//! **An operation, a kind, and whether it was purlis's own** ([`Block`]). The path or host is
-//! read here, in the hook, to sort it, and dropped: no path, argument, host name or output
-//! leaves this module.
+//! **An operation, a kind, and whether it was purlis's own** ([`Block`]). A path is read here,
+//! in the hook, to sort it, and goes no further than the Notice's Allow: no path, argument or
+//! output is kept. **The host travels** (#1663, settling #1353): the host a refused connection
+//! or lookup named goes to the app on the block's line, and is kept with the block, checked as
+//! a grant checks a host ([`Kept::host`], [`Kept::looked_up`]).
 //!
 //! The app keeps each block it hears in [`path`] for seven days ([`record`]), which is what
 //! `purlis doctor` counts ([`counts`]), and the window shows it as a notice on the chat's tab.
@@ -384,26 +398,35 @@ pub fn detect_with_targets(
 ) -> Vec<(Block, Option<String>)> {
     let mut found: Vec<(Block, Option<String>)> = Vec::new();
     match &payload["tool_response"] {
-        serde_json::Value::String(mixed) => found.extend(violations(mixed, place)),
+        serde_json::Value::String(mixed) => {
+            found.extend(violations(mixed, place));
+            found.extend(on_stdout(mixed, place));
+        }
         response => {
             if let Some(stderr) = response["stderr"].as_str() {
                 if response["mixed"].as_bool() == Some(true) {
                     // Standard error and output in one text (opencode's, #1353): what the
                     // command printed may name any host or path, so only a violation line,
-                    // which is the sandbox's own, names a target.
+                    // which is the sandbox's own, names a target to allow. A lookup's host is
+                    // said, and never offered.
                     let own = violations(stderr, place);
                     found.extend(on_stderr(stderr, place).into_iter().map(|(block, target)| {
-                        let kept = target.is_some() && own.contains(&(block, target.clone()));
+                        let kept = target.is_some()
+                            && (own.contains(&(block, target.clone())) || names_a_lookup(&block));
                         (block, if kept { target } else { None })
                     }));
                 } else {
                     found.extend(on_stderr(stderr, place));
                 }
             }
+            if let Some(stdout) = response["stdout"].as_str() {
+                found.extend(on_stdout(stdout, place));
+            }
         }
     }
     if let Some(mixed) = payload["error"].as_str() {
         found.extend(violations(mixed, place));
+        found.extend(on_stdout(mixed, place));
     }
     let mut blocks: Vec<(Block, Option<String>)> = Vec::new();
     for (block, target) in found {
@@ -443,13 +466,40 @@ fn target_of(block: &Block, named: &str, place: &Place<'_>) -> Option<String> {
         return None;
     }
     match (block.operation, block.kind) {
-        (Operation::Connect, Kind::Host) => Some(named.to_owned()),
+        (Operation::Connect | Operation::Lookup, Kind::Host) => Some(named.to_owned()),
         (
             Operation::Write | Operation::File,
             Kind::ProjectFiles | Kind::Home | Kind::ToolchainCache | Kind::System,
         ) => Some(lexical(&place.cwd.join(named)).display().to_string()),
         _ => None,
     }
+}
+
+/// Whether `block` is a refused lookup of a host: the one block whose host a program's own
+/// words may name, since it is shown and never offered to allow.
+fn names_a_lookup(block: &Block) -> bool {
+    (block.operation, block.kind) == (Operation::Lookup, Kind::Host)
+}
+
+/// What a command's standard output says of the network (#1663): each line that ends as a
+/// refusal does ([`ends_as_a_refusal`]). It never names a host to allow, only the host a
+/// lookup was of; a violation block and a program's own refusal of a path are never read here.
+fn on_stdout(text: &str, place: &Place<'_>) -> Vec<(Block, Option<String>)> {
+    text.lines()
+        .filter(|line| ends_as_a_refusal(line))
+        .filter_map(network_refusal)
+        .map(|(operation, kind, host)| {
+            let block = Block {
+                operation,
+                kind,
+                ours: false,
+            };
+            let target = host
+                .filter(|_| names_a_lookup(&block))
+                .and_then(|host| target_of(&block, &host, place));
+            (block, target)
+        })
+        .collect()
 }
 
 /// What a command's standard error says: its violation block, else a program's own refusals of
@@ -829,12 +879,14 @@ fn network_refusal_on(line: &str, docker_words: bool) -> Option<(Operation, Kind
     let lower = line.to_ascii_lowercase();
     // A program that looks a host up itself, not through the proxy: the sandbox refuses the
     // lookup, and macOS's resolver says only that the name is not known (`EAI_NONAME`), in its
-    // words or curl's (#1631). Allowing the host would not let such a program through, so
-    // nothing is named to grant.
+    // words, curl's, Go's or Node's (#1631, #1663). Allowing the host would not let such a
+    // program through, so the host it names is said and never offered ([`looked_up`]).
     if lower.contains("nodename nor servname provided, or not known")
         || lower.contains("could not resolve host: ")
+        || (lower.contains("lookup ") && lower.contains(": no such host"))
+        || lower.contains("getaddrinfo enotfound ")
     {
-        return Some((Operation::Lookup, Kind::Host, None));
+        return Some((Operation::Lookup, Kind::Host, looked_up(line)));
     }
     // A local socket: Go's dial refused by the sandbox (`EPERM`), on any platform; or Docker's
     // client in its own words where the sandbox says them (#1637). A socket's own file mode
@@ -844,6 +896,106 @@ fn network_refusal_on(line: &str, docker_words: bool) -> Option<(Operation, Kind
         && lower.contains("permission denied while trying to connect to the docker")
         && !lower.contains("connect: permission denied");
     (eperm || docker).then_some((Operation::Connect, Kind::LocalSocket, None))
+}
+
+/// The host a refused lookup's line names, in whichever program's words: psql's quoted
+/// `host name "h"`, ssh's `hostname h:`, curl's and git's `host: h`, Go's `lookup h:` or
+/// `lookup h on …`, Node's `ENOTFOUND h`. None where it names none, or where the word there
+/// could be no host ([`a_host_word`]).
+fn looked_up(line: &str) -> Option<String> {
+    let lower = line.to_ascii_lowercase();
+    let after = |marker: &str| -> Option<&str> {
+        let at = lower.rfind(marker)? + marker.len();
+        Some(&line[at..])
+    };
+    let word = if let Some(rest) = after("could not translate host name \"") {
+        rest.split('"').next()
+    } else if let Some(rest) = after("could not resolve hostname ") {
+        rest.split(':').next()
+    } else if let Some(rest) = after("could not resolve host: ") {
+        rest.split_whitespace().next()
+    } else if let Some(rest) = after("getaddrinfo enotfound ") {
+        rest.split_whitespace().next()
+    } else if let Some(rest) = after("lookup ") {
+        rest.split([':', ' ']).next()
+    } else {
+        None
+    }?;
+    let word = word.trim().trim_end_matches(['.', ',', ';']);
+    a_host_word(word).then(|| word.to_owned())
+}
+
+/// Whether `word` could be a host name, with a port or not: letters, digits, dots and hyphens,
+/// a colon before a port, and no longer than a name may be. What the app shows is checked again
+/// as a grant checks a host.
+fn a_host_word(word: &str) -> bool {
+    !word.is_empty()
+        && word.len() <= 260
+        && word.contains(|c: char| c.is_ascii_alphanumeric())
+        && word
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | ':'))
+}
+
+/// **Whether `line` ends where a refusal's own words do**: how a line of standard output is
+/// read (#1663), so a file that quotes the words is not a refusal. The words that end a
+/// refusal (macOS's resolver, Go's, a refused socket, a proxy's), else a host word right after
+/// the words that name one (curl's `host:`, Node's `ENOTFOUND`), else Docker's own sentence
+/// opening the line. A full stop after them is the program's.
+fn ends_as_a_refusal(line: &str) -> bool {
+    let lower = line.trim().trim_end_matches('.').to_ascii_lowercase();
+    const ENDINGS: [&str; 6] = [
+        "nodename nor servname provided, or not known",
+        ": no such host",
+        "connect: operation not permitted",
+        "connect tunnel failed, response 403",
+        "blocked by network allowlist",
+        "or host of this project lists it",
+    ];
+    if ENDINGS.iter().any(|ending| lower.ends_with(ending)) {
+        return true;
+    }
+    let host_last = ["could not resolve host: ", "getaddrinfo enotfound "]
+        .iter()
+        .any(|marker| {
+            lower
+                .rsplit_once(marker)
+                .is_some_and(|(_, rest)| a_host_word(rest.trim()))
+        });
+    if host_last {
+        return true;
+    }
+    let opening = lower
+        .strip_prefix("docker: ")
+        .or_else(|| lower.strip_prefix("got "))
+        .unwrap_or(&lower);
+    opening.starts_with("permission denied while trying to connect to the docker")
+}
+
+/// **Whether purlis's own proxy tells the app each host a chat of `harness` was refused**
+/// (#1663): a harness purlis wraps (Codex, opencode) reaches the network only through it
+/// (`crate::sandbox::egress`), and the app hears its refusals by name. Such a chat's hook leaves
+/// a refused host to it, so one refusal is one Notice; a lookup or a socket it still reads.
+pub fn the_proxy_tells_hosts(harness: Option<&str>) -> bool {
+    matches!(
+        harness.and_then(crate::harness::Harness::of_kind),
+        Some(crate::harness::Harness::Codex | crate::harness::Harness::Opencode)
+    )
+}
+
+/// What a block hook of a chat of `harness` tells the app of `found`: all of it, but for a
+/// refused host where purlis's own proxy tells that itself ([`the_proxy_tells_hosts`]).
+pub fn the_hooks_own(
+    found: Vec<(Block, Option<String>)>,
+    harness: Option<&str>,
+) -> Vec<(Block, Option<String>)> {
+    if !the_proxy_tells_hosts(harness) {
+        return found;
+    }
+    found
+        .into_iter()
+        .filter(|(block, _)| (block.operation, block.kind) != (Operation::Connect, Kind::Host))
+        .collect()
 }
 
 /// The kind of `path`, read against `place` and never kept.
@@ -1099,12 +1251,52 @@ pub fn path(root: &Path) -> PathBuf {
     crate::names::state(root).join(IN_STATE)
 }
 
-/// One block as the file keeps it: when the app heard it, in seconds since 1970, and the block.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+/// One block as the file keeps it: when the app heard it, in seconds since 1970, the block,
+/// and the host it named (#1663). Each host is checked as a grant checks one
+/// (`crate::sandbox::grant::host`) and kept in its canonical form; a wildcard, a path or a word
+/// that is no host is never kept.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Kept {
     pub at: u64,
     #[serde(flatten)]
     pub block: Block,
+    /// For a refused connection to a host: the host, and its port where one was named, that a
+    /// grant would name. What the Notice offered to allow.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
+    /// For a refused lookup: the host the program said it looked up. **Never one to offer to
+    /// allow**: a program's own printed words named it, so it is untrusted, and allowing it
+    /// would not let that program through. A reader shows it as text and offers nothing on it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub looked_up: Option<String>,
+}
+
+/// **`target` as a host a block may name**, in the canonical form a grant names it, or None:
+/// what passes the grant's check of a host and is no wildcard (a real refusal names one host).
+pub fn named_host(target: &str) -> Option<String> {
+    crate::sandbox::grant::host(target)
+        .ok()
+        .map(|host| host.to_string())
+        .filter(|host| !host.starts_with('*'))
+}
+
+impl Kept {
+    /// `block`, heard at `at`, naming `target` as its line did: a host kept where the block is
+    /// of a host and `target` is one ([`named_host`]).
+    pub fn of(block: &Block, target: Option<&str>, at: u64) -> Self {
+        let host = target.and_then(named_host);
+        let (host, looked_up) = match (block.operation, block.kind) {
+            (Operation::Connect, Kind::Host) => (host, None),
+            (Operation::Lookup, Kind::Host) => (None, host),
+            _ => (None, None),
+        };
+        Self {
+            at,
+            block: *block,
+            host,
+            looked_up,
+        }
+    }
 }
 
 /// The file's shape. Each block is read on its own, as `reopen`'s `lenient` reads a field: one
@@ -1125,6 +1317,17 @@ fn heard_at(entry: &serde_json::Value) -> Option<u64> {
 /// every block older than [`KEPT_FOR_SECS`]. Written by the app, under purlis's lock on the
 /// directory; a sandboxed chat cannot write it (the integrity class's `.purlis/app/`).
 pub fn record(root: &Path, block: &Block, at: u64) -> std::io::Result<()> {
+    record_naming(root, block, None, at)
+}
+
+/// [`record`], keeping the host `target` names with the block where it is one ([`Kept::of`]).
+pub fn record_naming(
+    root: &Path,
+    block: &Block,
+    target: Option<&str>,
+    at: u64,
+) -> std::io::Result<()> {
+    let kept = Kept::of(block, target, at);
     let path = path(root);
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
@@ -1138,7 +1341,7 @@ pub fn record(root: &Path, block: &Block, at: u64) -> std::io::Result<()> {
             heard_at(entry).is_some_and(|then| then.saturating_add(KEPT_FOR_SECS) > at)
         });
         held.blocks
-            .push(serde_json::to_value(Kept { at, block: *block }).map_err(std::io::Error::other)?);
+            .push(serde_json::to_value(&kept).map_err(std::io::Error::other)?);
         let over = held.blocks.len().saturating_sub(AT_MOST_KEPT);
         held.blocks.drain(..over);
         serde_json::to_string_pretty(&held)
@@ -1192,3 +1395,7 @@ pub fn counts(root: &Path, now: u64) -> Vec<Count> {
 #[cfg(test)]
 #[path = "sandboxblock_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "sandboxblock_network_tests.rs"]
+mod network_tests;

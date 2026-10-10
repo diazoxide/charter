@@ -653,6 +653,33 @@ fn a_chat_is_told_once_at_its_next_turn_that_a_task_of_its_waits_on_the_person()
 }
 
 #[test]
+fn a_chat_is_told_that_a_task_of_its_waits_on_the_person_over_a_sandbox_block() {
+    // #1663: a task's sandbox block puts a Notice on its tab, and the task waits for the
+    // person's answer; the chat that asked for it is told so, in fixed words.
+    let mut known = a_session_with_tasks();
+    let mut told = told_at_start(&known, 1);
+    known[2].asking = Some(Prompt::SandboxBlock);
+
+    let said = turn(&known, 1, &mut told).expect("a line");
+    assert!(
+        said.contains("task 'sweep' is waiting on the person to answer a sandbox block's Notice"),
+        "{said}"
+    );
+    assert_eq!(turn(&known, 1, &mut told), None, "once");
+}
+
+#[test]
+fn a_prompt_a_newer_app_names_reads_as_another_prompt() {
+    let read: Waiting =
+        serde_json::from_str(r#"{"name":"sweep","prompt":"something_new"}"#).expect("read");
+    assert_eq!(read.prompt, Prompt::Other);
+    assert_eq!(
+        serde_json::to_string(&Prompt::SandboxBlock).expect("json"),
+        r#""sandbox_block""#
+    );
+}
+
+#[test]
 fn only_the_chat_that_asked_for_a_task_is_told_it_waits_on_the_person() {
     let mut known = a_session_with_tasks();
     known[3].asking = Some(Prompt::Permission);
