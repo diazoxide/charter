@@ -602,6 +602,7 @@ fn referrers(root: &Path, name: &str, before: &str, after: &str) -> Vec<Referrer
                 // This file's own default is written with the rename; the project's is every
                 // teammate's, and a rename on this machine never rewrites it.
                 follows: which == Which::Local,
+                elsewhere: None,
             });
         }
     }

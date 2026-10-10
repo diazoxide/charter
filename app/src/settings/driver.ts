@@ -80,8 +80,16 @@ export function entryOf(op: EntryOp): string | undefined {
 }
 
 /** Something that uses an entry, which stops its removal, and the group it is changed in;
- *  `follows`: a rename everywhere changes it too (#1380). */
-export type EntryReferrer = { what: string; group: string | null; follows: boolean };
+ *  `follows`: a rename everywhere changes it too (#1380). `level` and `target` say where it is
+ *  changed when that is not the entry's own level (#1241): a persona's tab, another workspace's
+ *  settings. Both absent or null: at the entry's own level, as before. */
+export type EntryReferrer = {
+  what: string;
+  group: string | null;
+  follows: boolean;
+  level?: "project" | "workspace" | "persona" | "you" | null;
+  target?: string | null;
+};
 
 /** Why an add or a remove wrote nothing: by field, by what uses the entry, and for the file. */
 export type EntryRefusal = {
@@ -128,6 +136,8 @@ export type Wrote<T> = { saved: T } | { refused: string[] };
 /** What the driver answers once the level has been read: its files, and what to do with a setting. */
 export type Driven<T> = {
   state: "read";
+  /** The project the level is of: where a link out of what it draws is followed. */
+  plane: PlaneId;
   /** The level as the last read or write left it. */
   now: T;
   files: Files;
@@ -538,6 +548,7 @@ export function useSettingsDriver<T>(target: string, level: Level<T>): Driver<T>
   if ("trouble" in now) return { state: "trouble", trouble: now.trouble };
   return {
     state: "read",
+    plane,
     now: now.ok,
     files: level.files(now.ok),
     pending,

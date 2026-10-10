@@ -5,7 +5,14 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { SettingsTab } from "./SettingsTab";
 import { forgetThisLaunch } from "../regions";
 import { GLOBAL } from "../windowprefs";
-import { forgetGroups, linkToGroup, settingsPlace } from "./links";
+import {
+  forgetGroups,
+  linkToGroup,
+  settingsPlace,
+  SETTINGS_ACTION,
+  showPersona,
+  type SettingsActionAsk,
+} from "./links";
 import { profileCommand, profilePage } from "./profileAddress";
 import type {
   EntryReferrer,
@@ -458,6 +465,35 @@ describe("Remove a profile", () => {
     expect(names()).toEqual(["work", "alt"]);
     await userEvent.click(within(said).getByRole("button", { name: "Fix it in Settings" }));
     expect(shown()).toHaveAccessibleName("Harness & profiles");
+  });
+
+  it("is refused while a persona names it, with a link to that persona's tab (#1380, #1241)", async () => {
+    const persona: EntryReferrer = {
+      what: "profile: work in personas/devops/persona.md starts the chats dispatched to devops on it.",
+      group: null,
+      follows: false,
+      level: "persona",
+      target: "devops",
+    };
+    core({ used: (name) => (name === "work" ? [persona] : []) });
+    const followed: SettingsActionAsk[] = [];
+    const heard = (event: Event) => followed.push((event as CustomEvent<SettingsActionAsk>).detail);
+    window.addEventListener(SETTINGS_ACTION, heard);
+    try {
+      await atProject();
+      await open("work");
+
+      await userEvent.click(screen.getByRole("button", { name: "Remove work" }));
+
+      const said = await within(screen.getByRole("group", { name: "work" })).findByRole("alert");
+      expect(said).toHaveTextContent(persona.what);
+      expect(within(said).queryByRole("button", { name: "Fix it in Settings" })).toBeNull();
+      await userEvent.click(within(said).getByRole("button", { name: "Show devops" }));
+      expect(followed).toEqual([{ plane: PLANE, action: showPersona("devops") }]);
+      expect(shown()).toHaveAccessibleName("work");
+    } finally {
+      window.removeEventListener(SETTINGS_ACTION, heard);
+    }
   });
 });
 
