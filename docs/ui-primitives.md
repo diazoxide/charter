@@ -1019,6 +1019,11 @@ a chat; and it is not a button inside an option, which a listbox cannot hold. En
 opens the hit. `Shift+Enter` is the one plain modifier on Enter the listbox had free: the arrows
 step through the hits, so it walks nothing the way it does in a chat's find bar.
 
+**A file or folder row's menu has *Add to a chat's context* too** (#1151), so the keyboard reaches
+it with Shift+F10 or the menu key. The row's menu has closed by the time it runs, so the same
+chat picker (`ChatsToPick`) is drawn in a dialog (`AddToAChat.tsx`), the keyboard on its first
+chat, and Escape or Cancel closes it with nothing typed.
+
 **The keys for the chats inside a tab take nothing either** (#1487, `taskKeys.taskKeyOf`).
 
 |                                                               | On a Mac      | Everywhere else                 |

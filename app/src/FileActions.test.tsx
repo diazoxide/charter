@@ -35,21 +35,38 @@ const ALPHA = `${PLANE}/workspaces/alpha`;
 
 type Asked = { cmd: string; args: Record<string, unknown> };
 
+/** A chat open in the workspace, for the rows that hand a reference to one. */
+const CHAT = {
+  session: 1,
+  name: "1",
+  cwd: ALPHA,
+  harness: "claude",
+  in_front: true,
+  resumed: null,
+  fresh: null,
+  profile: "claude",
+  persona: "steward",
+};
+
 /** One workspace with one clone and one branch, holding `src/` and `README.md`. */
-function core({ refuse }: { refuse?: string } = {}) {
+function core({ refuse, chat = false }: { refuse?: string; chat?: boolean } = {}) {
   const asked: Asked[] = [];
   mockIPC((cmd, args) => {
     const a = (args ?? {}) as Record<string, unknown>;
     asked.push({ cmd, args: a });
     if (cmd === "plane_at_launch") return { plane: PLANE, from: PLANE, why: null };
-    if (cmd === "opened_chats") return [];
+    if (cmd === "opened_chats")
+      return chat ? [{ ...CHAT, unreported: null, guessed: null, pinned: false }] : [];
+    if (cmd === "reference_into_chat") return { kind: "typed", text: "@README.md" };
     if (cmd === "plane_sidebar")
       return {
         root: PLANE,
         personas: ["steward"],
         persona: "steward",
         unfiled: [],
-        workspaces: [{ name: "alpha", path: ALPHA, vision: "", todos: [], chats: [] }],
+        workspaces: [
+          { name: "alpha", path: ALPHA, vision: "", todos: [], chats: chat ? [CHAT] : [] },
+        ],
       };
     if (cmd === "workspace_panels")
       return {
@@ -200,5 +217,46 @@ describe("a file or folder row's actions (FM-10)", () => {
         { plane: PLANE, ...ONE, path: "README.md", line: 1, editor: "zed" },
       ]),
     );
+  });
+
+  it("adds a file to an open chat's context from its row, through the chat picker (#1151)", async () => {
+    const asked = core({ chat: true });
+    render(<App />);
+
+    await fromTheMenu("README.md", "Add to a chat's context");
+
+    const picker = await screen.findByRole("dialog", {
+      name: "Add README.md to a chat's context",
+    });
+    await userEvent.click(within(picker).getByRole("menuitem", { name: /steward/ }));
+
+    await waitFor(() =>
+      expect(asks(asked, "reference_into_chat")).toEqual([
+        expect.objectContaining({
+          plane: PLANE,
+          ...ONE,
+          path: "README.md",
+          lines: null,
+          session: 1,
+        }),
+      ]),
+    );
+    expect(
+      await screen.findByText(/Typed @README\.md into .*Nothing was sent\./),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("says no chat is open, and types nothing, where the project has none", async () => {
+    const asked = core();
+    render(<App />);
+
+    await fromTheMenu("src", "Add to a chat's context");
+
+    const picker = await screen.findByRole("dialog", { name: "Add src/ to a chat's context" });
+    expect(within(picker).getByRole("status")).toHaveTextContent(/No chat is open/);
+    await userEvent.click(within(picker).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(asks(asked, "reference_into_chat")).toEqual([]);
   });
 });

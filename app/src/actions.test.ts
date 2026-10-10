@@ -56,6 +56,7 @@ import {
   besideId,
 } from "./actions";
 import { ASK_LOCKED_ID, askId, askRows, inPalette } from "./actions";
+import { NO_LINK_FOLLOWED } from "./actions";
 import { ANSWER_SAYS, BRIEF_SAYS, answerId, answerRows, briefId, briefRows } from "./actions";
 import type { ListedChat } from "./chatsTree";
 import {
@@ -274,6 +275,9 @@ function doing(): Doing & { calls: string[] } {
     startChatHere: vi.fn(async (at: BranchPath) => {
       calls.push(`startChatHere:${at.repo}/${at.piece ?? ""}:${at.path}`);
       return { ok: true as const };
+    }),
+    addToChat: vi.fn((at: BranchPath, folder: boolean) => {
+      calls.push(`addToChat:${at.repo}/${at.piece ?? ""}:${at.path},${folder}`);
     }),
   };
 }
@@ -2684,6 +2688,7 @@ describe("a branch's file and folder rows (FM-10)", () => {
       revealSaid(navigator.platform),
       "Open in your editor",
       "Start a chat here",
+      "Add to a chat's context",
     ]);
   });
 
@@ -2694,6 +2699,7 @@ describe("a branch's file and folder rows (FM-10)", () => {
       revealSaid(navigator.platform),
       "Open a shell tab here",
       "Start a chat here",
+      "Add to a chat's context",
     ]);
   });
 
@@ -2720,6 +2726,7 @@ describe("a branch's file and folder rows (FM-10)", () => {
       "openInEditor",
       "shellInFolder",
       "startChatHere",
+      "addToChat",
     ]);
     for (const row of every) {
       expect(row.title).not.toMatch(writes);
@@ -2744,8 +2751,10 @@ describe("a branch's file and folder rows (FM-10)", () => {
       [revealSaid(navigator.platform), false],
       ["Open in your editor", true],
       ["Start a chat here", false],
+      ["Add to a chat's context", false],
     ]);
     expect(link[1].reason).toMatch(/follows no link/);
+    expect(link[5].reason).toBe(NO_LINK_FOLLOWED);
   });
 
   it("keeps your editor on a file that does not open, with the tree's reason", () => {
@@ -2774,12 +2783,41 @@ describe("a branch's file and folder rows (FM-10)", () => {
       "revealPath:svc/fix-it:src/lib.rs",
       "openInEditor:svc/fix-it:src/lib.rs,1",
       "startChatHere:svc/fix-it:src/lib.rs",
+      "addToChat:svc/fix-it:src/lib.rs,false",
       "copyPath:svc/fix-it:src,false",
       "copyPath:svc/fix-it:src,true",
       "revealPath:svc/fix-it:src",
       "shellInFolder:svc/fix-it:src",
       "startChatHere:svc/fix-it:src",
+      "addToChat:svc/fix-it:src,true",
     ]);
+  });
+
+  it("opens your editor at the line last read in the file's preview (#1143)", async () => {
+    const hands = doing();
+    const read = fileRows({ on: "file", at: at("src/lib.rs"), kind: "file", line: 42 });
+    const editor = read.find((row) => row.does.verb === "openInEditor");
+
+    expect(editor?.note).toBe("At line 42, where its preview was last read.");
+    if (editor) await perform(editor, hands);
+
+    expect(hands.calls).toEqual(["openInEditor:svc/fix-it:src/lib.rs,42"]);
+  });
+
+  it("opens your editor at line 1, saying nothing more, where the preview was not read", () => {
+    for (const line of [undefined, 1]) {
+      const editor = fileRows({ on: "file", at: at("src/lib.rs"), kind: "file", line }).find(
+        (row) => row.does.verb === "openInEditor",
+      );
+      expect(editor?.does).toMatchObject({ line: 1 });
+      expect(editor?.note).toBeUndefined();
+    }
+  });
+
+  it("offers the branch's own folder no Add to a chat's context, as it offers no chat", () => {
+    const own = fileRows({ on: "file", at: at(""), kind: "folder" });
+
+    expect(verbs(own)).not.toContain("addToChat");
   });
 });
 
