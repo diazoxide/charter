@@ -28,6 +28,10 @@
 //!   handed-off chat came from, each view tab's strip, and the key of every view keyed by the
 //!   workspace's name (#1248) — so a relaunch reopens them under the new name.
 //! - this machine's pins (`machine.rs`), which would otherwise dangle.
+//! - the work link log (ADR 0088 §2): a chat or the workspace linked to one of its todos names
+//!   it by a `todo:<workspace>/<stem>` key, which is never rewritten. Each such key gets a
+//!   `renamed` alias to the same todo under the new name ([`crate::work::log::follow_rename`]),
+//!   so every link still reaches it.
 //!
 //! # What does NOT follow: a harness's own conversation files
 //!
@@ -332,6 +336,7 @@ enum Step {
     Live,
     Pointers,
     State,
+    Links,
     Reopen,
     Pins,
 }
@@ -657,6 +662,18 @@ fn finish(request: &Request, say: Sink) -> u8 {
     if crashed(Step::State) {
         return 1;
     }
+    let links_left_behind = match follow_in_links(root, old, new, config_root) {
+        Ok(followed) => followed.refused.len(),
+        Err(why) => {
+            left.push(format!(
+                "the work links to the todos of '{old}' were not carried to '{new}' ({why})"
+            ));
+            0
+        }
+    };
+    if crashed(Step::Links) {
+        return 1;
+    }
     if let Err(why) = follow_in_reopen(root, &moved, config_root) {
         left.push(format!(
             "the app's record ({}) still names '{old}' ({why})",
@@ -690,6 +707,13 @@ fn finish(request: &Request, say: Sink) -> u8 {
         say(Say::Warn(stale));
     }
     say(Say::Done(format!("Renamed workspace '{old}' to '{new}'.")));
+    if links_left_behind > 0 {
+        say(Say::Warn(format!(
+            "The work links to {links_left_behind} todo(s) of '{new}' still resolve under \
+             '{old}': it was called '{new}' before, and an alias back to a name a key left \
+             would close a cycle."
+        )));
+    }
     if grants_left > 0 {
         say(Say::Warn(crate::dispatchwithin::left_behind_said(
             grants_left,
@@ -981,6 +1005,27 @@ fn rename_pointers(root: &Path, old: &str, new: &str) -> Vec<String> {
         }
     }
     left
+}
+
+/// The work link log follows the rename (ADR 0088 §2): each `todo:` key of the old name that a
+/// log names gets a `renamed` alias to the same todo under the new name, written to this
+/// device's log of the renamed workspace. A key aliased already is left alone, so a rename
+/// finished after a crash writes each alias once. The device id is asked only when there is an
+/// alias to write.
+fn follow_in_links(
+    root: &Path,
+    old: &str,
+    new: &str,
+    config_root: Option<&Path>,
+) -> std::io::Result<crate::work::log::Followed> {
+    let device = || match config_root {
+        Some(config) => crate::machine::device_id(config),
+        None => Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "there is no config home to keep this device's id in",
+        )),
+    };
+    crate::work::log::follow_rename(root, old, new, &device, chrono::Utc::now())
 }
 
 /// The state charter keeps under the workspace's name in `.charter/`, moved to the new one.
