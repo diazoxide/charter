@@ -2838,6 +2838,22 @@ pub fn run() {
                     vaults::window_gone(window, window.label());
                     windows::destroyed(window);
                 }
+                // A window focused is the person coming back to it: every plane watch looks at
+                // its project now, for what macOS's file events are late with (#756), and goes
+                // on looking while a window is shown. Whether one is, a look asks itself.
+                tauri::WindowEvent::Focused(focused) => {
+                    let watches = planewatch::windows();
+                    let app = window.app_handle().clone();
+                    watches.shown_when(move || {
+                        app.webview_windows().values().any(|window| {
+                            window.is_visible().unwrap_or(false)
+                                && !window.is_minimized().unwrap_or(false)
+                        })
+                    });
+                    if *focused {
+                        watches.focused();
+                    }
+                }
                 _ => {}
             }
         })
