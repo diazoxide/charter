@@ -199,6 +199,12 @@ pub fn refused_in_this_chat(ctx: &Ctx, vault: &registry::Vault, reader: Reader) 
         return None;
     }
     let (why, next) = match reader {
+        // The app runs no command for a chat on this system yet ([`NO_WRAP`]).
+        _ if !cfg!(target_os = "macos") => (
+            "purlis cannot yet run a command in a sandbox on this system, so the app runs none \
+             for a chat here",
+            "Run it in a terminal outside the chat.".to_owned(),
+        ),
         Reader::Exec => (
             "the app that started this chat did not take this `secret exec`, so nothing was run",
             "Run it again while the app that started this chat is open.".to_owned(),

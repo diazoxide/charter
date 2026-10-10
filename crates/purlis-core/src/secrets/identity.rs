@@ -504,19 +504,27 @@ pub fn from_keyring(ctx: &Ctx, vault: &Vault, source: &str) -> Result<Option<Str
 /// person (V90a), so `secret exec` with three values asked three times. A [`Ctx`] carries one
 /// of these: it lives as long as the command, or the one request the app serves with it, and a
 /// replaced token is a new item, so it is never read stale. Only a token found is remembered;
-/// a read that found none, or failed, is made again. `Debug` names no token.
+/// a read that found none, or failed, is made again. `Debug` names no token, and each token
+/// it holds is wiped from memory when the context goes.
 #[derive(Clone, Default)]
-pub struct Kept(std::sync::Arc<std::sync::Mutex<BTreeMap<(String, String), String>>>);
+pub struct Kept(std::sync::Arc<std::sync::Mutex<KeptTokens>>);
+
+/// Each kept token read, by `(service, account)`, wiped when it is dropped.
+type KeptTokens = BTreeMap<(String, String), zeroize::Zeroizing<String>>;
 
 impl Kept {
     fn get(&self, service: &str, account: &str) -> Option<String> {
         let kept = self.0.lock().ok()?;
-        kept.get(&(service.to_owned(), account.to_owned())).cloned()
+        kept.get(&(service.to_owned(), account.to_owned()))
+            .map(|token| String::clone(token))
     }
 
     fn put(&self, service: &str, account: &str, token: &str) {
         if let Ok(mut kept) = self.0.lock() {
-            kept.insert((service.to_owned(), account.to_owned()), token.to_owned());
+            kept.insert(
+                (service.to_owned(), account.to_owned()),
+                zeroize::Zeroizing::new(token.to_owned()),
+            );
         }
     }
 }

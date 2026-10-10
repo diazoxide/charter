@@ -94,6 +94,8 @@ The app checks that this chat's persona may use the vault (the vault is tagged f
 user allowed it for that persona on this machine), runs the command in this chat's sandbox, and
 streams the output back with each value's literal text masked. If it is refused with a
 sentence, tell the user that sentence. Do not try to read the vault some other way.
+`secret get` and `secret cp` of a vault held in the system keyring, and anything else that would
+read the keyring, are refused in a sandboxed chat; the refusal names what to run instead.
 
 **When the command cannot reach a host** ("Forbidden", a refused connection) and purlis adds
 that its sandbox refused a connection to a host, that host is not one this chat may reach.
