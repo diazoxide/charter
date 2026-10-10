@@ -158,20 +158,47 @@ pub const AT_ONCE: Duration = Duration::from_secs(1);
 /// still running then, or one that exited `0`, is an editor that opened. **The sentence says
 /// what the editor printed** when it printed something ([`SAID_MOST`] bytes of its standard
 /// error, its first line), so a windowed editor that failed for its own reason (`emacsclient`
-/// with no server) is not told it needs a terminal. Its standard error is read on a thread of
-/// its own for as long as the editor keeps it open, and past what is kept it is read and
-/// dropped, so an editor that writes a lot there is never held up by a full pipe.
+/// with no server) is not told it needs a terminal.
+///
+/// **What the editor prints can never break it** (#1044). On Unix its standard error is a file
+/// with no name: made owner-only and new in charter's own directory of the config home
+/// ([`crate::machine::dir`], which no chat may write), and unlinked before the editor starts.
+/// It is read only when the editor exited at once; otherwise it is emptied and let go. So an
+/// editor that outlives the app goes on writing there, where a pipe whose reader quit would
+/// answer with `EPIPE` or kill it with `SIGPIPE`; what it writes later holds disk space until it
+/// exits, which for a windowed editor is little or nothing. With no such directory, and
+/// off Unix, it is a pipe read on a thread of its own for as long as the editor keeps it open,
+/// and past what is kept it is read and dropped, so an editor that writes a lot there is never
+/// held up by a full pipe.
 pub fn start(program: &str, args: &[OsString]) -> Result<(), String> {
+    start_saying_in(program, args, said_dir().as_deref())
+}
+
+/// [`start`], with what the editor prints kept in an unlinked file made in `private` when there
+/// is one, else read from a pipe.
+fn start_saying_in(program: &str, args: &[OsString], private: Option<&Path>) -> Result<(), String> {
     let found = crate::programs::resolve(program).map_err(|missing| missing.said())?;
     let mut command = std::process::Command::new(&found);
     command
         .args(args)
         .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::piped());
+        .stdout(std::process::Stdio::null());
+    let unnamed = private.and_then(unnamed_in);
+    let said = match unnamed {
+        Some((kept, given)) => {
+            command.stderr(given);
+            Some(Said::Unnamed(kept))
+        }
+        None => {
+            command.stderr(std::process::Stdio::piped());
+            None
+        }
+    };
     let mut child = crate::forklock::spawn(&mut command)
         .map_err(|e| format!("purlis could not start {program}: {e}"))?;
-    let said = child.stderr.take().map(listen);
+    // The editor holds its own copy now; this process keeps only the one it reads.
+    drop(command);
+    let said = said.or_else(|| child.stderr.take().map(|piped| Said::Piped(listen(piped))));
     let (exited, heard) = std::sync::mpsc::channel();
     std::thread::Builder::new()
         .name("your-editor".into())
@@ -189,7 +216,12 @@ pub fn start(program: &str, args: &[OsString]) -> Result<(), String> {
                 .unwrap_or_default();
             Err(exited_at_once(program, status, &printed))
         }
-        _ => Ok(()),
+        _ => {
+            if let Some(said) = said {
+                said.let_go();
+            }
+            Ok(())
+        }
     }
 }
 
@@ -203,14 +235,118 @@ const SAID_CHARS: usize = 300;
 /// How long, at least, an editor that exited is given for what it printed to arrive.
 const SAID_GRACE: Duration = Duration::from_millis(100);
 
+/// Where an editor's standard error goes, to be read if it exits at once.
+enum Said {
+    /// A file with no name, which the editor holds as its standard error (Unix).
+    Unnamed(std::fs::File),
+    /// A pipe, read on a thread of its own.
+    Piped(Listening),
+}
+
+impl Said {
+    /// What the editor printed, up to [`SAID_MOST`] bytes. A pipe is waited on until the editor
+    /// closes it or `within` passes; a file holds already all that an exited editor wrote.
+    fn by(self, within: Duration) -> Vec<u8> {
+        match self {
+            Said::Unnamed(file) => read_from_the_start(&file),
+            Said::Piped(listening) => listening.by(within),
+        }
+    }
+
+    /// The editor opened: nothing it prints is read. A file is emptied, so what it printed in
+    /// its first moment is not kept for as long as it runs; a pipe's thread goes on draining it.
+    fn let_go(self) {
+        if let Said::Unnamed(file) = self {
+            let _ = file.set_len(0);
+        }
+    }
+}
+
+/// The first [`SAID_MOST`] bytes of `file`, from its start whatever its offset.
+#[cfg(unix)]
+fn read_from_the_start(file: &std::fs::File) -> Vec<u8> {
+    use std::os::unix::fs::FileExt as _;
+    let mut kept = vec![0u8; SAID_MOST];
+    let mut got = 0;
+    while got < kept.len() {
+        match file.read_at(&mut kept[got..], got as u64) {
+            Ok(0) => break,
+            Ok(n) => got += n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(_) => break,
+        }
+    }
+    kept.truncate(got);
+    kept
+}
+
+/// Off Unix no file is made ([`unnamed_in`]), so there is nothing to read.
+#[cfg(not(unix))]
+fn read_from_the_start(_file: &std::fs::File) -> Vec<u8> {
+    Vec::new()
+}
+
+/// charter's own directory of the config home, where the editor's unnamed file is made: one no
+/// chat may write, so none can place a file there or hold the one made open. `None` when there
+/// is no config home, or it is not a real directory yet (this does not make it), and in a
+/// fenced (test) build whose config home is outside the fence.
+fn said_dir() -> Option<std::path::PathBuf> {
+    let config = crate::machine::config_root_unheld()?;
+    if crate::fence::FENCED && !crate::fence::inside(&config, &crate::fence::fence()) {
+        return None;
+    }
+    let dir = crate::machine::dir(&config);
+    std::fs::symlink_metadata(&dir)
+        .ok()
+        .filter(std::fs::Metadata::is_dir)
+        .map(|_| dir)
+}
+
+/// A file made new and owner-only in `dir`, appended to, and unlinked at once: the copy this
+/// process reads, and the one handed to the editor. `None` when it cannot be made or unlinked,
+/// and the pipe is used instead.
+#[cfg(unix)]
+fn unnamed_in(dir: &Path) -> Option<(std::fs::File, std::process::Stdio)> {
+    use std::os::unix::fs::OpenOptionsExt as _;
+    // A name taken, by a crash's leftover or by chance, is drawn again; a few times is plenty.
+    for _ in 0..4 {
+        let mut bytes = [0u8; 12];
+        getrandom::fill(&mut bytes).ok()?;
+        let name: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+        let path = dir.join(format!(".editor-said-{name}"));
+        let made = std::fs::OpenOptions::new()
+            .read(true)
+            .append(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&path);
+        let file = match made {
+            Ok(file) => file,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(_) => return None,
+        };
+        // Unlinked before the editor starts: a file that kept its name is not used.
+        std::fs::remove_file(&path).ok()?;
+        let given = file.try_clone().ok()?;
+        return Some((file, given.into()));
+    }
+    None
+}
+
+/// Off Unix a file open by a running program cannot be unlinked, so the pipe is used (D-1044-1).
+#[cfg(not(unix))]
+fn unnamed_in(_dir: &Path) -> Option<(std::fs::File, std::process::Stdio)> {
+    None
+}
+
 /// What an editor prints on its standard error, kept up to [`SAID_MOST`] bytes by a thread that
 /// reads it until the editor closes it.
-struct Said {
+struct Listening {
     kept: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
     closed: std::sync::mpsc::Receiver<()>,
 }
 
-impl Said {
+impl Listening {
     /// What was kept, once the editor closed its standard error or `within` passed.
     fn by(self, within: Duration) -> Vec<u8> {
         let _ = self.closed.recv_timeout(within);
@@ -222,7 +358,7 @@ impl Said {
 }
 
 /// Reads `stderr` on a thread of its own until it closes, keeping its first [`SAID_MOST`] bytes.
-fn listen(mut stderr: impl std::io::Read + Send + 'static) -> Said {
+fn listen(mut stderr: impl std::io::Read + Send + 'static) -> Listening {
     let kept = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let (closed, heard) = std::sync::mpsc::channel();
     let keeping = kept.clone();
@@ -246,7 +382,7 @@ fn listen(mut stderr: impl std::io::Read + Send + 'static) -> Said {
             }
             let _ = closed.send(());
         });
-    Said {
+    Listening {
         kept,
         closed: heard,
     }
@@ -356,6 +492,100 @@ mod tests {
     #[test]
     fn an_editor_that_prints_a_lot_is_not_held_up() {
         let said = sh("head -c 300000 /dev/zero | tr '\\0' x >&2; exit 3").unwrap_err();
+
+        assert!(said.contains("with code 3, and said: xxx"), "{said}");
+        assert!(said.ends_with("x…"), "{said}");
+    }
+
+    /// [`start`] with its standard error an unnamed file made in `dir`.
+    fn sh_in(dir: &Path, script: &str) -> Result<(), String> {
+        start_saying_in(
+            "/bin/sh",
+            &[OsString::from("-c"), OsString::from(script)],
+            Some(dir),
+        )
+    }
+
+    /// What `dir` holds by name.
+    fn names_in(dir: &Path) -> Vec<OsString> {
+        std::fs::read_dir(dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect()
+    }
+
+    /// #1044: an editor that outlives what read its standard error (the app quit) and writes
+    /// there then is not killed by `SIGPIPE`: it writes to a file with no name, not a pipe.
+    #[test]
+    fn an_editor_that_writes_after_nothing_reads_it_is_not_killed() {
+        let dir = tempfile::tempdir().unwrap();
+        let alive = dir.path().join("alive");
+        let script = format!(
+            "if [ -p /dev/fd/2 ]; then held=pipe; else held=file; fi; sleep 2; \
+             echo late >&2; echo late again >&2; echo \"$held\" > '{}'",
+            alive.display()
+        );
+
+        sh_in(dir.path(), &script).unwrap();
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(15);
+        while !alive.exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert_eq!(
+            std::fs::read_to_string(&alive).expect("the editor lived past its late writes"),
+            "file\n",
+            "its standard error is a file, never a pipe whose reader can go"
+        );
+    }
+
+    /// The file has no name by the time the editor runs, whether it opened or failed.
+    #[test]
+    fn the_editors_file_is_unlinked_before_it_starts() {
+        let dir = tempfile::tempdir().unwrap();
+        let seen = tempfile::tempdir().unwrap();
+        let listed = seen.path().join("listed");
+        let script = format!("ls -A '{}' > '{}'", dir.path().display(), listed.display());
+
+        sh_in(dir.path(), &script).unwrap();
+        let _ = sh_in(dir.path(), "exit 1").unwrap_err();
+
+        assert_eq!(std::fs::read_to_string(&listed).unwrap(), "");
+        assert_eq!(names_in(dir.path()), Vec::<OsString>::new());
+    }
+
+    /// What an editor printed in the unnamed file is said as from a pipe.
+    #[test]
+    fn an_editor_that_failed_at_once_is_said_by_what_it_wrote_to_its_file() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let said = sh_in(
+            dir.path(),
+            "printf '\\nemacsclient: can'\\''t find socket\\nmore\\n' >&2; exit 1",
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            said,
+            "/bin/sh exited at once, with code 1, and said: emacsclient: can't find socket"
+        );
+        let said = sh_in(dir.path(), "exit 1").unwrap_err();
+        assert!(
+            said.contains("a terminal editor needs a terminal"),
+            "{said}"
+        );
+    }
+
+    /// Only the first [`SAID_MOST`] bytes of the file are read.
+    #[test]
+    fn an_editor_that_wrote_a_lot_to_its_file_is_said_by_its_start() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let said = sh_in(
+            dir.path(),
+            "head -c 300000 /dev/zero | tr '\\0' x >&2; exit 3",
+        )
+        .unwrap_err();
 
         assert!(said.contains("with code 3, and said: xxx"), "{said}");
         assert!(said.ends_with("x…"), "{said}");
