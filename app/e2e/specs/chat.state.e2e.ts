@@ -124,8 +124,9 @@ describe("what a chat is doing", () => {
 
     await until("waiting on you");
 
-    // Queued, in the title bar: a hand and a count (charter-app#249).
-    const hand = await untilTheHandSays(/^1 chat needs you$/);
+    // Queued, in the title bar: a hand and a count (charter-app#249), the asks registry's
+    // (#1690): one thing waits on you.
+    const hand = await untilTheHandSays(/^1 thing waits on you$/);
     await expect(hand).not.toHaveElementClass("muted");
     await expect(hand).toHaveText("1");
     await expect(hand).toHaveAttribute("tabindex", "0");
