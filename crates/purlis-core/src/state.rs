@@ -132,6 +132,12 @@ pub struct Detail {
     /// that does not say, which reads as no: the end of the turn is the person's, as before.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub helpers_at_work: bool,
+    /// On a `Notification`: the harness said it is the nudge of a chat sitting idle at its
+    /// prompt, and not a permission or a question (Claude Code's `notification_type` of
+    /// `idle_prompt`, #1626). Absent from an older hook, which reads the nudge as an ask, as
+    /// before.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub idle: bool,
     /// On a `SessionStart`: the model the harness said the session runs on, as its provider
     /// names it (Claude Code's payload carries `model`). What a commit's `Assisted-by` names
     /// once the app has recorded it for the chat (ADR 0087 §6, #1021). Absent where the harness
@@ -272,6 +278,7 @@ impl Event {
                 Started::Compacted => Session::Compacted,
             }),
             Self::UserPromptSubmit => Said::Turn(Turn::Began),
+            Self::Notification if detail.idle => Said::Turn(Turn::SitsIdle),
             Self::Notification => Said::Ask(Ask::default()),
             Self::SubagentStop => Said::Item(Item::ChildEnded),
             Self::Stop if detail.helpers_at_work => Said::Turn(Turn::AwaitsItsHelpers),
@@ -831,14 +838,14 @@ impl Chat {
                 self.asking = self.asking || self.state == State::Running;
                 self.state = State::Waiting;
                 self.began_past_its_prompt = false;
-                // The nudge of a chat that reported to the chat that asked is not it waiting
-                // on the person (#1448), and neither is the nudge of one that waits on its
-                // tasks or on its asker's answer (#1491). A question mid-turn always is.
-                if self.asking || !(self.reported || waits.on_something()) {
-                    self.needs_you = true;
-                } else if !self.reported {
-                    self.held = true;
-                }
+                self.nudged(waits);
+            }
+            // The nudge the harness says is one, of a chat sitting idle at its prompt: never a
+            // question, even where its turn was last heard running (#1626). A prompt it asked
+            // and still shows stands, as it does under any nudge.
+            Said::Turn(Turn::SitsIdle) => {
+                self.state = State::Waiting;
+                self.nudged(waits);
             }
             // The falling edge: the agent has nothing more to do, so the next move is the
             // operator's. After a `Notification` the STATE does not change and the reason
@@ -872,10 +879,13 @@ impl Chat {
             // next move is nobody's yet. Nothing is raised and nothing it already needed the
             // person for goes. The turn after their end is the one whose `Stop` is the edge,
             // and a harness that wakes it on no such turn still nudges it once it sits idle
-            // (Claude Code's `idle_prompt`, which waits for its background agents).
+            // ([`Turn::SitsIdle`]). A prompt it still shows (a helper's permission, say) is
+            // left standing: the person has it in front of them.
             Said::Turn(Turn::AwaitsItsHelpers) => {
-                self.state = State::Running;
-                self.asking = false;
+                if !self.waits_on_its_prompt() {
+                    self.state = State::Running;
+                    self.asking = false;
+                }
             }
             // Emphatically not `Stop`: a dispatched sub-agent finishing does not end the
             // turn that dispatched it, and a fan-out would blink the chat out of `running`
@@ -895,6 +905,18 @@ impl Chat {
             Said::Plan(_) | Said::Usage(_) => {}
         }
         was != self.seen()
+    }
+
+    /// A nudge reached the chat: a mid-turn ask, or the nudge of a chat left idle. A question
+    /// it asked mid-turn always needs the person. The nudge of a chat that reported to the chat
+    /// that asked is not it waiting on the person (#1448), and neither is the nudge of one that
+    /// waits on its tasks or on its asker's answer (#1491): that end is held.
+    fn nudged(&mut self, waits: Waits) {
+        if self.asking || !(self.reported || waits.on_something()) {
+            self.needs_you = true;
+        } else if !self.reported {
+            self.held = true;
+        }
     }
 
     /// The operator dismissed this chat's request without answering it (charter-app#248).

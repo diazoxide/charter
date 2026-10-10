@@ -80,6 +80,7 @@ fn stop(board: &mut Board, tasks: Option<&[(&str, &str)]>) {
     hear(board, Event::Stop, payload);
 }
 
+/// `n` background agents still running, as `stop` takes them.
 fn agents(n: usize) -> Vec<(&'static str, &'static str)> {
     vec![("subagent", "running"); n]
 }
@@ -136,6 +137,45 @@ fn a_question_while_its_agents_work_still_needs_the_person() {
     );
 
     assert_eq!(board.needs_you(), vec![CHAT]);
+    assert!(board.waits_on_its_prompt(CHAT));
+}
+
+#[test]
+fn a_prompt_a_helper_shows_when_the_turn_ends_stays_in_front_of_the_person() {
+    purlis_core::unsteered!();
+    let mut board = in_a_turn();
+    hear(
+        &mut board,
+        Event::Notification,
+        serde_json::json!({"notification_type": "permission_prompt", "message": "Claude needs your permission to use Bash"}),
+    );
+
+    stop(&mut board, Some(&agents(1)));
+
+    assert_eq!(board.needs_you(), vec![CHAT]);
+    assert!(board.waits_on_its_prompt(CHAT), "the prompt's Notice went");
+}
+
+#[test]
+fn a_chat_its_agents_never_wake_needs_the_person_once_it_sits_idle_and_asks_nothing() {
+    purlis_core::unsteered!();
+    // Its agents were stopped, and no turn of its own followed: Claude Code's idle nudge,
+    // which waits for its background agents, is what is left to say it.
+    let mut board = in_a_turn();
+    stop(&mut board, Some(&agents(4)));
+
+    hear(
+        &mut board,
+        Event::Notification,
+        serde_json::json!({"notification_type": "idle_prompt", "message": "Claude is waiting for your input"}),
+    );
+
+    assert_eq!(board.needs_you(), vec![CHAT]);
+    assert_eq!(board.state(CHAT), State::Waiting);
+    assert!(
+        !board.waits_on_its_prompt(CHAT),
+        "an idle nudge read as a question"
+    );
 }
 
 #[test]
