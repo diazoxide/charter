@@ -2168,6 +2168,14 @@ export function catalogue(now: Now): Offer[] {
     // Of the branch, by its own name, which need not be the folder's; a folder git has on no
     // branch is named as a folder (#989). The name the row carries is the one it shows.
     const shown = cut.branch || cut.piece;
+    // The branch's own folder, placed by the core (#1143): what its *Files* row offers too
+    // (`fileRows` at the empty path), named here because the palette lists every branch's.
+    const own = cut.branch ? `branch ${cut.branch}` : `folder ${cut.piece}`;
+    for (const row of branchFolderRows(cut, own)) {
+      offers.push(
+        noPlane === undefined ? { ...row, name: shown } : cannot(row.id, row.title, noPlane, shown),
+      );
+    }
     const title = cut.branch
       ? `Merge branch ${cut.branch} into ${cut.repo}`
       : `Merge folder ${cut.piece} into ${cut.repo}`;
@@ -2679,6 +2687,13 @@ export function perform(offer: Offer, doing: Doing): Ran | Promise<Ran> {
       doing.quit();
       return DID;
     case "copyPath":
+      // The branch's own folder has no path in it to name (#1143): the sentence names the folder.
+      if (does.at.path === "")
+        return Promise.resolve(doing.copyPath(does.at, does.absolute)).then((ran) =>
+          ran.ok
+            ? { ok: true, said: `Copied the absolute path of ${does.at.piece ?? does.at.repo}.` }
+            : ran,
+        );
       return doing.copyPath(does.at, does.absolute);
     case "revealPath":
       return doing.revealPath(does.at);
@@ -3899,7 +3914,14 @@ export function menuOn(what: MenuOn): { above: string[]; below: string[] } {
     case "worktree": {
       const at = `${what.repo}/${what.piece}`;
       return {
-        above: [`worktree.focus:${at}`, `worktree.files:${at}`, `worktree.merge:${at}`],
+        above: [
+          `worktree.focus:${at}`,
+          `worktree.files:${at}`,
+          `worktree.copypath:${at}`,
+          `worktree.reveal:${at}`,
+          `worktree.shell:${at}`,
+          `worktree.merge:${at}`,
+        ],
         // The discard row is listed and is almost never found: it exists only while a removal
         // of THIS piece has been refused and not answered. That is the whole reason a menu
         // lists ids rather than rows — nothing here has to know when it exists.
@@ -4132,15 +4154,44 @@ export const FILE_VERBS = [
   "startChatHere",
 ] as const;
 
-/** What Reveal is called where the window runs: the file manager's own name. */
-export function revealSaid(platform: string): string {
-  if (platform.startsWith("Mac")) return "Reveal in Finder";
-  if (platform.startsWith("Win")) return "Reveal in File Explorer";
-  return "Reveal in Files";
+/** The file manager's own name where the window runs. */
+function fileManagerOf(platform: string): string {
+  if (platform.startsWith("Mac")) return "Finder";
+  if (platform.startsWith("Win")) return "File Explorer";
+  return "Files";
 }
 
+/** What Reveal is called where the window runs: the file manager's own name. */
+export function revealSaid(platform: string): string {
+  return `Reveal in ${fileManagerOf(platform)}`;
+}
+
+/** The file manager on this platform. */
+const FILE_MANAGER = fileManagerOf(typeof navigator === "undefined" ? "" : navigator.platform);
+
 /** Reveal's words on this platform, said on its row. */
-export const REVEAL_SAID = revealSaid(typeof navigator === "undefined" ? "" : navigator.platform);
+export const REVEAL_SAID = `Reveal in ${FILE_MANAGER}`;
+
+/**
+ * The rows of a branch's own folder (#1143), on its branch row and in the palette: its absolute
+ * path copied, revealed, and a shell tab in it — each at the empty path, which the core places
+ * as the branch's folder itself (`files::place_branch_folder`). No Copy relative path: the
+ * folder's path relative to itself says nothing (D-1143-1). `what` names it, "branch fix/login"
+ * or "folder fix-it".
+ */
+function branchFolderRows(cut: Cut, what: string): Offer[] {
+  const at: BranchPath = { workspace: cut.workspace, repo: cut.repo, piece: cut.piece, path: "" };
+  const id = idOf(cut);
+  return [
+    can(`worktree.copypath:${id}`, `Copy the absolute path of ${what}`, {
+      verb: "copyPath",
+      at,
+      absolute: true,
+    }),
+    can(`worktree.reveal:${id}`, `Reveal ${what} in ${FILE_MANAGER}`, { verb: "revealPath", at }),
+    can(`worktree.shell:${id}`, `Open a shell tab in ${what}`, { verb: "shellInFolder", at }),
+  ];
+}
 
 /** Why a link's row copies only its relative path. */
 export const NO_LINK_FOLLOWED =
@@ -4158,6 +4209,18 @@ export const NO_LINK_FOLLOWED =
 export function fileRows(what: FileOn): Offer[] {
   const { at, kind } = what;
   const key = `${at.workspace}/${at.repo}/${at.piece ?? ""}:${at.path}`;
+  // The branch's own folder, its *Files* row (#1143): placed whole, with no relative path to
+  // copy (D-1143-1) and no chat started on a reference to the whole branch (D-1143-2).
+  if (at.path === "")
+    return [
+      can(`file.copyabsolute:${key}`, "Copy absolute path", {
+        verb: "copyPath",
+        at,
+        absolute: true,
+      }),
+      can(`file.reveal:${key}`, REVEAL_SAID, { verb: "revealPath", at }),
+      can(`file.shell:${key}`, "Open a shell tab here", { verb: "shellInFolder", at }),
+    ];
   const placed = (id: string, title: string, does: Does): Offer =>
     kind === "link" ? cannot(id, title, NO_LINK_FOLLOWED) : can(id, title, does);
   const rows: Offer[] = [
