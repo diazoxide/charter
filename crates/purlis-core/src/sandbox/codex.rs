@@ -547,15 +547,22 @@ pub const OVERLAP: &str = "purlis cannot wrap a Codex chat whose directory holds
                            files, or is inside them";
 
 /// The Seatbelt profile for a chat in `cwd`, with its own temp directory `tmp`, reaching the
-/// network through the proxy on `proxy_port` and reporting on `hook_socket`.
+/// network through its own proxy's `proxy_ports` and reporting on `hook_socket`.
 pub fn profile(
     wrap: &Wrap,
     cwd: &Path,
     tmp: &Path,
-    proxy_port: u16,
+    proxy_ports: &[u16],
     hook_socket: Option<&Path>,
 ) -> Result<String, &'static str> {
-    seatbelt::profile(&wrap.denied, &own(wrap)?, cwd, tmp, proxy_port, hook_socket)
+    seatbelt::profile(
+        &wrap.denied,
+        &own(wrap)?,
+        cwd,
+        tmp,
+        proxy_ports,
+        hook_socket,
+    )
 }
 
 /// What a wrapped Codex keeps for itself.

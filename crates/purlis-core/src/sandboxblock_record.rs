@@ -2,6 +2,11 @@
 //! heard and every **Allowed host** a person added or removed, kept 30 days in purlis's data home
 //! and never in a project, so it is never committed and never sent.
 //!
+//! It also keeps **every connection** purlis's own proxy carried or refused for a chat (#1664):
+//! the host and port, the decision (its `scope`: `open`, `persona`, `you` or `chat` for one let
+//! through, `ask` or `refused` for one refused) and how many connections the line stands for, coalesced by the proxy to a line per host and port a
+//! minute (`sandbox::egress::Tally`), so a chat cannot turn the record over by connecting.
+//!
 //! It is the block store of #1338, moved out of the project's state folder and widened: where
 //! that kept an operation and a kind for `purlis doctor`'s count, a line here also says which
 //! chat it was (its id, its name and its number), the chat's persona, the host and port a
@@ -59,6 +64,8 @@ pub enum Event {
     Remove,
     /// A held connection nobody answered in time (spec #1661 step 4). Not written yet.
     Timeout,
+    /// purlis's own proxy carried a chat's connections to a host (#1664).
+    Connect,
 }
 
 /// How it ended.
@@ -130,6 +137,9 @@ pub struct Entry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub who: Option<String>,
     pub outcome: Outcome,
+    /// For a connection line: how many connections it stands for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub times: Option<u64>,
 }
 
 impl Entry {
@@ -154,6 +164,39 @@ impl Entry {
             scope: None,
             who: None,
             outcome: Outcome::Refused,
+            times: None,
+        }
+    }
+
+    /// `times` connections chat `chat` (as persona `persona`) made to `target` through purlis's
+    /// own proxy, decided `by` (the layer that let them through, or `ask` or `refused`, which
+    /// were refused: each one also raised a Block the first time), told at `at`. A target that is not a host, and
+    /// the hosts past what one tally tells apart, keep none.
+    pub fn connected(
+        target: Option<&str>,
+        by: &str,
+        times: u64,
+        chat: Chat,
+        persona: Option<&str>,
+        at: u64,
+    ) -> Self {
+        Self {
+            at,
+            event: Event::Connect,
+            block: None,
+            what: None,
+            target: target.and_then(super::named_host),
+            looked_up: None,
+            chat,
+            persona: persona.map(str::to_owned),
+            scope: Some(by.to_owned()),
+            who: None,
+            outcome: if matches!(by, "ask" | "refused") {
+                Outcome::Refused
+            } else {
+                Outcome::Allowed
+            },
+            times: Some(times),
         }
     }
 
@@ -178,6 +221,7 @@ impl Entry {
             scope: Some(scope.to_owned()),
             who: Some(WHO.to_owned()),
             outcome: Outcome::Allowed,
+            times: None,
         }
     }
 

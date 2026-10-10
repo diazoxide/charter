@@ -146,7 +146,7 @@ impl HarnessAdapter for Opencode {
             wrap,
             cwd,
             confinement.tmp(),
-            confinement.proxy_port(),
+            &confinement.proxy_ports(),
             at.hook_socket,
         )
         .map_err(|why| crate::sandbox::seatbelt::not_started(lead, why, !at.no_opt_out))?;

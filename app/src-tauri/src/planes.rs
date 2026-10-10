@@ -1992,6 +1992,31 @@ impl Planes {
         if let Some(hear) = held.hooks.block_hearer() {
             held.chats().tell_refusals_to(hear);
         }
+        // Every connection purlis's own proxy carried for a chat it wraps is kept in this
+        // machine's network record (#1664), coalesced by the proxy, under the chat whose port
+        // it came in on. Weak for the handoff's reason.
+        if let Some(network) = self.network.clone() {
+            let plane = id.clone();
+            let weak = Arc::downgrade(&held);
+            held.chats()
+                .tell_connections_to(Arc::new(move |session, who, target, by, times| {
+                    if let Some(strong) = weak.upgrade() {
+                        crate::network::record_connections(
+                            &network,
+                            plane.root(),
+                            strong.chats(),
+                            &crate::network::Connections {
+                                session,
+                                who,
+                                target,
+                                by,
+                                times,
+                            },
+                            crate::sandboxing::now_secs(),
+                        );
+                    }
+                }));
+        }
         // The conversation a chat's own harness moves it onto — the first one Codex or
         // opencode names, a Claude Code `/clear` — is the one the record resumes it by (Q10).
         // Weak for the handoff's reason.
