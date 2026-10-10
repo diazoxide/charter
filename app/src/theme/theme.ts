@@ -16,9 +16,10 @@
  *
  * **Semantic, not palette.** A theme sets `surface.raised`, never `gray-800`. The token names
  * are the contract a theme author writes against, so they are named for what they mean in
- * this window. `needs-you.base` and `danger.base` hold the same value in both built-in
- * themes and are still two tokens, because they are two meanings: one marks a chat that wants
- * the operator, the other marks an answer that cannot be undone. A theme that wanted the
+ * this window. `needs-you.base` and `danger.base` were once one value and are two tokens,
+ * because they are two meanings: one marks a chat that wants the operator, the other marks an
+ * answer that cannot be undone. Each has since moved alone, to clear the contrast its own use
+ * asks for (`docs/design-system.md`). A theme that wanted the
  * first to shout and the second to whisper can say so; a palette token could not.
  *
  * **Values are hex and only hex.** Not a stylistic preference — a theme value is written

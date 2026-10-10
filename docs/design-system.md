@@ -67,8 +67,18 @@ the badge that failed is the count of chats waiting for the operator. `needs-you
 `#b85050` (4.88:1) and the mark on an answer that cannot be undone is untouched. A palette token
 cannot make that move; that is the whole argument for semantic names in one change.
 
+It paid again the other way (#1210). `danger.base` is the _words_ of an answer that ends
+something (`.ends-it` in an `AnswerBar`, a form's `SettingActions` and a menu), and `#c05c5c` on
+the button's `control.base` was **3.73:1**, under the 4.5:1 that text at the window's 14px asks
+for. charter-dark's `danger.base` is now `#c97474`, the same hue made lighter: **4.72:1** on
+`control.base`, 4.94:1 on `danger.surface` (the same button under the pointer, and a highlighted
+menu row), 5.06:1 on a menu's `surface.overlay` and 5.27:1 on the window. `danger.wash` follows
+it, since a wash is its base at a low alpha. The badge kept `#b85050`; charter-light's
+`#a83232` already cleared 4.5 on each of them and did not move.
+
 **Every theme is held to a contrast floor.** `contrast.test.ts` checks each pair that ends up as
-something drawn on something: 4.5:1 for text, 3:1 for the state marks and the sixteen ANSI
+something drawn on something: 4.5:1 for text (AA's floor for text under 24px, or 18.66px bold,
+which a label, a button and a menu row all are), 3:1 for the state marks and the sixteen ANSI
 colours against the terminal's own background. "Complete" is not "legible", and a light theme
 made by inverting a dark one passes every other test in the directory while being unreadable.
 The one exemption is `terminal.ansi.black`, held to 1.5:1 — ANSI black on a dark terminal is dim

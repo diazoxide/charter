@@ -38,6 +38,19 @@ function contrast(a: string, b: string): number {
   return (light + 0.05) / (dark + 0.05);
 }
 
+/**
+ * WCAG 2.1 AA's floor for text of a given size: 3:1 once it is "large" (18pt, which is 24px,
+ * or 14pt bold, which is 18.66px), 4.5:1 under that. A pair that is words is held to the floor
+ * for the size it is drawn at, not to a floor picked for the pair.
+ */
+function aaText(px: number, bold = false): number {
+  return px >= 24 || (bold && px >= 18.66) ? 3 : 4.5;
+}
+
+/** The window's text size (`:root` in App.css, `textSize.DEFAULT_TEXT`): a button's label and
+ *  a menu row are drawn at it, never larger. */
+const WINDOW_TEXT_PX = 14;
+
 /** Every pair that ends up as something drawn on something, and the floor it has to clear. */
 const PAIRS: [Token, Token, number][] = [
   ["text.primary", "surface.base", 4.5],
@@ -88,13 +101,22 @@ const PAIRS: [Token, Token, number][] = [
   ["state.unreadable", "surface.hover", 3],
   ["needs-you.base", "surface.hover", 3],
   ["text.secondary", "surface.hover", 4.5],
-  ["danger.base", "surface.base", 3],
-  // A button that ends something (`.ends-it`) says so in `danger.base` on the button's own
-  // `control.base`: in a form's `.ui-setting-actions` and a question's `AnswerBar` (`.answer`,
-  // #1210).
-  // Held to 3, as `danger.base` on the pane is: the dark theme's pair is 3.73, under the 4.5
-  // body text asks for, and raising it is a palette change, tracked on #1210.
-  ["danger.base", "control.base", 3],
+  // An answer that ends something (`.ends-it`) says so in `danger.base` WORDS, at the window's
+  // text size, so each place it is drawn is held to AA for that size (#1210):
+  // - on the button's own `control.base`, in a form's `.ui-setting-actions` and a question's
+  //   `AnswerBar` (`.answer`);
+  // - on `danger.surface`, the same buttons under the pointer, and a menu's row when it is
+  //   highlighted;
+  // - on `surface.overlay`, a menu's `.menu-row.ends-it`;
+  // - on the window and on a pane (`surface.base`, `surface.raised`), where a choice says it
+  //   needs an approval.
+  // charter-dark's `danger.base` was `#c05c5c`, 3.73:1 on `control.base`; it is lighter now, in
+  // the same hue.
+  ["danger.base", "control.base", aaText(WINDOW_TEXT_PX)],
+  ["danger.base", "danger.surface", aaText(WINDOW_TEXT_PX)],
+  ["danger.base", "surface.overlay", aaText(WINDOW_TEXT_PX)],
+  ["danger.base", "surface.base", aaText(WINDOW_TEXT_PX)],
+  ["danger.base", "surface.raised", aaText(WINDOW_TEXT_PX)],
   // The alerts drawer's marks, on the drawer, and the status line's bell on its button.
   ["state.waiting", "surface.overlay", 3],
   ["state.failed", "surface.overlay", 3],
@@ -150,6 +172,20 @@ const DRAWN: [string, Theme][] = Object.keys(BUILT_IN).flatMap((name) => [
     (colour) => [`${name} tinted ${colour}`, tinted(BUILT_IN[name], colour)] as [string, Theme],
   ),
 ]);
+
+describe("the floor a text pair is held to", () => {
+  it("is AA's: 4.5 under large text, 3 from 24px, or from 18.66px bold", () => {
+    expect(aaText(WINDOW_TEXT_PX)).toBe(4.5);
+    expect(aaText(18.66)).toBe(4.5);
+    expect(aaText(18.66, true)).toBe(3);
+    expect(aaText(24)).toBe(3);
+  });
+
+  it("measures the way WCAG does", () => {
+    expect(contrast("#ffffff", "#000000")).toBeCloseTo(21, 5);
+    expect(contrast("#777777", "#ffffff")).toBeCloseTo(4.48, 2);
+  });
+});
 
 describe.each(DRAWN)("%s can be read", (_name, theme) => {
   it.each(PAIRS)("%s on %s clears %s to 1", (front, back, floor) => {
