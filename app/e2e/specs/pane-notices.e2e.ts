@@ -102,12 +102,16 @@ async function untilShows(index: number, text: string): Promise<void> {
  * Draws a Notice into pane `pane`'s stack, as `Notice at="pane"` draws one: the box, the line
  * (a `status`) with the sentence and one button per way out, and, where `opened`, what a way
  * out opened under it. Answers whether the pane had a stack to draw it into.
+ *
+ * **Then waits for the pane's row to be drawn** (#1647): a row with nothing in it is not drawn,
+ * and the row learns it has a Notice from its stack (`NoticePaneRow`'s observer) and draws
+ * itself on React's next render, not in the same task as the append.
  */
 async function raise(
   pane: number,
   notice: { sentence: string; ways: string[]; opened?: string; also?: Also },
 ): Promise<boolean> {
-  return browser.execute(
+  const drawn = await browser.execute(
     (at: number, sentence: string, ways: string[], opened: string | null, also: Also | null) => {
       const frames = [...document.querySelectorAll(".pane-frame")].filter((frame) =>
         frame.querySelector('[data-testid="pane"]'),
@@ -122,6 +126,9 @@ async function raise(
       };
       const box = el("div", opened === null ? "notice-pane-box" : "notice-pane-box notice-opened");
       box.dataset.raised = "pane-notices.e2e";
+      // As `Notice` marks one with an answer besides Dismiss: what the pane's row stands first
+      // (#1647), so a Notice this file raises is one of the two that stand.
+      if (ways.some((way) => way !== "Dismiss")) box.setAttribute("data-asks", "");
       const line = el("div", "notice notice-pane notice-trouble");
       line.setAttribute("role", "status");
       line.append(el("div", "notice-says", sentence));
@@ -170,7 +177,13 @@ async function raise(
         under.append(report);
         box.append(under);
       }
-      stack.append(box);
+      // Before any Notice the app itself has in this pane (a chat on Linux can have its own),
+      // after the ones this file raised: the pane's order is this file's, and what it measures
+      // stands rather than waiting behind "+N more".
+      const theApps = [...stack.children].find(
+        (one) => (one as HTMLElement).dataset.raised !== "pane-notices.e2e",
+      );
+      stack.insertBefore(box, theApps ?? null);
       return true;
     },
     pane,
@@ -179,6 +192,19 @@ async function raise(
     notice.opened ?? null,
     notice.also ?? null,
   );
+  if (!drawn) return false;
+  await browser.waitUntil(
+    () =>
+      browser.execute((at: number) => {
+        const frames = [...document.querySelectorAll(".pane-frame")].filter((frame) =>
+          frame.querySelector('[data-testid="pane"]'),
+        );
+        const row = frames[at]?.querySelector(".pane-notice-row");
+        return row !== null && row !== undefined && getComputedStyle(row).display !== "none";
+      }, pane),
+    { timeout: 10_000, interval: 50, timeoutMsg: `pane ${pane} never drew its row of Notices` },
+  );
+  return true;
 }
 
 /** Takes away everything this file drew. */
