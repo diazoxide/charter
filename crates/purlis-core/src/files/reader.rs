@@ -355,6 +355,10 @@ pub enum Answer {
     WhatChanged(super::Shown),
     Offered(super::offered::Offered),
     Ignored(super::offered::Ignored),
+    /// To [`Ask::Offered`] and [`Ask::Ignored`] only: gitoxide could not read the branch's
+    /// index, and why (#1130). The asker reads that branch with the hardened git instead, as
+    /// before #1189; no other answer, and no read that ran into a bound, does so.
+    Unindexed(String),
 }
 
 /// One question, as it crosses to the child.
@@ -702,11 +706,9 @@ fn serve() -> i32 {
         Ask::WhatChanged { path } => {
             super::compare::what_changed_here(plane, branch, &path).map(Answer::WhatChanged)
         }
-        Ask::Offered { most } => {
-            super::offered::offered_here(plane, branch, most).map(Answer::Offered)
-        }
+        Ask::Offered { most } => super::offered::offered_here(plane, branch, most),
         Ask::Ignored { paths, folders } => {
-            super::offered::ignored_here(plane, branch, &paths, &folders).map(Answer::Ignored)
+            super::offered::ignored_here(plane, branch, &paths, &folders)
         }
     }
     .map_err(|refused| refused.to_string());
