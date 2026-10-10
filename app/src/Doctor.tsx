@@ -16,6 +16,7 @@ import {
   type DoctorRow,
   type PlaneId,
 } from "./bindings";
+import { AnswerBar } from "./AnswerBar";
 
 /**
  * **`charter doctor`, from inside the window** — the last of ADR 0038's named gaps.
@@ -761,19 +762,19 @@ export function Health({
           )}
           {/* `tabIndex={0}` on both, per `docs/ui-primitives.md` (charter-app#186). This
               dialog has three tabbables when a row is unchecked — the `<summary>` above,
-              `Check again`, and `Close` — and `Check again` sat between the two edges Radix's
+              `Close`, and `Check again` — and `Check again` once sat between the two edges Radix's
               focus scope handles, on an engine that leaves a `<button>` out of the tab
               sequence unless its `tabindex` says otherwise. It could not be reached at all. */}
-          <div className="answer">
-            <button type="button" tabIndex={0} disabled={running} onClick={() => run(true)}>
-              Check again
-            </button>
+          <AnswerBar>
             <Dialog.Close asChild>
               <button type="button" tabIndex={0}>
                 Close
               </button>
             </Dialog.Close>
-          </div>
+            <button type="button" tabIndex={0} disabled={running} onClick={() => run(true)}>
+              Check again
+            </button>
+          </AnswerBar>
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>

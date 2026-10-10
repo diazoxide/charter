@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import * as AlertDialog from "@radix-ui/react-alert-dialog";
 import { commands, type PlaneId } from "./bindings";
+import { AnswerBar } from "./AnswerBar";
 
 /**
  * **Take a repo the workspace names, and this machine has not cloned, out of the workspace**
@@ -82,7 +83,12 @@ export function RemoveFromWorkspace({
               {trouble}
             </p>
           )}
-          <div className="doing">
+          <AnswerBar>
+            <AlertDialog.Cancel asChild>
+              <button type="button" tabIndex={0} ref={cancel} onClick={onClose}>
+                Cancel
+              </button>
+            </AlertDialog.Cancel>
             <button
               type="button"
               className="ends-it"
@@ -92,12 +98,7 @@ export function RemoveFromWorkspace({
             >
               Remove from workspace
             </button>
-            <AlertDialog.Cancel asChild>
-              <button type="button" tabIndex={0} ref={cancel} onClick={onClose}>
-                Cancel
-              </button>
-            </AlertDialog.Cancel>
-          </div>
+          </AnswerBar>
         </AlertDialog.Content>
       </AlertDialog.Portal>
     </AlertDialog.Root>

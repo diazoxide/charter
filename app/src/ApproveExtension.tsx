@@ -1,6 +1,7 @@
 import { useRef } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import type { ExtensionAsk } from "./bindings";
+import { AnswerBar } from "./AnswerBar";
 
 /**
  * What this extension says it brings, what charter will actually do about it, and — in charter's
@@ -99,14 +100,14 @@ export function ApproveExtension({
               leaves a `<button>` out of the tab sequence unless its `tabindex` is written
               down. A consent surface an operator cannot reach with the keyboard is one they
               answer with the mouse or not at all. */}
-          <div className="doing">
-            <button type="button" tabIndex={0} onClick={() => onApprove(ask)}>
-              {ask.first ? "Trust it" : "Trust it anyway"}
-            </button>
+          <AnswerBar>
             <button type="button" tabIndex={0} ref={cancel} onClick={onCancel}>
               Cancel
             </button>
-          </div>
+            <button type="button" tabIndex={0} onClick={() => onApprove(ask)}>
+              {ask.first ? "Trust it" : "Trust it anyway"}
+            </button>
+          </AnswerBar>
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>

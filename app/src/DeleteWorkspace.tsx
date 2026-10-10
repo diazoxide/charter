@@ -1,6 +1,7 @@
 import { useRef } from "react";
 import * as AlertDialog from "@radix-ui/react-alert-dialog";
 import type { AtRisk, Refused } from "./bindings";
+import { AnswerBar } from "./AnswerBar";
 
 /**
  * Deleting a workspace: what goes, what charter can see that would be lost with it, and two
@@ -147,7 +148,12 @@ export function DeleteWorkspace({
             </p>
           )}
 
-          <div className="doing">
+          <AnswerBar>
+            <AlertDialog.Cancel asChild>
+              <button type="button" tabIndex={0} ref={cancel} onClick={onCancel}>
+                Cancel
+              </button>
+            </AlertDialog.Cancel>
             {/* **Before a refusal there is one answer, and it does not force.** After one there
                 is a different answer, and it says what it costs. Never both: a dialog offering
                 "Delete" beside "Delete anyway" is offering to force to somebody who has read
@@ -183,12 +189,7 @@ export function DeleteWorkspace({
                 {discarding(risky)}
               </button>
             )}
-            <AlertDialog.Cancel asChild>
-              <button type="button" tabIndex={0} ref={cancel} onClick={onCancel}>
-                Cancel
-              </button>
-            </AlertDialog.Cancel>
-          </div>
+          </AnswerBar>
         </AlertDialog.Content>
       </AlertDialog.Portal>
     </AlertDialog.Root>

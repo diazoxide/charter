@@ -17,6 +17,7 @@ import { useTabStop } from "./roving";
 import { Field, SettingActions, SettingRow } from "./settings/components";
 import { counted } from "./Vaults";
 import { saidOfTheOldExport, saidOfTheOthers, VaultSignIn } from "./VaultSignIn";
+import { AnswerBar } from "./AnswerBar";
 
 /**
  * **One vault, in a tab of its own** (charter-app#235): its name, its provider and how many
@@ -1161,7 +1162,12 @@ function DeleteDialog({
               {trouble}
             </p>
           )}
-          <div className="doing">
+          <AnswerBar>
+            <AlertDialog.Cancel asChild>
+              <button type="button" tabIndex={0} disabled={busy} ref={cancel}>
+                Cancel
+              </button>
+            </AlertDialog.Cancel>
             <button
               type="button"
               className="ends-it"
@@ -1178,12 +1184,7 @@ function DeleteDialog({
             >
               Delete
             </button>
-            <AlertDialog.Cancel asChild>
-              <button type="button" tabIndex={0} disabled={busy} ref={cancel}>
-                Cancel
-              </button>
-            </AlertDialog.Cancel>
-          </div>
+          </AnswerBar>
         </AlertDialog.Content>
       </AlertDialog.Portal>
     </AlertDialog.Root>

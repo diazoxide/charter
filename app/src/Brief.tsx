@@ -2,6 +2,7 @@ import { createContext, useContext, useEffect, useRef, useState, type ReactNode 
 import * as Dialog from "@radix-ui/react-dialog";
 import { ScrollText } from "lucide-react";
 import { commands, type BriefOf, type PlaneId, type TaskBrief } from "./bindings";
+import { AnswerBar } from "./AnswerBar";
 
 /**
  * **The brief a task was sent, read back** (#1494, V100-45).
@@ -334,7 +335,7 @@ export function BriefPanel({
               )}
             </>
           )}
-          <div className="answer">
+          <AnswerBar>
             <span className="brief-copied" role="status">
               {copied === "sent"
                 ? "Copied, as it was sent."
@@ -377,7 +378,7 @@ export function BriefPanel({
                 Close
               </button>
             </Dialog.Close>
-          </div>
+          </AnswerBar>
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>

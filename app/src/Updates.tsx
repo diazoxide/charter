@@ -7,6 +7,7 @@ import { MidTurn, mightBeMidTurn, type Ending } from "./QuitWarning";
 import { ReleaseNotes } from "./ReleaseNotes";
 import { Choice, SettingActions, SettingRow } from "./settings/components";
 import { channelMoved, useUpdateChannel } from "./updateChannel";
+import { AnswerBar } from "./AnswerBar";
 
 /**
  * **"An update is available", and the pin that drifts** — the two version facts charter ADR
@@ -397,7 +398,7 @@ export function UpdateItem({
                 left `Install`, `Restart to update` and `Check now` in the middle — where Radix's
                 focus scope does nothing and WebKit will not tab to a `<button>` whose
                 `tabindex` is not written down. Installing an update was a mouse-only act. */}
-            <div className="answer">
+            <AnswerBar>
               {state.kind === "offered" && (
                 <button type="button" tabIndex={0} onClick={install}>
                   Install {state.offer.version}
@@ -418,7 +419,7 @@ export function UpdateItem({
                   Close
                 </button>
               </Dialog.Close>
-            </div>
+            </AnswerBar>
           </Dialog.Content>
         </Dialog.Portal>
       </Dialog.Root>
@@ -486,13 +487,13 @@ export function PinItem({ pin, again }: { pin?: PinReport; again: () => void }) 
           {/* `tabIndex={0}`, per `docs/ui-primitives.md` (charter-app#186): the one control
               this dialog has, and WebKit leaves a `<button>` out of the tab sequence unless
               its `tabindex` is written down. */}
-          <div className="answer">
+          <AnswerBar>
             <Dialog.Close asChild>
               <button type="button" tabIndex={0}>
                 Close
               </button>
             </Dialog.Close>
-          </div>
+          </AnswerBar>
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>
