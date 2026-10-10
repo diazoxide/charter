@@ -16,7 +16,7 @@ import type { FinishedTask, Moved, OpenChat } from "./bindings";
 import type { State } from "./chatState";
 import { drawnWith } from "./cascade.testkit";
 import { card, cardOf as cardOfRow, facts, theCard } from "./chatCard.testkit";
-import { CARD_LEAVE_MS } from "./ChatsSection";
+import { CARD_DELAY_MS, CARD_LEAVE_MS, CARD_SKIP_MS } from "./ChatsSection";
 import { forgetThisLaunch } from "./regions";
 import { GLOBAL } from "./windowprefs";
 import type { Shown } from "./shownState";
@@ -1582,6 +1582,28 @@ describe("the Chats view's scope: this tab, the workspace, or all (#1679)", () =
     expect(screen.queryByText(/needs you, outside this tab/)).toBeNull();
   });
 
+  it("stays on This tab when going to a task brings its tab forward, the tab read once it is in front (#1696)", async () => {
+    const { move } = core([
+      ...three(),
+      chat(5, "alpha", { persona: "devops", from: by(3, "task") }),
+    ]);
+    render(<App />);
+    const tree = await section();
+    await waitFor(() => expect(shape(tree)).toHaveLength(4));
+    await pickScope("This tab");
+    await waitFor(() => expect(shape(tree)).toEqual(["1 steward 1", "2 devops 2"]));
+
+    move(5, "waiting", 10, [5]);
+    await screen.findByText("devops 5 needs you, outside this tab.");
+    await userEvent.click(
+      screen.getByRole("button", { name: "Go to devops 5, which needs you outside this tab" }),
+    );
+
+    // Its asker's tab came forward with it: This tab lists it, and is not widened.
+    await waitFor(() => expect(shape(tree)).toEqual(["1 steward 3", "2 devops 5"]));
+    expect(scopeOn()).toEqual(["This tab"]);
+  });
+
   it("names a chat in another workspace that needs you, by its name", async () => {
     const { move } = core(three());
     render(<App />);
@@ -1856,6 +1878,70 @@ describe("a chat's row is one line, with a hover card (#1675)", () => {
     await userEvent.keyboard("{Shift}");
     act(() => row(tree, "devops 3").focus());
     expect(facts(await theCard())).toMatchObject({ Workspace: "beta" });
+  });
+
+  it("has one card up at a time: the keyboard's goes when the pointer brings up another (#1687)", async () => {
+    core(threeTasks());
+    render(<App />);
+    const tree = await section();
+    await waitFor(() => expect(shape(tree)).toHaveLength(4));
+
+    // The keyboard rests on one row, and its card comes up.
+    await userEvent.keyboard("{Shift}");
+    act(() => row(tree, "devops 2").focus());
+    expect(await theCard()).toHaveTextContent("devops 2");
+
+    // The pointer rests on another: its card, and that one alone.
+    await userEvent.hover(row(tree, "devops 3"));
+    await waitFor(() => expect(card()).toHaveTextContent("devops 3"));
+    expect(screen.getAllByRole("tooltip")).toHaveLength(1);
+    expect(row(tree, "devops 2").getAttribute("aria-describedby")).toBeNull();
+  });
+
+  it("brings the next row's card up at once while one is up, as an editor's hovers do (#1687)", async () => {
+    core(threeTasks());
+    render(<App />);
+    const tree = await section();
+    await waitFor(() => expect(shape(tree)).toHaveLength(4));
+
+    await userEvent.hover(row(tree, "devops 2"));
+    expect(await theCard()).toHaveTextContent("devops 2");
+
+    // From one row to the next: no second wait.
+    await userEvent.unhover(row(tree, "devops 2"));
+    await userEvent.hover(row(tree, "devops 3"));
+    await new Promise((done) => setTimeout(done, CARD_DELAY_MS / 5));
+    expect(card()).toHaveTextContent("devops 3");
+    expect(screen.getAllByRole("tooltip")).toHaveLength(1);
+
+    // Once every card has been down a while, a row is rested on again before its card comes.
+    await userEvent.unhover(row(tree, "devops 3"));
+    await waitFor(() => expect(card()).toBeNull());
+    await new Promise((done) => setTimeout(done, CARD_SKIP_MS * 2));
+    await userEvent.hover(row(tree, "devops 4"));
+    await new Promise((done) => setTimeout(done, CARD_DELAY_MS / 5));
+    expect(card()).toBeNull();
+    expect(await theCard()).toHaveTextContent("devops 4");
+  });
+
+  it("still waits for the keyboard while a card is up: only the pointer skips the rest (#1687)", async () => {
+    core(threeTasks());
+    render(<App />);
+    const tree = await section();
+    await waitFor(() => expect(shape(tree)).toHaveLength(4));
+
+    await userEvent.hover(row(tree, "devops 2"));
+    expect(await theCard()).toHaveTextContent("devops 2");
+
+    // The keyboard comes to another row while that card is up: no card at once for it.
+    await userEvent.keyboard("{Shift}");
+    act(() => row(tree, "devops 3").focus());
+    await new Promise((done) => setTimeout(done, CARD_DELAY_MS / 5));
+    expect(card()?.textContent ?? "").not.toContain("devops 3");
+
+    // It still comes, after the whole rest, and alone.
+    await waitFor(() => expect(card()).toHaveTextContent("devops 3"));
+    expect(screen.getAllByRole("tooltip")).toHaveLength(1);
   });
 
   it("shows a folded chat's tasks as a small count, and an open one's as its rows with guides", async () => {

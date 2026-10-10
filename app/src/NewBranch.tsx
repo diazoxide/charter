@@ -63,9 +63,10 @@ export function NewBranch({
           }}
         >
           <Dialog.Title id="new-branch">New branch</Dialog.Title>
-          <p className="where">
-            in <code>{repo}</code>
-          </p>
+          {/* The dialog's description (#1719): where the branch is cut, said with the title. */}
+          <Dialog.Description className="where">
+            In <code>{repo}</code>
+          </Dialog.Description>
 
           <form
             onSubmit={(event) => {

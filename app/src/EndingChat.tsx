@@ -208,17 +208,24 @@ export function EndingChat({
               first and Smart close last, at the edge where a primary answer sits. */}
           <AnswerBar>
             <Alert.Cancel asChild>
-              <button ref={cancel} tabIndex={0}>
+              <button type="button" ref={cancel} tabIndex={0}>
                 Cancel
               </button>
             </Alert.Cancel>
             <Alert.Action asChild>
-              <button ref={close} className="ends-it" tabIndex={0} onClick={() => onEnd(stop)}>
+              <button
+                type="button"
+                ref={close}
+                className="ends-it"
+                tabIndex={0}
+                onClick={() => onEnd(stop)}
+              >
                 Close
               </button>
             </Alert.Action>
             <Alert.Action asChild>
               <button
+                type="button"
                 ref={smartClose}
                 className="smart-close"
                 tabIndex={0}

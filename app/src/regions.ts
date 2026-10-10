@@ -2,20 +2,9 @@ import { useCallback, useState } from "react";
 import { ATTENTION_VIEWS, isPanelView, type OwnViewId, type ViewId } from "./sideViews";
 import { commands } from "./bindings";
 import { forgetTextSizes, onTextSizes, textSizes, type TextSizes } from "./textSize";
-import {
-  chatsListPrefs,
-  forgetChatsListPrefs,
-  isDefaultChatsList,
-  onChatsListPrefs,
-  type ChatsListPrefs,
-} from "./chatsListPrefs";
-import { forgetYourEditor, onYourEditor, yourEditor } from "./yourEditor";
-import {
-  explorerSectionsDocument,
-  forgetExplorerSections,
-  onExplorerSections,
-  type SectionId,
-} from "./explorerSections";
+import { CHATS_LIST, type ChatsListPrefs } from "./chatsListPrefs";
+import { YOUR_EDITOR } from "./yourEditor";
+import { EXPLORER_SECTIONS, type SectionId } from "./explorerSections";
 import { forgetGroups } from "./settings/links";
 import {
   facetsOf,
@@ -278,6 +267,24 @@ const RETIRED: readonly string[] = ["bottom"];
  *  back to its own side without a word, and its size, a height there, is not read as a width. */
 const RETIRED_SIDE = "bottom";
 
+/**
+ * **The preferences the file keeps beside the arrangement and the text sizes** (`layoutPref.ts`,
+ * #1686), in the order the file has them: each is written under its key where it is not its
+ * default, listened to and forgotten from this one list. A new one is one more row here, and
+ * its field in {@link Document}: the build checks that each row's key is a field there, and
+ * that no field is left without its row ({@link Unlisted}).
+ */
+const LAYOUT_PREFS = [YOUR_EDITOR, CHATS_LIST, EXPLORER_SECTIONS] as const satisfies readonly {
+  readonly key: PrefField;
+}[];
+
+/** The fields of {@link Document} that are preferences of {@link LAYOUT_PREFS}. */
+type PrefField = Exclude<keyof Document, "version" | "regions" | "projects" | "text">;
+
+/** A preference field of the document no row of {@link LAYOUT_PREFS} writes: none, or
+ *  {@link asDocument} does not type-check, so a preference is never silently left unwritten. */
+type Unlisted = Exclude<PrefField, (typeof LAYOUT_PREFS)[number]["key"]>;
+
 /** The document, as it is written to the file. `text` is the two text sizes (`textSize.ts`,
  *  charter-app#283), kept here because they are the same kind of preference — how one operator
  *  likes their window — and this is the one writer of the file. */
@@ -484,9 +491,7 @@ export function forgetThisLaunch(): void {
   movedAside = false;
   writing = Promise.resolve();
   forgetTextSizes();
-  forgetYourEditor();
-  forgetChatsListPrefs();
-  forgetExplorerSections();
+  for (const pref of LAYOUT_PREFS) pref.forget();
   forgetDismissals();
   forgetProjectViews();
   forgetGroups();
@@ -548,18 +553,19 @@ function sayWhatTheLayoutCost(path: string, started: ReturnType<typeof startingL
 const where = (path: string) => path || "the layout file";
 
 const asDocument = (regions: Arrangement): Document => {
-  const editor = yourEditor();
-  const chats = chatsListPrefs();
-  const explorer = explorerSectionsDocument();
+  const listed: [Unlisted] extends [never] ? typeof LAYOUT_PREFS : never = LAYOUT_PREFS;
   const projects = projectsSent();
   return {
     version: VERSION,
     regions,
     ...(projects !== undefined ? { projects } : {}),
     text: textSizes(),
-    ...(editor !== undefined ? { editor } : {}),
-    ...(isDefaultChatsList(chats) ? {} : { chats }),
-    ...(explorer !== undefined ? { explorer } : {}),
+    ...Object.fromEntries(
+      listed.flatMap((pref) => {
+        const written = pref.written();
+        return written === undefined ? [] : [[pref.key, written]];
+      }),
+    ),
   };
 };
 
@@ -606,14 +612,10 @@ onTextSizes(() => {
   textWrite = setTimeout(() => remember(remembered()), TEXT_WRITE_SETTLES_MS);
 });
 
-/** Your editor was chosen (RC-20): one change, written at once. */
-onYourEditor(() => remember(remembered()));
-
-/** How the Chats list is drawn was changed (#1499): one change, written at once. */
-onChatsListPrefs(() => remember(remembered()));
-
-/** One of Explorer's sections was folded or opened (#1677): one change, written at once. */
-onExplorerSections(() => remember(remembered()));
+/** One of the preferences the file keeps beside the arrangement changed: your editor (RC-20),
+ *  how the Chats list is drawn (#1499), Explorer's folded sections (#1677). One change, written
+ *  at once. */
+for (const pref of LAYOUT_PREFS) pref.on(() => remember(remembered()));
 
 /** What a view keeps for a project changed (B-11, #1686): one change, written at once. */
 onProjectViews(() => remember(remembered()));

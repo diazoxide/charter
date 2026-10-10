@@ -653,6 +653,13 @@ describe("a task with tasks of its own still working", () => {
     expect(question.textContent).toContain("1 task it asked for is still working: deep.");
     // It is idle itself: the question is about what is below it.
     expect(question.textContent).not.toContain("It is working.");
+    // The settings set's radio group (#630, DS-8), named by the sentence that asks it: a Radix
+    // radio group is in WebKit's tab sequence and moves on the arrows, as every choice does.
+    expect(
+      within(question).getByRole("radiogroup", {
+        name: "1 task it asked for is still working: deep.",
+      }),
+    ).toBeInTheDocument();
     const too = within(question).getByRole("radio", { name: /^End them too/ });
     const keep = within(question).getByRole("radio", { name: /^Keep them working/ });
     expect(too).toBeChecked();

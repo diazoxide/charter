@@ -1,5 +1,5 @@
 /**
- * The key that opens a Search tab (FM-8): **⌘⇧F on a Mac, Ctrl+Shift+F everywhere else** — except
+ * The key that shows the Search view (FM-8, #1676): **⌘⇧F on a Mac, Ctrl+Shift+F everywhere else** — except
  * while a chat has the keyboard off a Mac, where Ctrl+Shift+F is the chat's find bar
  * (`SessionPane.opensFind`) and stays it.
  *

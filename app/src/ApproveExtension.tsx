@@ -68,6 +68,9 @@ export function ApproveExtension({
         <Dialog.Content
           className="warning"
           aria-labelledby="approve-extension"
+          // Described by the sentence this dialog exists for (#630): what purlis cannot stop the
+          // extension doing is what a screen reader says as the question opens.
+          aria-describedby="approve-extension-runs-as-you"
           onInteractOutside={(e) => e.preventDefault()}
           onOpenAutoFocus={(e) => {
             e.preventDefault();
@@ -92,7 +95,9 @@ export function ApproveExtension({
 
           {/* charter's own words, rendered as given. See this module's header for why nothing
             here rewrites, shortens or softens them. */}
-          <p className="came-back runs-as-you">{ask.runs_as_you}</p>
+          <p className="came-back runs-as-you" id="approve-extension-runs-as-you">
+            {ask.runs_as_you}
+          </p>
           <p className="came-back">{ask.fingerprint_note}</p>
           {ask.state_note ? <p className="came-back">{ask.state_note}</p> : null}
 

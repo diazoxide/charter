@@ -84,6 +84,9 @@ export function FirstTaskTab({
   const [looked, setLooked] = useState(false);
   /** The runs whose branch is in the clone (#945): the ones that started before this launch. */
   const [onDisk, setOnDisk] = useState<Partial<Record<number, string>>>({});
+  /** Why either look below could not answer: said under the intro, never swallowed (#1719). */
+  const [unlooked, setUnlooked] = useState<string>();
+  const [unlisted, setUnlisted] = useState<string>();
   const groupId = useId();
 
   useEffect(() => {
@@ -111,14 +114,21 @@ export function FirstTaskTab({
     void commands
       .harnessSetupFound()
       .then((answer) => {
-        if (gone || answer.status === "error") return;
+        if (gone) return;
+        if (answer.status === "error") {
+          setUnlooked(answer.error);
+          return;
+        }
+        setUnlooked(undefined);
         const missing: Record<string, string> = {};
         for (const one of answer.data?.harnesses ?? []) {
           if (!one.installed) missing[one.name] = one.title;
         }
         setNotInstalled(missing);
       })
-      .catch(() => {})
+      .catch((err: unknown) => {
+        if (!gone) setUnlooked(String(err));
+      })
       .finally(() => {
         if (!gone) setLooked(true);
       });
@@ -136,7 +146,12 @@ export function FirstTaskTab({
     void commands
       .worktreeList(plane, workspace, repo)
       .then((answer) => {
-        if (gone || answer.status === "error") return;
+        if (gone) return;
+        if (answer.status === "error") {
+          setUnlisted(answer.error);
+          return;
+        }
+        setUnlisted(undefined);
         const started: Partial<Record<number, string>> = {};
         for (const run of RUNS) {
           const cut = (answer.data ?? []).find((one) => one.branch === branchOf(run) && !one.stale);
@@ -144,7 +159,9 @@ export function FirstTaskTab({
         }
         setOnDisk(started);
       })
-      .catch(() => {});
+      .catch((err: unknown) => {
+        if (!gone) setUnlisted(String(err));
+      });
     return () => {
       gone = true;
     };
@@ -239,6 +256,18 @@ export function FirstTaskTab({
         >
           {unread}
         </Notice>
+      )}
+      {/* What the tab could not look at, and what that means for what it offers. No live
+          role: the tab's own read refusal above is the Notice; these are its footnotes. */}
+      {unlooked !== undefined && (
+        <p className="came-back">
+          {`purlis could not look at which harnesses this machine has, so every profile is offered: ${unlooked}`}
+        </p>
+      )}
+      {unlisted !== undefined && (
+        <p className="came-back">
+          {`purlis could not list the branches of this repo, so a chat started before this launch may show as not started: ${unlisted}`}
+        </p>
       )}
       {RUNS.map((run) => {
         const done = runs[run];

@@ -148,6 +148,22 @@ describe("the app's own rows", () => {
     expect(within(dialog).getAllByText("chat footer")).toHaveLength(1);
   });
 
+  it("writes the command it names in code font, not in backticks (#630)", async () => {
+    render(
+      <Health
+        doctor={state({ report: report([row("git", "ok")], { app_rows: [footerRow()] }) })}
+      />,
+    );
+
+    await userEvent.click(button());
+
+    const ours = within(await screen.findByRole("dialog")).getByRole("region", {
+      name: "This app",
+    });
+    expect(within(ours).getByText("purlis doctor", { selector: "code" })).toBeInTheDocument();
+    expect(ours.textContent).not.toContain("`");
+  });
+
   it("draws no heading for a core that sends none", async () => {
     render(<Health doctor={state({ report: report([row("git", "ok")]) })} />);
 
@@ -216,6 +232,25 @@ describe("the doctor's dialog", () => {
 
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByText("/usr/bin:/bin:/usr/sbin:/sbin")).toBeInTheDocument();
+  });
+
+  it("says it is running the doctor until the first report comes back (#630)", async () => {
+    render(<Health doctor={state({ running: true })} />);
+
+    await userEvent.click(button());
+
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText("Running the doctor…")).toBeInTheDocument();
+  });
+
+  it("says what a chat start runs, in the window's word for it (#630)", async () => {
+    render(<Health doctor={state({ report: report([row("git", "ok")]) })} />);
+
+    await userEvent.click(button());
+
+    expect(
+      await screen.findByText(/^The preflight every chat start runs; the harness profiles/),
+    ).toBeInTheDocument();
   });
 
   it("says which depth it is showing", async () => {

@@ -380,8 +380,17 @@ describe("a chat's finished tasks", () => {
       .find((one) => one.querySelector(".session")?.textContent === "probe");
     if (open === undefined) throw new Error("the open task has no row");
     expect(says(open)).toEqual({ word: "failed", shape: "cross" });
-    // And the word is text, read as it is drawn: the mark beside it is decoration.
-    expect(within(theRow(group, "counted")).getByText("done")).toBeVisible();
+    // **One line, as a chat's row is** (#1687): the state is the mark, and its word, with the
+    // core's own beside it, is still the row's to a screen reader, out of sight where it stands,
+    // and whole in the row's tooltip.
+    for (const name of ["counted", "stuck"]) {
+      const one = theRow(group, name);
+      for (const said of one.querySelectorAll(".shown-state .word, .outcome"))
+        expect(said.classList.contains("hidden-words")).toBe(true);
+    }
+    expect(theRow(group, "counted")).toHaveAccessibleName("counted done");
+    expect(theRow(group, "stuck")).toHaveAccessibleName("stuck failed blocked");
+    expect(theRow(group, "stuck").getAttribute("title")).toMatch(/^failed · blocked/);
     expect(within(theRow(group, "counted")).queryByRole("img")).toBeNull();
   });
 
@@ -422,6 +431,42 @@ describe("a chat's finished tasks", () => {
     const group = await theirs();
     expect(theRow(group, "probe")).toHaveTextContent("failed");
     expect(names()).toEqual(["steward 4", "steward 12"]);
+  });
+
+  it("keeps a task's row on This tab too until its finished row is read (#1696)", async () => {
+    const reported: OpenChat = {
+      ...WORKING,
+      label: "probe",
+      from: { ...WORKING.from, reported: true, outcome: "failed" } as OpenChat["from"],
+    };
+    const other: OpenChat = { ...STEWARD, session: 12, name: "12", in_front: false };
+    const held = core([], [STEWARD, reported, other]);
+    render(<App />);
+    const tree = await section();
+    const names = () =>
+      within(tree)
+        .getAllByRole("treeitem")
+        .map((one) => one.querySelector(".session")?.textContent);
+    await waitFor(() => expect(names()).toEqual(["steward 4", "probe", "steward 12"]));
+    await userEvent.click(screen.getByRole("radio", { name: "This tab" }));
+    await waitFor(() => expect(names()).toEqual(["steward 4", "probe"]));
+
+    const answer = held.holdFinished();
+    held.end(
+      9,
+      finished("01K6PROBE", "probe", { chat: 9, how: "failed", outcome: "failed", folds: false }),
+    );
+    await held.stopped(9);
+
+    // Ended, so in no tab's chats now; the list keeps its row, and This tab does too.
+    await waitFor(() => expect(held.asked("plane_sidebar").length).toBeGreaterThan(1));
+    expect(names()).toEqual(["steward 4", "probe"]);
+
+    answer();
+
+    const group = await theirs();
+    expect(theRow(group, "probe")).toHaveTextContent("failed");
+    expect(names()).toEqual(["steward 4"]);
   });
 
   it("clears the finished rows and nothing else: the failure stays, and no chat is touched", async () => {
@@ -476,7 +521,7 @@ describe("a chat's finished tasks", () => {
     fireEvent.pointerEnter(name);
     await waitFor(() =>
       expect(name.getAttribute("title")).toBe(
-        "The cluster refused the login.\nTokens: 12k in, 3k out",
+        "failed\nThe cluster refused the login.\nTokens: 12k in, 3k out",
       ),
     );
     expect(asked("tasks_used")).toEqual([
@@ -488,7 +533,7 @@ describe("a chat's finished tasks", () => {
     fireEvent.pointerEnter(waiting);
     await new Promise((resolve) => setTimeout(resolve, 400));
     expect(asked("tasks_used")).toHaveLength(1);
-    expect(waiting.getAttribute("title")).toBe("It could not start.");
+    expect(waiting.getAttribute("title")).toBe("failed\nIt could not start.");
   });
 
   it("shows a finished row's report on a press, as text and never as markup", async () => {
@@ -506,8 +551,8 @@ describe("a chat's finished tasks", () => {
     render(<App />);
     const group = await theirs();
     const name = theRow(group, "check prod");
-    // Its first line on hover; nothing of it drawn until it is opened.
-    expect(name).toHaveAttribute("title", '<b>Healthy</b> <img src=x onerror="alert(1)">');
+    // Its first line on hover, after how it ended; nothing of it drawn until it is opened.
+    expect(name).toHaveAttribute("title", 'failed\n<b>Healthy</b> <img src=x onerror="alert(1)">');
     expect(screen.queryByRole("region", { name: "Report of check prod" })).toBeNull();
 
     await userEvent.click(name);

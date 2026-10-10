@@ -26,7 +26,8 @@ import {
 import { TaskEndConfirm, type TaskEndInline } from "./TaskEnd";
 import type { AtLimit, FinishedTask } from "./bindings";
 import { HelpersSaid } from "./ExplorerChats";
-import { useDoingSaid } from "./chatDoing";
+import { ChatDoingLine } from "./ChatRowActivity";
+import { cardDown, cardUp, skipsTheRest, useCardUp } from "./chatCard";
 import { ChatShownState } from "./ChatRows";
 import { sameList, useChatsHere, useChatsSelect, type ChatStates } from "./chatState";
 import { useTokensOnHover } from "./tasksUsed";
@@ -51,6 +52,7 @@ import {
   keptScope,
   SCOPES,
   settleScope,
+  tabSessions,
   type Scope,
 } from "./chatsScope";
 import { useArrowPick } from "./settings/components";
@@ -145,6 +147,8 @@ const NO_RESTARTS: Readonly<Record<number, string>> = {};
 
 /** No chat that needs you has had the rows above it opened yet. */
 const NONE_OPENED: ReadonlySet<number> = new Set();
+/** The chats of no tab. */
+const NO_ROWS: readonly ChatRow[] = [];
 
 /** No folds set by hand. */
 const NO_FOLDS: ReadonlyMap<number, boolean> = new Map();
@@ -371,14 +375,28 @@ export function ChatsSection({
   /** The scope the list is drawn in: every chat where the caller names no workspace. */
   const scope: Scope = here === undefined ? "all" : picked;
   const tabChats = tab?.chats;
+  const tabId = tab?.id;
+  /** The chats This tab holds (`chatsScope.tabSessions`): its own, and a task of it that
+   *  ended while the list keeps its row until its finished row is read (#1696). What they were
+   *  for the same tab last is kept, and nothing for a tab just brought forward. */
+  const [tabHeld, setTabHeld] = useState<{
+    id: number | undefined;
+    sessions: ReadonlySet<number>;
+  }>();
+  const before = tabHeld !== undefined && tabHeld.id === tabId ? tabHeld.sessions : undefined;
+  const inThisTab = useMemo(
+    () => tabSessions(tabChats ?? NO_ROWS, before, every),
+    [tabChats, before, every],
+  );
+  if (inThisTab !== before) setTabHeld({ id: tabId, sessions: inThisTab });
   const rows = useMemo(
     () =>
       scope === "all" || here === undefined
         ? every
         : scope === "tab"
-          ? inTab(every, new Set((tabChats ?? []).map((row) => row.session)))
+          ? inTab(every, inThisTab)
           : inScope(every, here),
-    [every, here, scope, tabChats],
+    [every, here, scope, inThisTab],
   );
   const [text, setText] = useState("");
   const [ranks, setRanks] = useState<readonly Rank[]>([]);
@@ -705,14 +723,31 @@ export function ChatsSection({
   // the narrowest scope that lists it, so the row can be shown: the switch says so, and the
   // person picks again. It is not the person's pick, so it is not kept.
   const [widenedFor, setWidenedFor] = useState<number>();
-  if (
+  /** The asking whose tab in front has settled (#1696): This tab is read for it on the draw
+   *  after it arrived, since the step that asks for a row can bring its tab forward too, and
+   *  that tab's chats can come a draw later. */
+  const [settledFor, setSettledFor] = useState<number>();
+  const outsideScope =
     reveal !== undefined &&
     reveal.at !== widenedFor &&
     scope !== "all" &&
     here !== undefined &&
     !byNumber.has(reveal.asker) &&
-    everyByNumber.has(reveal.asker)
-  ) {
+    everyByNumber.has(reveal.asker);
+  const settling = outsideScope && scope === "tab" && settledFor !== reveal.at;
+  const settlingAt = settling ? reveal.at : undefined;
+  useEffect(() => {
+    if (settlingAt === undefined) return;
+    // Once this draw's effects have run, so a tab one of them brings forward is drawn with it.
+    let gone = false;
+    queueMicrotask(() => {
+      if (!gone) setSettledFor(settlingAt);
+    });
+    return () => {
+      gone = true;
+    };
+  }, [settlingAt]);
+  if (outsideScope && !settling) {
     setWidenedFor(reveal.at);
     setPicked(
       scope === "tab" && inScope(every, here).some((row) => row.session === reveal.asker)
@@ -720,7 +755,8 @@ export function ChatsSection({
         : "all",
     );
   }
-  useRevealedTask(section, reveal, rows, {
+  // Not looked for while This tab settles: a row not listed yet would be given up on.
+  useRevealedTask(section, settling ? undefined : reveal, rows, {
     fold,
     shut: (session) => opens.get(session) === false,
     // A finished row, or a chat's own, that the filter does not ask for. And a chat's own row
@@ -1096,6 +1132,8 @@ export const CARD_DELAY_MS = 500;
  */
 export const CARD_LEAVE_MS = 150;
 
+export { CARD_SKIP_MS } from "./chatCard";
+
 /**
  * One chat's row. Held on plain values, so only a row whose own facts changed is drawn again.
  *
@@ -1252,11 +1290,26 @@ const Row = memo(function Row({
   const state: ShownFacts = { session, shell, report, outcome, asking, harness };
   // **The card** (#1675). Up after the pointer rests on the row, or the keyboard does, for
   // `CARD_DELAY_MS`: a pointer running down the list, or the arrows going down the tree, bring
-  // up none. Down when the pointer leaves, the keyboard moves on, a press lands, or Escape.
-  const [carded, setCarded] = useState(false);
+  // up none. Down when the pointer leaves, the keyboard moves on, a press lands, or Escape,
+  // or when another row's comes up: one card at a time in the window (`chatCard.ts`, #1687).
+  const carded = useCardUp(session);
   const cardId = useId();
   const resting = useRef<number | undefined>(undefined);
-  useEffect(() => () => window.clearTimeout(resting.current), []);
+  useEffect(
+    () => () => {
+      window.clearTimeout(resting.current);
+      cardDown(session);
+    },
+    [session],
+  );
+  // A task's tokens are read while its card is up, however it came down: another row's card
+  // coming up takes this one down without a word to this row.
+  const { onPointerEnter: readTokens, onPointerLeave: stopReading } = used;
+  useEffect(() => {
+    if (!task) return;
+    if (carded) readTokens();
+    else stopReading();
+  }, [task, carded, readTokens, stopReading]);
   /** The pointer or the keyboard left, or a press landed, before the card came up. */
   const unrest = () => {
     window.clearTimeout(resting.current);
@@ -1264,21 +1317,21 @@ const Row = memo(function Row({
   };
   const card = (up: boolean) => {
     unrest();
-    setCarded(up);
-    if (!task) return;
-    if (up) used.onPointerEnter();
-    else used.onPointerLeave();
+    if (up) cardUp(session);
+    else cardDown(session);
   };
-  /** Brings the card up once the row has been rested on for `CARD_DELAY_MS`. */
-  const rest = () => {
+  /** Brings the card up once the row has been rested on for `CARD_DELAY_MS`; at once for the
+   *  pointer while another card is up or just went down (`chatCard.skipsTheRest`). */
+  const rest = (by: "pointer" | "keyboard") => {
     unrest();
-    resting.current = window.setTimeout(() => card(true), CARD_DELAY_MS);
+    if (by === "pointer" && skipsTheRest()) card(true);
+    else resting.current = window.setTimeout(() => card(true), CARD_DELAY_MS);
   };
   /** The keyboard came to the row. Only where the keyboard was used last: a focus a press
    *  gave the row, or gave back to it as a menu it pressed in closed, is no rest of it. */
   const rested = () => {
     if (pointedLast()) unrest();
-    else rest();
+    else rest("keyboard");
   };
   /** The pointer or the keyboard left the row: no card, now or after the wait. */
   const away = () => {
@@ -1346,7 +1399,7 @@ const Row = memo(function Row({
                   onOpen(session);
                 }}
                 onPointerEnter={(event) => {
-                  if (event.pointerType !== "touch") rest();
+                  if (event.pointerType !== "touch") rest("pointer");
                 }}
                 onPointerLeave={leave}
                 onFocus={rested}
@@ -1543,7 +1596,9 @@ function ChatCard({
         <span className="chat-card-name">{name}</span>
         <ChatShownState {...state} />
       </p>
-      <Doing session={session} />
+      {/* What a working chat is doing (#1493): read as a line of the card, where the row's own
+          line was out of the tree and named by the row's description. */}
+      <ChatDoingLine session={session} heard />
       <dl className="chat-card-facts">
         {persona !== null && <Fact term="Persona">{persona}</Fact>}
         {(runsOn ?? harness) !== null && <Fact term="Harness">{runsOn ?? harness}</Fact>}
@@ -1560,24 +1615,6 @@ function ChatCard({
       <HelpersSaid session={session} />
       {tokens !== undefined && <p>{tokens}</p>}
     </>
-  );
-}
-
-/** What a working chat is doing (#1493), in its card: read as a line of it, where the row's
- *  own line was out of the tree and named by the row's description. */
-function Doing({ session }: { session: number }) {
-  const says = useDoingSaid(session);
-  if (says === undefined) return null;
-  return (
-    <p className="chat-doing">
-      {says.words}
-      {says.name !== undefined && (
-        <>
-          {" "}
-          <bdi className="named">{says.name}</bdi>
-        </>
-      )}
-    </p>
   );
 }
 

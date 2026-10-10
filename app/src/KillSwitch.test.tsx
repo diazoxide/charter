@@ -140,4 +140,19 @@ describe("the kill switch", () => {
 
     expect(await stopControl()).toHaveAttribute("tabindex", "0");
   });
+
+  it("says it could not read the switch, rather than drawing it armed (#1719)", async () => {
+    mockIPC(
+      (cmd) => {
+        if (cmd === "agents_stopped") throw "the stop marker is unreadable";
+        return null;
+      },
+      { shouldMockEvents: true },
+    );
+    render(<TitleBar />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "purlis could not read whether chats are stopped: the stop marker is unreadable",
+    );
+  });
 });

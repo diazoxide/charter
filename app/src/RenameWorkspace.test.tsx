@@ -5,12 +5,13 @@ import { RenameWorkspace } from "./RenameWorkspace";
 
 afterEach(cleanup);
 
-function show() {
+// `undefined` is the core still being asked, so it is passed as it is and never defaulted.
+function show({ startsFresh }: { startsFresh: string | null | undefined } = { startsFresh: null }) {
   const onRename = vi.fn();
   render(
     <RenameWorkspace
       workspace="alpha"
-      startsFresh={null}
+      startsFresh={startsFresh}
       renaming={false}
       onRename={onRename}
       onCancel={vi.fn()}
@@ -38,5 +39,18 @@ describe("renaming a workspace", () => {
     await userEvent.keyboard("beta{Enter}");
 
     expect(onRename).toHaveBeenCalledWith("beta");
+  });
+
+  it("says it is asking which chats start fresh while Rename waits for that answer", () => {
+    show({ startsFresh: undefined });
+
+    expect(screen.getByText("Asking which chats would start fresh…")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Rename workspace" })).toBeDisabled();
+  });
+
+  it("drops the asking line once the core has answered", () => {
+    show({ startsFresh: null });
+
+    expect(screen.queryByText("Asking which chats would start fresh…")).toBeNull();
   });
 });

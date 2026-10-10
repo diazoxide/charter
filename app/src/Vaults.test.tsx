@@ -79,10 +79,11 @@ describe("the Vaults section", () => {
     const rows = within(list)
       .getAllByRole("listitem")
       .map((row) => row.textContent);
+    // Each provider by the name New vault offers it under, not its id (#1719).
     expect(rows).toEqual([
-      "ops · keyring · 2 secrets",
-      "team · 1password",
-      "files · plain-file · 1 secret",
+      "ops · System keychain · 2 secrets",
+      "team · 1Password",
+      "files · Plain file · 1 secret",
     ]);
     expect(asked).toEqual([{ plane: PLANE }]);
   });
@@ -157,6 +158,24 @@ describe("the Vaults section", () => {
     first.focus();
     await userEvent.keyboard("{ArrowDown}");
     await waitFor(() => expect(second).toHaveFocus());
+  });
+
+  it("says it is reading the vaults until the core answers (#1719)", async () => {
+    mockIPC(() => new Promise(() => {}));
+    draw();
+
+    expect(await screen.findByText("Reading the vaults…")).toBeInTheDocument();
+  });
+
+  it("says a list that could not be asked for at all, rather than drawing nothing (#1719)", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "vault_list") throw new Error("the window is gone");
+      return null;
+    });
+    draw();
+
+    expect(await screen.findByText(/the window is gone/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Read again" })).toBeInTheDocument();
   });
 
   it("makes no rows out of an answer that is not a list", async () => {

@@ -96,10 +96,10 @@ export function QuitWarning({
           <AnswerBar>
             {/* Cancel first, and focused: the destructive answer is never the one a stray
               Return key finds. */}
-            <button ref={cancel} tabIndex={0} onClick={onCancel}>
+            <button type="button" ref={cancel} tabIndex={0} onClick={onCancel}>
               Cancel
             </button>
-            <button className="ends-it" tabIndex={0} onClick={onQuit}>
+            <button type="button" className="ends-it" tabIndex={0} onClick={onQuit}>
               Quit purlis
             </button>
           </AnswerBar>

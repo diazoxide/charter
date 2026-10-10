@@ -3,35 +3,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import type { SetupDone } from "./bindings";
 import { Choice, Field, SettingActions, SettingRow } from "./settings/components";
 import { VaultSignIn } from "./VaultSignIn";
-
-/**
- * The providers a new vault can be kept by, in the order they are offered, with what each means
- * to the operator. **The system keychain first and chosen**, because #232 made it the default:
- * a secret there is one item of the operating system's own store, and nothing is written into
- * the plane.
- */
-const PROVIDERS = [
-  {
-    id: "keyring",
-    name: "System keychain",
-    says: "The macOS Keychain, or the Secret Service on Linux. Each secret is its own item.",
-  },
-  {
-    id: "1password",
-    name: "1Password",
-    says: "Items in a 1Password vault, read through the op command. Asks how purlis signs in, and tests it.",
-  },
-  {
-    id: "plain-file",
-    name: "Plain file",
-    says: "A plaintext file under the project's state directory, which git never sees.",
-  },
-  {
-    id: "reference",
-    name: "References",
-    says: "op:// references rather than values, so the file is safe to commit.",
-  },
-] as const;
+import { PROVIDERS } from "./vaultProviders";
 
 /**
  * Making a vault, asked where the answer is given — `NewWorkspace`'s shape, for `charter vault

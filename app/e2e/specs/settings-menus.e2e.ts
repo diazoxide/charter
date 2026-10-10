@@ -113,10 +113,12 @@ describe("a tab's menu opens Settings at that tab's level", function () {
     first = (await ask<string[]>("open_planes"))[0];
     // Through the opener, as a person opens one (`workspace-lifecycle.e2e.ts` says why).
     await $(`${PROJECTS} button[aria-label="Open a project…"]`).click();
-    const box = await $("#open-by-path");
+    const box = await $('[data-setting="open-by-path"] input');
     await box.waitForDisplayed({ timeout: 20_000 });
     await box.addValue(mine);
-    await $("button=Open").click();
+    // The path box's own submit, found by its form: its name is the trust
+    // question's Open project too, which comes next.
+    await $('form.by-path button[type="submit"]').click();
     const question = await $('[role="dialog"]');
     await question.waitForDisplayed({ timeout: 30_000 });
     await $("button=Open project").click();

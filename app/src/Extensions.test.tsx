@@ -332,6 +332,20 @@ describe("the extension registry", () => {
     ).toBeInTheDocument();
   });
 
+  it("puts the record's two acts in a row under the sentence, not inside it (#1719)", async () => {
+    core({ rows: [], unreadable: "'/home/o/.config/charter/extensions.json' is not JSON" });
+    render(<Extensions onClose={() => undefined} />);
+
+    const again = await screen.findByRole("button", { name: "Read again" });
+    expect(again.closest("p")).toBeNull();
+    expect(again.closest(".ui-setting-actions")).not.toBeNull();
+    expect(
+      within(again.closest(".ui-setting-actions") as HTMLElement).getByRole("button", {
+        name: "Open in your editor",
+      }),
+    ).toBeInTheDocument();
+  });
+
   it("reads an unreadable record again on a press, once it was mended (NO-8, #1233)", async () => {
     let unreadable: string | null = "'/home/o/.config/charter/extensions.json' is not JSON";
     mockIPC((cmd) => {

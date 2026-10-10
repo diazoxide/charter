@@ -10,7 +10,7 @@ import { endChat, pressAndStart } from "../opening.js";
  * The operator's screenshot: rows cut off at the sidebar's edge, "cancel mid-turn smart-ide ●
  * no…", with the state the first thing lost. A row is now one line as wide as the list: its
  * state's mark first, then the persona's badge and the name, and the name gives way. The mark
- * is whole, and so is a finished task's state word, at the least width the left region can be
+ * is whole, a finished task's as a chat's (#1687), at the least width the left region can be
  * dragged to, five levels down, at the largest text.
  *
  * That is layout, and jsdom lays nothing out, so it is measured here: in the real engine,
@@ -51,8 +51,8 @@ type Measured = {
   section: Box;
   /** How far the section scrolls sideways past what it shows: 0 when nothing overflows it. */
   overflow: number;
-  /** Every state word drawn: a finished task's. A chat's row draws its state's mark, and its
-   *  word is the row's card's (#1675). */
+  /** Every finished task's state mark, measured as a word is: a finished row is one line too,
+   *  its word heard and in its tooltip (#1687). */
   words: Word[];
   /** Every chat row's state mark, measured as a word is. */
   marks: Word[];
@@ -144,8 +144,8 @@ async function measured(): Promise<Measured | null> {
     return {
       section: box(section),
       overflow: section.scrollWidth - section.clientWidth,
-      words: [...section.querySelectorAll<HTMLElement>(".finished-name .shown-state .word")].map(
-        (word) => seen(word, word.textContent ?? ""),
+      words: [...section.querySelectorAll<HTMLElement>(".finished-name .shown-state .shape")].map(
+        (mark) => seen(mark, mark.closest(".shown-state")?.getAttribute("data-state") ?? ""),
       ),
       marks: [...section.querySelectorAll<HTMLElement>(".chat .shown-state .shape")].map((mark) =>
         seen(mark, mark.closest(".shown-state")?.getAttribute("data-state") ?? ""),
@@ -187,7 +187,7 @@ function whole(seen: Measured | null, least: number) {
   check("nothing was measured", seen !== null, seen);
   const { section, overflow, words, marks, rows } = seen as Measured;
   check("no state mark was drawn", marks.length >= least, marks.length);
-  check("no finished task's word was drawn", words.length >= 1, words.length);
+  check("no finished task's mark was drawn", words.length >= 1, words.length);
   check("the list scrolls sideways", overflow <= 1, overflow);
   for (const one of [...words, ...marks]) {
     check(`${one.row}: its state is not a word`, one.text !== "", one);
@@ -252,9 +252,9 @@ describe("the Chats list in a narrow sidebar", () => {
     check("there was no left region to draw in", await draw(ONE_LINE, FLOOR), FLOOR);
     const seen = whole(await measured(), 10);
 
-    // The longest state there is, on a finished task's row, is whole in words.
-    const longest = seen.words.filter((word) => word.text === "ended without a report");
-    check("the longest state was not drawn", longest.length >= 1, seen.words);
+    // A finished task that ended without a report, five levels down, keeps its mark whole.
+    const unreported = seen.words.filter((word) => word.text === "unreported");
+    check("the unreported end was not drawn", unreported.length >= 1, seen.words);
     // What gave way is the name: the long ones are cut short, with an ellipsis.
     for (const one of seen.rows.filter((row) => row.name.length > 40))
       check(`${one.name}: its name was not what gave way`, one.nameCut, one);

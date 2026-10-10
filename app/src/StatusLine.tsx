@@ -150,9 +150,9 @@ export function StatusLine({
   doctor?: DoctorState;
   /** Opens Settings at a group, for a doctor row that names a setting (SE-22). */
   onOpenSettings?: (group: string) => void;
-  /** What `charter version` says about this plane's pin, and a way to ask again. The item
-   *  is drawn only when it drifts. */
-  pin?: { pin?: PinReport; again: () => void };
+  /** What `charter version` says about this plane's pin, why it could not be read, and a way
+   *  to ask again. The item is drawn only when it drifts or was not read. */
+  pin?: { pin?: PinReport; trouble?: string; again: () => void };
   /**
    * Which regions the window is drawing, and the way to change that (ADR 0038).
    *
@@ -287,7 +287,7 @@ export function StatusLine({
 
       {doctor && <Health doctor={doctor} onOpenSettings={onOpenSettings} />}
 
-      {pin && <PinItem pin={pin.pin} again={pin.again} />}
+      {pin && <PinItem pin={pin.pin} trouble={pin.trouble} again={pin.again} />}
 
       {/* The project directory. `code`, because it is a path and the operator copies it out of
           here; the whole path rather than the directory's name, because two projects can share

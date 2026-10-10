@@ -178,7 +178,7 @@ describe("the new-vault dialog", () => {
     const how = within(dialog).getByRole("radiogroup", { name: "Signs in with" });
     expect(how.closest(".ui-setting-row")).not.toBeNull();
     expect(within(dialog).getByLabelText("Service-account token")).toHaveAccessibleDescription(
-      "It goes to purlis once and from there into the Keychain. It is not kept on this page.",
+      "It goes to purlis once and from there into your system keychain. It is not kept on this page.",
     );
   });
 
@@ -398,10 +398,10 @@ describe("setting up how a 1Password vault signs in", () => {
     expect(within(list).getByRole("checkbox", { name: "pulled" })).not.toBeChecked();
     expect(within(list).getByRole("checkbox", { name: "kept" })).not.toBeChecked();
     expect(within(list).getByRole("checkbox", { name: "pulled" })).toHaveAccessibleDescription(
-      "1Password vault Pulled, item charter-pulled, account acme.1password.eu, for persona devops; named by the committed vaults.json; has no token yet.",
+      "1Password vault Pulled, item charter-pulled, account acme.1password.eu, for persona devops; named for the whole project; has no token yet.",
     );
     expect(within(list).getByRole("checkbox", { name: "kept" })).toHaveAccessibleDescription(
-      "1Password vault Edge, item charter-kept; named by the committed vaults.json and this machine's registry; has a token in the Keychain now, which this one would replace.",
+      "1Password vault Edge, item charter-kept; named for the whole project and on this machine; has a token in your system keychain now, which this one would replace.",
     );
 
     // The person ticks the committed one. What goes to the core is each ticked name with the

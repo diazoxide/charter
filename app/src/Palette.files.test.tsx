@@ -78,6 +78,17 @@ function opened(rows: Offer[], onOpen = vi.fn(), open = 2) {
 }
 
 describe("⌘P's files", () => {
+  it("say they are being found while the core is still looking (#630)", async () => {
+    mockIPC((cmd) => (cmd === "find_files" ? new Promise(() => {}) : null));
+    opened([switchTo(PLANE, false), switchTo(OTHER, true)]);
+
+    await userEvent.keyboard("beta");
+
+    const files = await screen.findByRole("region", { name: "Files" });
+    expect(await within(files).findByText("Finding files…")).toBeInTheDocument();
+    expect(within(files).queryByText("No file matches what you typed.")).toBeNull();
+  });
+
   it("are a group of their own after the projects, and the arrows run on into them", async () => {
     core(() => ({ files: [file("src/beta.ts")], branches: 1, refused: [], partial: [] }));
     const onOpen = opened([switchTo(PLANE, false), switchTo(OTHER, true)]);

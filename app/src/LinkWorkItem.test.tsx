@@ -76,4 +76,19 @@ describe("Link to work item's words (#630)", () => {
     expect(screen.queryByText(/work link log/)).not.toBeInTheDocument();
     expect(screen.getByText(/your other devices see it/)).toBeInTheDocument();
   });
+
+  it("is described by the chat the link is for (#1719)", () => {
+    render(
+      <LinkWorkItem
+        chat="steward 1"
+        linking={false}
+        onLink={() => undefined}
+        onCancel={() => undefined}
+      />,
+    );
+
+    expect(screen.getByRole("dialog", { name: "Link to work item" })).toHaveAccessibleDescription(
+      "For steward 1",
+    );
+  });
 });

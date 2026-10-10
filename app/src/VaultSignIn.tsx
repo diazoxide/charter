@@ -19,14 +19,14 @@ function settled<T>(
 
 /** Which half of the registry names a vault, as the list says it. */
 const NAMED_BY: Record<string, string> = {
-  local: "named by this machine's registry",
-  shared: "named by the committed vaults.json",
-  both: "named by the committed vaults.json and this machine's registry",
+  local: "named on this machine only",
+  shared: "named for the whole project",
+  both: "named for the whole project and on this machine",
 };
 
 /** Where another vault's token is now, as the list says it. */
 const HELD: Record<SetupAlike["held"], string> = {
-  keyring: "has a token in the Keychain now, which this one would replace",
+  keyring: "has a token in your system keychain now, which this one would replace",
   environment: "its token is in purlis's environment now",
   unset: "has no token yet",
 };
@@ -230,7 +230,7 @@ export function VaultSignIn({
               {
                 value: "token",
                 label: "A service-account token",
-                says: "For a vault agents use. Pasted once, kept in the Keychain, and never in a shell or a file.",
+                says: "For a vault agents use. Pasted once, kept in your system keychain, and never in a shell or a file.",
               },
               {
                 value: "app",
@@ -247,7 +247,7 @@ export function VaultSignIn({
       {begun === undefined && how === "token" && (
         <SettingRow
           label="Service-account token"
-          help="It goes to purlis once and from there into the Keychain. It is not kept on this page."
+          help="It goes to purlis once and from there into your system keychain. It is not kept on this page."
           control={(ids) => (
             <>
               <input
@@ -422,7 +422,7 @@ export function VaultSignIn({
         <SettingRow
           label="Also use this token for"
           grouped
-          help="Each ticked vault gets its own Keychain item, pinned to the settings shown here. One whose settings change before the token is stored is skipped."
+          help="Each ticked vault gets its own system keychain item, pinned to the settings shown here. One whose settings change before the token is stored is skipped."
           control={(ids) => (
             <Choice
               kind="checks"
@@ -521,7 +521,7 @@ export function saidOfTheOthers(done: SetupDone): string {
         ? `${one.name} was not given the token: its settings changed after they were shown here. Open its tab to look, and give the token there.`
         : one.why === "gone"
           ? `${one.name} was not given the token: it is no longer registered that way.`
-          : `${one.name} was not given the token: ${one.said ?? "the Keychain refused."}`,
+          : `${one.name} was not given the token: ${one.said ?? "your system keychain refused."}`,
     );
   }
   return parts.join(" ");

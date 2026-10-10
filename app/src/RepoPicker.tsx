@@ -92,13 +92,12 @@ export function RepoPicker({
     <div className="repo-picker" data-testid="repo-picker">
       <div className="repo-picker-head">
         <label id={filterLabel} htmlFor={filterId}>
-          Repos
+          Filter repos
         </label>
         <Field
           ids={{ id: filterId, labelledBy: filterLabel }}
           kind="text"
           value={filter}
-          placeholder="Filter"
           onChange={setFilter}
         />
         <button type="button" tabIndex={0} onClick={refresh} disabled={found === undefined}>

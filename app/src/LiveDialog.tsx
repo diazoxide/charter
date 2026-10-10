@@ -187,7 +187,8 @@ export function LiveDialog({
                 disabled={busy || read === null}
                 onClick={() => void confirm()}
               >
-                {`Make ${word}`}
+                {/* Said while the core switches it (D-630-3). */}
+                {busy ? `Making ${word}…` : `Make ${word}`}
               </button>
             </AnswerBar>
           )}
@@ -200,7 +201,7 @@ export function LiveDialog({
 /** Where the files go, or that they stop going: said from the project's mode and remote. */
 function whereText(read: LivePreview): string {
   if (read.live) {
-    return "It stops publishing them from now on. What was already pushed stays in the repository's history.";
+    return "It stops publishing them from now on. What was already pushed stays in the repo's history.";
   }
   if (read.mode === null) {
     return "This project has not been told how it is saved yet: the switch is made now, and nothing is committed until you choose how in the Saving tab.";
@@ -214,35 +215,33 @@ function whereText(read: LivePreview): string {
   if (read.remote === null) {
     return "This project has no remote purlis can push to, so they are committed on this machine only.";
   }
-  return `The next save pushes them to ${read.remote} — anyone who can read that repository will read them.`;
+  return `The next save pushes them to ${read.remote} — anyone who can read that repo will read them.`;
 }
 
 /** Who can read the remote, as its forge answered; a public one in bold. Nothing for an answer
  *  that is not one, as a window test's `null` is. */
 function ReadersLine({ readers }: { readers: RemoteReaders | "asking" | null }) {
-  if (readers === "asking") return <p className="pending">Asking who can read that repository…</p>;
+  if (readers === "asking") return <p className="pending">Asking who can read that repo…</p>;
   switch (readers?.kind) {
     case "public":
       return (
         <p className="came-back">
-          <strong>That repository is public: anyone can read what is pushed to it.</strong>
+          <strong>That repo is public: anyone can read what is pushed to it.</strong>
         </p>
       );
     case "internal":
       return (
-        <p className="came-back">{`That repository is internal: everyone signed in to ${readers.host} can read it.`}</p>
+        <p className="came-back">{`That repo is internal: everyone signed in to ${readers.host} can read it.`}</p>
       );
     case "private":
       return (
-        <p className="came-back">
-          That repository is private: only those given access can read it.
-        </p>
+        <p className="came-back">That repo is private: only those given access can read it.</p>
       );
     case "nobody":
       return <p className="came-back">That remote is on this machine: a push publishes nothing.</p>;
     case "unknown":
       return (
-        <p className="came-back">{`Whether that repository is public is not known: ${readers.why}`}</p>
+        <p className="came-back">{`purlis could not tell whether that repo is public: ${readers.why}`}</p>
       );
     default:
       return null;

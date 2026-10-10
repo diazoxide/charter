@@ -57,7 +57,7 @@ describe("Land's squash box (DS-3e follow-up, #1210)", () => {
     const asked = core(Promise.resolve(["✓ widget #7 merged"]));
     land();
 
-    const squash = await screen.findByRole("checkbox", { name: "squash it into one commit" });
+    const squash = await screen.findByRole("checkbox", { name: "Squash it into one commit" });
     expect(squash).not.toBeChecked();
     await userEvent.click(squash);
     await userEvent.click(screen.getByRole("button", { name: "Land" }));
@@ -73,7 +73,7 @@ describe("Land's squash box (DS-3e follow-up, #1210)", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Land" }));
 
     await waitFor(() =>
-      expect(screen.getByRole("checkbox", { name: "squash it into one commit" })).toBeDisabled(),
+      expect(screen.getByRole("checkbox", { name: "Squash it into one commit" })).toBeDisabled(),
     );
   });
 });

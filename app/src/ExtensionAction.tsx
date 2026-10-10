@@ -133,7 +133,15 @@ export function AskFirst({
                   });
                 }}
               >
-                {action.deletes ? "Delete" : "Run"}
+                {/* Said while the core runs it (D-630-3): a button that only greys out says
+                    nothing about whether the press was taken. */}
+                {running
+                  ? action.deletes
+                    ? "Deleting…"
+                    : "Running…"
+                  : action.deletes
+                    ? "Delete"
+                    : "Run"}
               </button>
             )}
           </AnswerBar>

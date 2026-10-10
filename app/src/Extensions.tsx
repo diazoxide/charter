@@ -8,7 +8,7 @@ import {
   type InstalledExtensions,
 } from "./bindings";
 import { extensionsChanged } from "./extensionsOn";
-import { Choice } from "./settings/components";
+import { Choice, SettingActions } from "./settings/components";
 import { plainLine } from "./settings/iconsPick";
 import { iconThemeComplaints, offeredIconThemes, projectThemeChanged } from "./projectTheme";
 import {
@@ -184,20 +184,25 @@ export function Extensions({ onClose }: { onClose: () => void }) {
           {listed === null && !went && <p className="pending">Reading the installed extensions…</p>}
 
           {listed?.unreadable && (
-            <p className="came-back">
-              purlis could not read this machine&rsquo;s extension record, so nothing an extension
-              declares is in force: {listed.unreadable}{" "}
+            <>
+              <p className="came-back">
+                purlis could not read this machine&rsquo;s extension record, so nothing an extension
+                declares is in force: {listed.unreadable}
+              </p>
               {/* The sentence names the file; once it is mended, one press reads it again
                   rather than closing and reopening the dialog (NO-8, #1233). Approving writes
                   nothing over a record purlis could not read, so reading is the only fix, and
-                  Open in your editor is where it is mended (#1296). */}
-              <button type="button" tabIndex={0} onClick={() => void reread()}>
-                Read again
-              </button>{" "}
-              <button type="button" tabIndex={0} onClick={() => void openRecord()}>
-                Open in your editor
-              </button>
-            </p>
+                  Open in your editor is where it is mended (#1296). A row of their own under
+                  the sentence, not two buttons inside it (#1719). */}
+              <SettingActions>
+                <button type="button" tabIndex={0} onClick={() => void reread()}>
+                  Read again
+                </button>
+                <button type="button" tabIndex={0} onClick={() => void openRecord()}>
+                  Open in your editor
+                </button>
+              </SettingActions>
+            </>
           )}
 
           <h3>purlis&rsquo;s own themes</h3>

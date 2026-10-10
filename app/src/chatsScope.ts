@@ -55,6 +55,33 @@ export function inTab(rows: readonly ChatRow[], sessions: ReadonlySet<number>): 
   return counted(kept);
 }
 
+/**
+ * **The chats This tab lists, by number** (#1679, #1696): the tab's own set (`tab`, as the
+ * window reads it), and each task it held `before` that has left that set while the list still
+ * has its row. A task that ends is in no tab's set any more, but its row stays until its
+ * finished row is read (`finished.useRowsUntilRead`), as Workspace and All keep it: This tab
+ * keeps it too, for exactly as long. Only a task: a task moved to a tab of its own is still
+ * listed among its session's tab's chats, so a task leaves a tab's set only by ending.
+ *
+ * `before` is what this answered for the same tab last, or nothing for a tab just brought
+ * forward. **The same set comes back where nothing changed**, so a list drawn from it is not
+ * drawn again for nothing.
+ */
+export function tabSessions(
+  tab: readonly ChatRow[],
+  before: ReadonlySet<number> | undefined,
+  rows: readonly ChatRow[],
+): ReadonlySet<number> {
+  const now = new Set(tab.map((row) => row.session));
+  if (before !== undefined && before.size > 0) {
+    const tasks = new Set(rows.filter((row) => row.mode === "task").map((row) => row.session));
+    for (const session of before) if (tasks.has(session)) now.add(session);
+  }
+  if (before !== undefined && before.size === now.size && [...now].every((one) => before.has(one)))
+    return before;
+  return now;
+}
+
 /** `rows` with each one's place among the rows at its level under the same row above. */
 function counted(rows: readonly ChatRow[]): ChatRow[] {
   const sizes = new Map<number, number>();

@@ -461,58 +461,20 @@ export function Explorer({
         ?.focus();
   };
 
-  /** The *Workspaces* section: every workspace the strip can bring forward, the focused one
-   *  current, each pressed through the strip's own catalogue row and with the strip's menu. */
+  /** The *Workspaces* section, the same element in each of the explorer's three shapes. */
   const workspacesSection = (
-    <Section id="workspaces" title="Workspaces" closed={closed.has("workspaces")} project={plane}>
-      <RovingFocusGroup.Root asChild orientation="vertical" {...workspacesStop}>
-        <div
-          className="tree"
-          role="tree"
-          aria-label="Workspaces of this project"
-          onKeyDown={onTreeKey(workspaceRows)}
-        >
-          {workspaces.map((name) => {
-            const root = name === OUTSIDE;
-            const id = workspaceRow(name);
-            const current = name === (workspace ?? OUTSIDE);
-            const offer = offers.get(`workspace.focus:${name}`);
-            return (
-              <Menued
-                key={name}
-                on={root ? { on: "root" } : { on: "workspace", workspace: name }}
-                offers={offers}
-                onPress={onPress}
-              >
-                <RovingFocusGroup.Item asChild tabStopId={id} active={current}>
-                  <button
-                    type="button"
-                    className="spot"
-                    {...treeitem(id)}
-                    // The current item, as the picked spot below is: the strip is where a
-                    // workspace is selected (ADR 0036).
-                    aria-current={current ? "true" : undefined}
-                    // What a press does, on the rows where it does something.
-                    title={offer?.available ? offer.title : undefined}
-                    onClick={() => {
-                      if (offer?.available) onPress(offer);
-                    }}
-                  >
-                    {root ? (
-                      <FolderRoot className="node-icon" />
-                    ) : (
-                      <Folders className="node-icon" />
-                    )}
-                    <span className="spot-name">{root ? OUTSIDE_TITLE : name}</span>
-                    {current && live && <LiveMark />}
-                  </button>
-                </RovingFocusGroup.Item>
-              </Menued>
-            );
-          })}
-        </div>
-      </RovingFocusGroup.Root>
-    </Section>
+    <WorkspacesSection
+      workspaces={workspaces}
+      focused={workspace ?? OUTSIDE}
+      live={live}
+      closed={closed.has("workspaces")}
+      project={plane}
+      stop={workspacesStop}
+      onKeyDown={onTreeKey(workspaceRows)}
+      treeitem={treeitem}
+      offers={offers}
+      onPress={onPress}
+    />
   );
 
   if (workspace === undefined) {
@@ -529,7 +491,7 @@ export function Explorer({
     );
   }
 
-  const { panels, pieces, piecesRefused } = state;
+  const { panels, pieces } = state;
   const clones = panels?.repos ?? [];
   const at: FileRows = {
     plane,
@@ -676,218 +638,26 @@ export function Explorer({
     <nav ref={navRef} className="explorer" aria-label="Explorer" data-testid="explorer">
       {workspacesSection}
 
-      <Section id="repos" title="Repos and branches" closed={closed.has("repos")} project={plane}>
-        {state.trouble && (
-          <ReadRefused cause={`workspace-read:${workspace}`} onReadAgain={onReadAgain}>
-            {state.trouble}
-          </ReadRefused>
-        )}
-
-        {/* The tree is the rows and what holds them. The sentences about the whole region — the
-          trouble above, the pending and empty notes and what purlis would not read below —
-          are outside it. The ones about ONE clone (its worktrees could not be listed, are
-          still coming, or are none) stay inside that clone's `<details>`, beside the row they
-          explain, and so inside the tree: moving them out would take them away from it. */}
-        <RovingFocusGroup.Root asChild orientation="vertical" {...placeStop}>
-          <div
-            className="tree"
-            role="tree"
-            aria-label="Repos and branches"
-            onKeyDown={onTreeKey(placeRows)}
-          >
-            <RovingFocusGroup.Item asChild tabStopId={ROOT} active={spot === undefined}>
-              <button
-                type="button"
-                className="spot spot-root"
-                {...treeitem(ROOT)}
-                // Not `aria-selected`, even in a tree: the three tablists in this window are
-                // where it selects (ADR 0036), and a picked spot is not a selection the keyboard
-                // moves but the place the next chat starts — the current item, which is what
-                // `aria-current` is for and what the old sidebar's workspace rows used.
-                aria-current={spot === undefined ? "true" : undefined}
-                onClick={() => onPick(undefined)}
-              >
-                <Folders className="node-icon" />
-                <span className="spot-name">{workspace}</span>
-                {live && <LiveMark />}
-                <span className="spot-what">the workspace itself</span>
-              </button>
-            </RovingFocusGroup.Item>
-
-            {clones.length > 0 && (
-              // The clones are the workspace row's children, and the wrapper is what lets them be
-              // drawn as such — the tree lines hang off it, one level in from the root row.
-              <div className="clones" role="group">
-                {clones.map((repo) => (
-                  // `<details>` and not a primitive: the browser has a collapsible and
-                  // `docs/ui-primitives.md` says native HTML that already does the job is not what
-                  // the Radix rule is about. Open by default — a closed explorer explores nothing.
-                  <details
-                    className="clone"
-                    key={repo}
-                    data-testid={`clone-${repo}`}
-                    // Held by the fold state rather than by the element, so that Left and Right
-                    // (#238) open and close it through the same state a click on the heading does.
-                    open={!folded.has(foldKey(workspace, repo))}
-                    onToggle={(event) => fold(foldKey(workspace, repo), event.currentTarget.open)}
-                  >
-                    {/* The clone's menu: a new tab in it, and picking it as where new chats
-                      start (charter-app#174). On the heading, for the piece rows' reason — the
-                      `<details>` also holds every row inside the clone. */}
-                    <Menued on={{ on: "clone", repo }} offers={offers} onPress={onPress}>
-                      <RovingFocusGroup.Item
-                        asChild
-                        tabStopId={cloneRow(repo)}
-                        active={picked === cloneRow(repo)}
-                      >
-                        <summary
-                          {...treeitem(cloneRow(repo))}
-                          aria-current={picked === cloneRow(repo) ? "true" : undefined}
-                        >
-                          {/* The twisty says which way the disclosure goes, which the default
-                      marker said in the platform's own glyph at the platform's own size. It
-                      turns with `[open]`, and the turn is the one motion here that is a direct
-                      answer to a click — `prefers-reduced-motion` stops it all the same. */}
-                          <ChevronRight className="twisty" />
-                          <FolderGit2 className="node-icon" />
-                          <span className="repo">{repo}</span>
-                          <PieceCount pieces={pieces[repo]} refused={piecesRefused[repo]} />
-                        </summary>
-                      </RovingFocusGroup.Item>
-                    </Menued>
-                    {piecesRefused[repo] ? (
-                      // Said, never swallowed: a clone with no rows otherwise reads as a clone
-                      // nobody has cut a branch in.
-                      <ReadRefused
-                        cause={`branches-read:${workspace}/${repo}`}
-                        onReadAgain={onReadAgain}
-                      >
-                        purlis could not list the branches of <code>{repo}</code>:{" "}
-                        {piecesRefused[repo]}
-                      </ReadRefused>
-                    ) : pieces[repo] === undefined ? (
-                      <Pending>Asking git…</Pending>
-                    ) : pieces[repo].length === 0 ? (
-                      <p className="none">No branches cut here</p>
-                    ) : (
-                      <ul className="pieces" role="group">
-                        {pieces[repo].map((piece) => {
-                          const isPicked = spot?.repo === repo && spot.piece === piece.piece;
-                          return (
-                            <li
-                              key={piece.piece}
-                              role="none"
-                              data-testid={`piece-${repo}-${piece.piece}`}
-                            >
-                              {/* **Right-click is what these rows were missing**
-                            (charter-app#174). The menu is the catalogue filtered to this piece —
-                            merge above the line, remove below it, and the discard row that only
-                            exists while the core has refused THIS removal. Nothing here says
-                            what those rows mean; `Menus.tsx` draws whatever `actions.ts` has.
-
-                            On the button and not on the `<li>`: the `<li>` also holds the
-                            branch's marks. `asChild`, so the row gains no element. */}
-                              <Menued
-                                on={{ on: "worktree", repo, piece: piece.piece }}
-                                offers={offers}
-                                onPress={onPress}
-                              >
-                                <RovingFocusGroup.Item
-                                  asChild
-                                  tabStopId={pieceRow(repo, piece.piece)}
-                                  active={isPicked}
-                                  focusable={isDrawn(pieceRow(repo, piece.piece))}
-                                >
-                                  <button
-                                    type="button"
-                                    className="spot"
-                                    aria-current={isPicked ? "true" : undefined}
-                                    {...treeitem(pieceRow(repo, piece.piece))}
-                                    // The folder's whole path: ADR 0072 §4 shows it only where a
-                                    // path is wanted, and the row itself reads the branch.
-                                    title={piece.path}
-                                    onClick={() =>
-                                      onPick({ repo, piece: piece.piece, path: piece.path })
-                                    }
-                                  >
-                                    <GitBranch className="node-icon" />
-                                    <BranchLabel repo={repo} piece={piece} />
-                                  </button>
-                                </RovingFocusGroup.Item>
-                              </Menued>
-                              {/* The two states the operator has to see BEFORE they start a chat
-                            in a tree: `unwired` and `stale`. The same component the palette's
-                            worktree rows are written against, without the branch the row
-                            above already reads (#1102). */}
-                              <WorktreeMark
-                                withBranch={false}
-                                worktree={{
-                                  workspace,
-                                  repo,
-                                  piece: piece.piece,
-                                  branch: piece.branch,
-                                  wired: piece.wired,
-                                  stale: piece.stale,
-                                }}
-                              />
-                              {/* What the piece said about itself — `done`, `abandoned: <why>`
-                            or `silent 3d` — so a finished piece and a quiet one do not look
-                            alike (charter#368). An age, never a verdict. */}
-                              {piece.said && (
-                                <span className="label said" data-testid="piece-said">
-                                  {piece.said}
-                                </span>
-                              )}
-                              {/* A branch purlis cut for a chat that never started in it — a
-                            crash between the cut and the start leaves one (#835). Said, with
-                            its age, and never swept: its folder's removal stays the row's
-                            menu's. */}
-                              {piece.unclaimed && (
-                                <span
-                                  className="label said"
-                                  data-testid="piece-unclaimed"
-                                  title={`purlis cut this branch ${piece.unclaimed} ago for a chat that never started in it. Nothing removes it on its own: start a chat in it, or remove its folder from its menu.`}
-                                >
-                                  unclaimed {piece.unclaimed}
-                                </span>
-                              )}
-                            </li>
-                          );
-                        })}
-                      </ul>
-                    )}
-                  </details>
-                ))}
-              </div>
-            )}
-          </div>
-        </RovingFocusGroup.Root>
-
-        {panels === undefined ? (
-          <Pending>Reading the project…</Pending>
-        ) : (
-          clones.length === 0 && <p className="none">No repos in this workspace</p>
-        )}
-
-        {/* Membership without a clone. There is nothing to explore in it and nothing to start
-            a chat in, so it is named and not made a heading — and it can be cloned (#1215). */}
-        <NotClonedHere
-          absent={panels?.absent ?? []}
-          cloning={cloning}
-          offers={offers}
-          onPress={onPress}
-        />
-
-        {panels?.refused.map(([name, why]) => (
-          <ReadRefused
-            key={`refused-${name}`}
-            cause={`repo-refused:${workspace}/${name}`}
-            onReadAgain={onReadAgain}
-          >
-            purlis will not read <code>{name}</code>: {why}
-          </ReadRefused>
-        ))}
-      </Section>
+      <ReposSection
+        workspace={workspace}
+        state={state}
+        live={live}
+        spot={spot}
+        picked={picked}
+        onPick={onPick}
+        folded={folded}
+        fold={fold}
+        closed={closed.has("repos")}
+        project={plane}
+        stop={placeStop}
+        onKeyDown={onTreeKey(placeRows)}
+        treeitem={treeitem}
+        isDrawn={isDrawn}
+        offers={offers}
+        onPress={onPress}
+        cloning={cloning}
+        onReadAgain={onReadAgain}
+      />
 
       {/* **Files, of where the next chat starts** (#1677): what a branch's row held under it,
           moved to a section of its own so a branch is one row and its files one tree. The
@@ -930,6 +700,352 @@ export function Explorer({
         {toggles}
       </Section>
     </nav>
+  );
+}
+
+/** A tree's roving tab stop, as `roving.useTabStop` answers it: held by the explorer, so a
+ *  section keeps it across the explorer's shapes. */
+type TabStop = ReturnType<typeof useTabStop>;
+
+/** **The *Workspaces* section** (#1677): every workspace the strip can bring forward, the
+ *  focused one current, each pressed through the strip's own catalogue row and with the strip's
+ *  menu. */
+function WorkspacesSection({
+  workspaces,
+  focused,
+  live,
+  closed,
+  project,
+  stop,
+  onKeyDown,
+  treeitem,
+  offers,
+  onPress,
+}: {
+  workspaces: readonly string[];
+  /** The focused workspace, or {@link OUTSIDE} for the chats that are in none. */
+  focused: string;
+  /** Whether the focused workspace is LIVE: its row carries the mark. */
+  live: boolean;
+  closed: boolean;
+  project: string | undefined;
+  stop: TabStop;
+  /** Left, Right and type-ahead on the section's tree. */
+  onKeyDown: (event: KeyboardEvent<HTMLElement>) => void;
+  treeitem: (id: string) => TreeItem;
+  offers: Catalogued;
+  onPress: (offer: Offer) => void;
+}) {
+  return (
+    <Section id="workspaces" title="Workspaces" closed={closed} project={project}>
+      <RovingFocusGroup.Root asChild orientation="vertical" {...stop}>
+        <div
+          className="tree"
+          role="tree"
+          aria-label="Workspaces of this project"
+          onKeyDown={onKeyDown}
+        >
+          {workspaces.map((name) => {
+            const root = name === OUTSIDE;
+            const id = workspaceRow(name);
+            const current = name === focused;
+            const offer = offers.get(`workspace.focus:${name}`);
+            return (
+              <Menued
+                key={name}
+                on={root ? { on: "root" } : { on: "workspace", workspace: name }}
+                offers={offers}
+                onPress={onPress}
+              >
+                <RovingFocusGroup.Item asChild tabStopId={id} active={current}>
+                  <button
+                    type="button"
+                    className="spot"
+                    {...treeitem(id)}
+                    // The current item, as the picked spot below is: the strip is where a
+                    // workspace is selected (ADR 0036).
+                    aria-current={current ? "true" : undefined}
+                    // What a press does, on the rows where it does something.
+                    title={offer?.available ? offer.title : undefined}
+                    onClick={() => {
+                      if (offer?.available) onPress(offer);
+                    }}
+                  >
+                    {root ? (
+                      <FolderRoot className="node-icon" />
+                    ) : (
+                      <Folders className="node-icon" />
+                    )}
+                    <span className="spot-name">{root ? OUTSIDE_TITLE : name}</span>
+                    {current && live && <LiveMark />}
+                  </button>
+                </RovingFocusGroup.Item>
+              </Menued>
+            );
+          })}
+        </div>
+      </RovingFocusGroup.Root>
+    </Section>
+  );
+}
+
+/**
+ * **The *Repos and branches* section** (#1677): the workspace itself, each clone with its
+ * branches under it, and what purlis could not read or has not cloned here. Picking a row is
+ * where the next chat starts, and what *Files* lists.
+ */
+function ReposSection({
+  workspace,
+  state,
+  live,
+  spot,
+  picked,
+  onPick,
+  folded,
+  fold,
+  closed,
+  project,
+  stop,
+  onKeyDown,
+  treeitem,
+  isDrawn,
+  offers,
+  onPress,
+  cloning,
+  onReadAgain,
+}: {
+  workspace: string;
+  state: WorkspaceState;
+  live: boolean;
+  spot: Spot | undefined;
+  /** The row picked, by its id, or nothing while a branch is focused. */
+  picked: string | undefined;
+  onPick: (spot: Spot | undefined) => void;
+  /** The clones the operator folded, by {@link foldKey}. */
+  folded: ReadonlySet<string>;
+  fold: (key: string, open: boolean) => void;
+  closed: boolean;
+  project: string | undefined;
+  stop: TabStop;
+  /** Left, Right and type-ahead on the section's tree. */
+  onKeyDown: (event: KeyboardEvent<HTMLElement>) => void;
+  treeitem: (id: string) => TreeItem;
+  isDrawn: (id: string) => boolean;
+  offers: Catalogued;
+  onPress: (offer: Offer) => void;
+  cloning: Cloning | undefined;
+  onReadAgain: () => void;
+}) {
+  const { panels, pieces, piecesRefused } = state;
+  const clones = panels?.repos ?? [];
+  return (
+    <Section id="repos" title="Repos and branches" closed={closed} project={project}>
+      {state.trouble && (
+        <ReadRefused cause={`workspace-read:${workspace}`} onReadAgain={onReadAgain}>
+          {state.trouble}
+        </ReadRefused>
+      )}
+
+      {/* The tree is the rows and what holds them. The sentences about the whole region — the
+          trouble above, the pending and empty notes and what purlis would not read below —
+          are outside it. The ones about ONE clone (its worktrees could not be listed, are
+          still coming, or are none) stay inside that clone's `<details>`, beside the row they
+          explain, and so inside the tree: moving them out would take them away from it. */}
+      <RovingFocusGroup.Root asChild orientation="vertical" {...stop}>
+        <div className="tree" role="tree" aria-label="Repos and branches" onKeyDown={onKeyDown}>
+          <RovingFocusGroup.Item asChild tabStopId={ROOT} active={spot === undefined}>
+            <button
+              type="button"
+              className="spot spot-root"
+              {...treeitem(ROOT)}
+              // Not `aria-selected`, even in a tree: the three tablists in this window are
+              // where it selects (ADR 0036), and a picked spot is not a selection the keyboard
+              // moves but the place the next chat starts — the current item, which is what
+              // `aria-current` is for and what the old sidebar's workspace rows used.
+              aria-current={spot === undefined ? "true" : undefined}
+              onClick={() => onPick(undefined)}
+            >
+              <Folders className="node-icon" />
+              <span className="spot-name">{workspace}</span>
+              {live && <LiveMark />}
+              <span className="spot-what">the workspace itself</span>
+            </button>
+          </RovingFocusGroup.Item>
+
+          {clones.length > 0 && (
+            // The clones are the workspace row's children, and the wrapper is what lets them be
+            // drawn as such — the tree lines hang off it, one level in from the root row.
+            <div className="clones" role="group">
+              {clones.map((repo) => (
+                // `<details>` and not a primitive: the browser has a collapsible and
+                // `docs/ui-primitives.md` says native HTML that already does the job is not what
+                // the Radix rule is about. Open by default — a closed explorer explores nothing.
+                <details
+                  className="clone"
+                  key={repo}
+                  data-testid={`clone-${repo}`}
+                  // Held by the fold state rather than by the element, so that Left and Right
+                  // (#238) open and close it through the same state a click on the heading does.
+                  open={!folded.has(foldKey(workspace, repo))}
+                  onToggle={(event) => fold(foldKey(workspace, repo), event.currentTarget.open)}
+                >
+                  {/* The clone's menu: a new tab in it, and picking it as where new chats
+                      start (charter-app#174). On the heading, for the piece rows' reason — the
+                      `<details>` also holds every row inside the clone. */}
+                  <Menued on={{ on: "clone", repo }} offers={offers} onPress={onPress}>
+                    <RovingFocusGroup.Item
+                      asChild
+                      tabStopId={cloneRow(repo)}
+                      active={picked === cloneRow(repo)}
+                    >
+                      <summary
+                        {...treeitem(cloneRow(repo))}
+                        aria-current={picked === cloneRow(repo) ? "true" : undefined}
+                      >
+                        {/* The twisty says which way the disclosure goes, which the default
+                      marker said in the platform's own glyph at the platform's own size. It
+                      turns with `[open]`, and the turn is the one motion here that is a direct
+                      answer to a click — `prefers-reduced-motion` stops it all the same. */}
+                        <ChevronRight className="twisty" />
+                        <FolderGit2 className="node-icon" />
+                        <span className="repo">{repo}</span>
+                        <PieceCount pieces={pieces[repo]} refused={piecesRefused[repo]} />
+                      </summary>
+                    </RovingFocusGroup.Item>
+                  </Menued>
+                  {piecesRefused[repo] ? (
+                    // Said, never swallowed: a clone with no rows otherwise reads as a clone
+                    // nobody has cut a branch in.
+                    <ReadRefused
+                      cause={`branches-read:${workspace}/${repo}`}
+                      onReadAgain={onReadAgain}
+                    >
+                      purlis could not list the branches of <code>{repo}</code>:{" "}
+                      {piecesRefused[repo]}
+                    </ReadRefused>
+                  ) : pieces[repo] === undefined ? (
+                    <Pending>Asking git…</Pending>
+                  ) : pieces[repo].length === 0 ? (
+                    <p className="none">No branches cut here</p>
+                  ) : (
+                    <ul className="pieces" role="group">
+                      {pieces[repo].map((piece) => {
+                        const isPicked = spot?.repo === repo && spot.piece === piece.piece;
+                        return (
+                          <li
+                            key={piece.piece}
+                            role="none"
+                            data-testid={`piece-${repo}-${piece.piece}`}
+                          >
+                            {/* **Right-click is what these rows were missing**
+                            (charter-app#174). The menu is the catalogue filtered to this piece —
+                            merge above the line, remove below it, and the discard row that only
+                            exists while the core has refused THIS removal. Nothing here says
+                            what those rows mean; `Menus.tsx` draws whatever `actions.ts` has.
+
+                            On the button and not on the `<li>`: the `<li>` also holds the
+                            branch's marks. `asChild`, so the row gains no element. */}
+                            <Menued
+                              on={{ on: "worktree", repo, piece: piece.piece }}
+                              offers={offers}
+                              onPress={onPress}
+                            >
+                              <RovingFocusGroup.Item
+                                asChild
+                                tabStopId={pieceRow(repo, piece.piece)}
+                                active={isPicked}
+                                focusable={isDrawn(pieceRow(repo, piece.piece))}
+                              >
+                                <button
+                                  type="button"
+                                  className="spot"
+                                  aria-current={isPicked ? "true" : undefined}
+                                  {...treeitem(pieceRow(repo, piece.piece))}
+                                  // The folder's whole path: ADR 0072 §4 shows it only where a
+                                  // path is wanted, and the row itself reads the branch.
+                                  title={piece.path}
+                                  onClick={() =>
+                                    onPick({ repo, piece: piece.piece, path: piece.path })
+                                  }
+                                >
+                                  <GitBranch className="node-icon" />
+                                  <BranchLabel repo={repo} piece={piece} />
+                                </button>
+                              </RovingFocusGroup.Item>
+                            </Menued>
+                            {/* The two states the operator has to see BEFORE they start a chat
+                            in a tree: `unwired` and `stale`. The same component the palette's
+                            worktree rows are written against, without the branch the row
+                            above already reads (#1102). */}
+                            <WorktreeMark
+                              withBranch={false}
+                              worktree={{
+                                workspace,
+                                repo,
+                                piece: piece.piece,
+                                branch: piece.branch,
+                                wired: piece.wired,
+                                stale: piece.stale,
+                              }}
+                            />
+                            {/* What the piece said about itself — `done`, `abandoned: <why>`
+                            or `silent 3d` — so a finished piece and a quiet one do not look
+                            alike (charter#368). An age, never a verdict. */}
+                            {piece.said && (
+                              <span className="label said" data-testid="piece-said">
+                                {piece.said}
+                              </span>
+                            )}
+                            {/* A branch purlis cut for a chat that never started in it — a
+                            crash between the cut and the start leaves one (#835). Said, with
+                            its age, and never swept: its folder's removal stays the row's
+                            menu's. */}
+                            {piece.unclaimed && (
+                              <span
+                                className="label said"
+                                data-testid="piece-unclaimed"
+                                title={`purlis cut this branch ${piece.unclaimed} ago for a chat that never started in it. Nothing removes it on its own: start a chat in it, or remove its folder from its menu.`}
+                              >
+                                unclaimed {piece.unclaimed}
+                              </span>
+                            )}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+                </details>
+              ))}
+            </div>
+          )}
+        </div>
+      </RovingFocusGroup.Root>
+
+      {panels === undefined ? (
+        <Pending>Reading the project…</Pending>
+      ) : (
+        clones.length === 0 && <p className="none">No repos in this workspace</p>
+      )}
+
+      {/* Membership without a clone. There is nothing to explore in it and nothing to start
+            a chat in, so it is named and not made a heading — and it can be cloned (#1215). */}
+      <NotClonedHere
+        absent={panels?.absent ?? []}
+        cloning={cloning}
+        offers={offers}
+        onPress={onPress}
+      />
+
+      {panels?.refused.map(([name, why]) => (
+        <ReadRefused
+          key={`refused-${name}`}
+          cause={`repo-refused:${workspace}/${name}`}
+          onReadAgain={onReadAgain}
+        >
+          purlis will not read <code>{name}</code>: {why}
+        </ReadRefused>
+      ))}
+    </Section>
   );
 }
 

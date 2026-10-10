@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from "react";
-import { atCreation, onLayoutMovedAside, sayAboutThisMachine, type Reading } from "./windowprefs";
+import { layoutPref } from "./layoutPref";
+import { onLayoutMovedAside } from "./windowprefs";
 import { keepExplorer, keptExplorer } from "./explorerFolds";
 
 /**
@@ -66,35 +67,31 @@ export function explorerSectionsDocument(
   return { closed: SECTIONS.filter((one) => closed.has(one)) };
 }
 
-let changed: ReadonlySet<SectionId> | undefined;
-let started: ReadonlySet<SectionId> | undefined;
-const listeners = new Set<(closed: ReadonlySet<SectionId>) => void>();
-/** What draws the sections, told on every change; {@link listeners} also hear only the
- *  person's, which are written. */
-const drawers = new Set<() => void>();
+const sameSections = (one: ReadonlySet<SectionId>, other: ReadonlySet<SectionId>) =>
+  one.size === other.size && [...one].every((section) => other.has(section));
 
-function startingSections(layout: Reading = atCreation().layout): ReadonlySet<SectionId> {
-  if (started !== undefined) return started;
-  // A layout file purlis refused is said once, by `regions.ts`, and is every section open here.
-  const { closed, said } =
-    layout.found && layout.trouble === null
-      ? loadExplorerSections(layout.document)
-      : { closed: NONE, said: [] };
-  if (said.length > 0) {
-    const where = layout.path || "the layout file";
-    sayAboutThisMachine("explorer", {
-      severity: "warn",
-      detail: `${where}: ${said.join("; ")}`,
-      remedy: `fix ${where}, or fold or open a section of Explorer, which rewrites it`,
-    });
-  }
-  started = closed;
-  return closed;
-}
+/** The machine's sections folded (`layoutPref.ts`), under `explorer`: the last fold in any
+ *  project. */
+export const EXPLORER_SECTIONS = layoutPref<ReadonlySet<SectionId>, "explorer">({
+  key: "explorer",
+  fallback: NONE,
+  load: (raw) => {
+    const { closed, said } = loadExplorerSections(raw);
+    return { value: closed, said };
+  },
+  same: sameSections,
+  written: (closed) => explorerSectionsDocument(closed),
+  remedy: (where) => `fix ${where}, or fold or open a section of Explorer, which rewrites it`,
+  forgotten: () => projectSets.clear(),
+});
+
+/** What draws the sections, told on every change, a project's or the machine's;
+ *  {@link EXPLORER_SECTIONS}'s listeners hear only the machine's, which are written. */
+const drawers = new Set<() => void>();
 
 /** The machine's sections folded now: the last fold in any project. */
 function machineSections(): ReadonlySet<SectionId> {
-  return changed ?? startingSections();
+  return EXPLORER_SECTIONS.value();
 }
 
 /** Each project's own folded sections, as last handed out, by what they were read from: the
@@ -113,13 +110,6 @@ export function closedSections(project?: string): ReadonlySet<SectionId> {
   return closed;
 }
 
-function become(now: ReadonlySet<SectionId>): void {
-  changed = now;
-  sayAboutThisMachine("explorer", undefined);
-  for (const listener of listeners) listener(now);
-  for (const draw of drawers) draw();
-}
-
 /**
  * Folds a section, or opens it, in `project` (B-11): its own sections, and the machine's, which a
  * project with none of its own starts from. The project's entry is what writes the file then
@@ -131,21 +121,18 @@ export function setSectionOpen(section: SectionId, open: boolean, project?: stri
   const now = new Set(was);
   if (open) now.delete(section);
   else now.add(section);
-  if (project === undefined) {
-    become(now);
-    return;
+  if (project === undefined) EXPLORER_SECTIONS.set(now);
+  else {
+    EXPLORER_SECTIONS.keep(now);
+    // An empty list is kept: every section open here is this project's, whatever the machine's.
+    keepExplorer(project, { closed: SECTIONS.filter((one) => now.has(one)) });
   }
-  changed = now;
-  sayAboutThisMachine("explorer", undefined);
-  // An empty list is kept: every section open here is this project's, whatever the machine's.
-  keepExplorer(project, { closed: SECTIONS.filter((one) => now.has(one)) });
   for (const draw of drawers) draw();
 }
 
 /** Calls `listener` whenever a section folds or opens. Answers the way to stop. */
 export function onExplorerSections(listener: (closed: ReadonlySet<SectionId>) => void): () => void {
-  listeners.add(listener);
-  return () => void listeners.delete(listener);
+  return EXPLORER_SECTIONS.on(listener);
 }
 
 /** {@link closedSections}, for a component that redraws when a section folds or opens. */
@@ -161,15 +148,13 @@ export function useClosedSections(project?: string): ReadonlySet<SectionId> {
 
 /** Forgets what this launch folded and read, as a new launch would. For tests. */
 export function forgetExplorerSections(): void {
-  changed = undefined;
-  started = undefined;
-  projectSets.clear();
+  EXPLORER_SECTIONS.forget();
 }
 
 // Use the default layout: every section open, drawn at once. Not written: the file was just moved
 // aside, and the next change the person makes writes a new one without them.
 onLayoutMovedAside(() => {
-  changed = NONE;
+  EXPLORER_SECTIONS.keep(NONE);
   projectSets.clear();
   for (const draw of drawers) draw();
 });

@@ -66,6 +66,9 @@ export function ApprovePlane({
         <Dialog.Content
           className="warning"
           aria-labelledby="approve-plane"
+          // Described by what purlis cannot judge in a project (#630), as the extension's
+          // question is by what purlis cannot stop: the list above it is read in turn.
+          aria-describedby="approve-plane-unjudged"
           // A click outside answers nothing: a dialog that is up is a dialog that has to be
           // answered, and dismissing it by missing it is not an answer.
           onInteractOutside={(e) => e.preventDefault()}
@@ -176,7 +179,7 @@ export function ApprovePlane({
             </section>
           )}
 
-          <p className="came-back">
+          <p className="came-back" id="approve-plane-unjudged">
             purlis can only list what it can read. A project&rsquo;s persona charters, memory and
             todos are text a model will read and act on, and purlis makes no judgement about them.
           </p>

@@ -80,6 +80,13 @@ export function RenameWorkspace({
               }
               control={(ids) => <Field ids={ids} kind="text" value={name} onChange={setName} />}
             />
+            {/* Rename waits for this answer, so say that it is being asked (#1719): a button
+                greyed out with no reason reads as a dialog that refuses. */}
+            {startsFresh === undefined && (
+              <p className="pending" aria-busy="true">
+                Asking which chats would start fresh…
+              </p>
+            )}
             {/* The core's sentence, unchanged, as `trouble` is. */}
             {startsFresh && (
               <p className="came-back" aria-label="Chats that will start fresh">

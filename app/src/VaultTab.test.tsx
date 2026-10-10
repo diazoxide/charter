@@ -97,7 +97,7 @@ describe("a vault's tab", () => {
     draw();
 
     expect(await screen.findByRole("heading", { name: /ops/ })).toHaveTextContent(
-      "ops · keyring · 2 secrets",
+      "ops · System keychain · 2 secrets",
     );
     const table = screen.getByRole("table", { name: "Secrets in ops" });
     expect(
@@ -552,7 +552,7 @@ describe("a 1Password vault's token", () => {
     });
   }
 
-  it("puts a pasted token straight into the Keychain, and keeps it out of the page", async () => {
+  it("puts a pasted token straight into your system keychain, and keeps it out of the page", async () => {
     // The token the operator pastes goes to `vault_identity_put`; the app's environment never has
     // it, so no chat can read it (#271 review, U3). The box is emptied at the press.
     const asked = core(team("environment"), { vault_identity_put: team("keyring") });
@@ -561,7 +561,7 @@ describe("a 1Password vault's token", () => {
     const box = await screen.findByLabelText("Token for $OP_TEAM_TOKEN");
     await userEvent.type(box, PUT);
     await userEvent.click(
-      screen.getByRole("button", { name: "Put this vault's token in the Keychain" }),
+      screen.getByRole("button", { name: "Put this vault's token in your system keychain" }),
     );
 
     expect(asked.at(-1)).toEqual({
@@ -570,9 +570,9 @@ describe("a 1Password vault's token", () => {
     });
     noValueAnywhere(PUT);
     expect(await screen.findByRole("status")).toHaveTextContent(
-      "Stored $OP_TEAM_TOKEN in the Keychain",
+      "Stored $OP_TEAM_TOKEN in your system keychain",
     );
-    expect(screen.getByText(/reads \$OP_TEAM_TOKEN from the Keychain/)).toBeInTheDocument();
+    expect(screen.getByText(/reads \$OP_TEAM_TOKEN from your system keychain/)).toBeInTheDocument();
     expect(onChanged).toHaveBeenCalled();
   });
 
@@ -595,20 +595,22 @@ describe("a 1Password vault's token", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("relaunch purlis");
   });
 
-  it("says where the token is, and offers nothing, once it is in the Keychain", async () => {
+  it("says where the token is, and offers nothing, once it is in your system keychain", async () => {
     core(team("keyring"));
     draw();
 
-    expect(await screen.findByText(/reads \$OP_TEAM_TOKEN from the Keychain/)).toBeInTheDocument();
     expect(
-      screen.queryByRole("button", { name: "Put this vault's token in the Keychain" }),
+      await screen.findByText(/reads \$OP_TEAM_TOKEN from your system keychain/),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Put this vault's token in your system keychain" }),
     ).not.toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "Move the token from purlis's environment" }),
     ).not.toBeInTheDocument();
   });
 
-  it("still warns to relaunch when the token is in the Keychain but the shell still exports it", async () => {
+  it("still warns to relaunch when the token is in your system keychain but the shell still exports it", async () => {
     core(team("keyring", ["OP_TEAM_TOKEN"]));
     draw();
 
@@ -621,7 +623,7 @@ describe("a 1Password vault's token", () => {
 
     await screen.findByRole("table", { name: "Secrets in ops" });
     expect(
-      screen.queryByRole("button", { name: "Put this vault's token in the Keychain" }),
+      screen.queryByRole("button", { name: "Put this vault's token in your system keychain" }),
     ).not.toBeInTheDocument();
   });
 
@@ -636,12 +638,12 @@ describe("a 1Password vault's token", () => {
     const box = await screen.findByLabelText("Token for $OP_TEAM_TOKEN");
     await userEvent.type(box, PUT);
     await userEvent.click(
-      screen.getByRole("button", { name: "Put this vault's token in the Keychain" }),
+      screen.getByRole("button", { name: "Put this vault's token in your system keychain" }),
     );
 
     expect(await screen.findByRole("alert")).toHaveTextContent("could not write");
     expect(
-      screen.getByRole("button", { name: "Put this vault's token in the Keychain" }),
+      screen.getByRole("button", { name: "Put this vault's token in your system keychain" }),
     ).toBeInTheDocument();
     noValueAnywhere(PUT);
   });
@@ -649,9 +651,9 @@ describe("a 1Password vault's token", () => {
   // --- #1526: the token is nowhere, so the contents cannot be read ------------------------ //
 
   const UNSET =
-    "vault 'ops' is read through $OP_TEAM_TOKEN, which is unset. purlis will not fall back to an ambient $OP_SERVICE_ACCOUNT_TOKEN. Paste the token into the box below: it goes straight into the Keychain.";
+    "vault 'ops' is read through $OP_TEAM_TOKEN, which is unset. purlis will not fall back to an ambient $OP_SERVICE_ACCOUNT_TOKEN. Paste the token into the box below: it goes straight into your system keychain.";
   const PASTE_HERE =
-    "Paste the service-account token for $OP_TEAM_TOKEN here. It goes straight into the Keychain; purlis reads it from there, and no chat is given it.";
+    "Paste the service-account token for $OP_TEAM_TOKEN here. It goes straight into your system keychain; purlis reads it from there, and no chat is given it.";
 
   /** `team` as the core answers it when its contents could not be read: no secrets, why and what
    *  kind of failure, and the identity it declares all the same. */
@@ -668,7 +670,7 @@ describe("a 1Password vault's token", () => {
     });
   }
 
-  const PUT_IT = "Put this vault's token in the Keychain";
+  const PUT_IT = "Put this vault's token in your system keychain";
 
   it("draws the refusal and the paste box when the token is nowhere, and no empty vault", async () => {
     core(unread("unset"));
@@ -682,7 +684,7 @@ describe("a 1Password vault's token", () => {
     expect(screen.queryByTestId("vault-empty")).not.toBeInTheDocument();
     expect(screen.queryByRole("table")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Add" })).not.toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: /ops/ })).toHaveTextContent("ops · 1password");
+    expect(screen.getByRole("heading", { name: /ops/ })).toHaveTextContent("ops · 1Password");
     expect(screen.getByRole("heading", { name: /ops/ })).not.toHaveTextContent("0 secrets");
   });
 
@@ -700,9 +702,9 @@ describe("a 1Password vault's token", () => {
     });
     expect(await screen.findByRole("table", { name: "Secrets in ops" })).toBeInTheDocument();
     expect(rows()).toEqual([["DEPLOY", "—", "—", ""]]);
-    expect(screen.getByText(/reads \$OP_TEAM_TOKEN from the Keychain/)).toBeInTheDocument();
+    expect(screen.getByText(/reads \$OP_TEAM_TOKEN from your system keychain/)).toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent(
-      "Stored $OP_TEAM_TOKEN in the Keychain. purlis reads it from there, and no chat is given the token.",
+      "Stored $OP_TEAM_TOKEN in your system keychain. purlis reads it from there, and no chat is given the token.",
     );
     expect(screen.queryByText(/which is unset/)).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Token for $OP_TEAM_TOKEN")).not.toBeInTheDocument();
@@ -732,7 +734,7 @@ describe("a 1Password vault's token", () => {
 
     expect(
       await screen.findByText(
-        "$OP_TEAM_TOKEN is stored in the Keychain, and the vault still could not be read: the reason is above.",
+        "$OP_TEAM_TOKEN is stored in your system keychain, and the vault still could not be read: the reason is above.",
       ),
     ).toBeInTheDocument();
     expect(screen.queryByText(/^Stored /)).not.toBeInTheDocument();
@@ -904,11 +906,11 @@ describe("how a 1Password vault signs in, from its tab (#1527)", () => {
     { variable: "service-account-token", held, kept: true },
   ];
 
-  it("names a token kept in the Keychain as the vault's, not as a variable", async () => {
+  it("names a token kept in your system keychain as the vault's, not as a variable", async () => {
     core(onePassword({ identity: kept("keyring") }));
     draw();
     expect(
-      await screen.findByText("purlis reads this vault's token from the Keychain."),
+      await screen.findByText("purlis reads this vault's token from your system keychain."),
     ).toBeInTheDocument();
     expect(document.body.textContent).not.toContain("$service-account-token");
   });
@@ -1023,7 +1025,9 @@ describe("how a 1Password vault signs in, from its tab (#1527)", () => {
     });
     // The vault is read at once, with no restart, and the person is told what was skipped.
     expect(await screen.findByRole("table", { name: "Secrets in ops" })).toBeInTheDocument();
-    expect(screen.getByText("purlis reads this vault's token from the Keychain.")).toBeVisible();
+    expect(
+      screen.getByText("purlis reads this vault's token from your system keychain."),
+    ).toBeVisible();
     expect(screen.getByRole("alert")).toHaveTextContent(
       "How this vault signs in is stored. purlis reads the vault with it from now on, with no restart. edge was not given the token: its settings changed after they were shown here.",
     );

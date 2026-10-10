@@ -222,10 +222,12 @@ describe("a window holding more than one project", function () {
     // about why. The `+` carries the catalogue's words in `aria-label` precisely so that it
     // can be reached by what it means, and that is what an operator gets from it too.
     await $(`${PROJECTS} button[aria-label="Open a project…"]`).click();
-    const box = await $("#open-by-path");
+    const box = await $('[data-setting="open-by-path"] input');
     await box.waitForDisplayed({ timeout: 20_000 });
     await box.addValue(second);
-    await $("button=Open").click();
+    // The path box's own submit, found by its form: its name is the trust
+    // question's Open project too, which comes next.
+    await $('form.by-path button[type="submit"]').click();
 
     // **A tab is an open, and an open goes through the gate.** A project nobody has approved
     // is described and not opened; there is no third way in (ADR 0035).

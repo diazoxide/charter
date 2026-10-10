@@ -73,9 +73,14 @@ export function PersonaProfile({
         >
           <Dialog.Title>Profile of {persona}</Dialog.Title>
           <p className="where">
-            written as <code>profile:</code> in <code>personas/{persona}/persona.md</code>
+            Written as <code>profile:</code> in <code>personas/{persona}/persona.md</code>
           </p>
 
+          {!read && !unreadable && (
+            <p className="pending" aria-busy="true">
+              Reading the profile {persona} names…
+            </p>
+          )}
           {unreadable && (
             <p className="trouble" role="alert">
               {unreadable}
@@ -115,7 +120,7 @@ export function PersonaProfile({
                     ids={ids}
                     kind="radio"
                     options={[
-                      { value: NONE, label: "none" },
+                      { value: NONE, label: "None" },
                       ...offered.map((name) => ({ value: name, label: name })),
                     ]}
                     value={value}
@@ -132,7 +137,7 @@ export function PersonaProfile({
 
               <SettingActions>
                 <button type="submit" tabIndex={0} disabled={value === undefined || saving}>
-                  {saving ? "Saving…" : "Save"}
+                  {saving ? "Saving…" : "Save profile"}
                 </button>
                 <button
                   type="button"
