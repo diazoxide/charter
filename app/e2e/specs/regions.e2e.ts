@@ -266,7 +266,10 @@ describe("the right-hand region", () => {
 
     await untilSays("panel-todos", "Review the rollout plan");
     await untilSays("panel-personas", "steward");
-    await untilSays("panel-personas", "default");
+    // A persona's row is its badge and its name (#1674); the default says so on hover.
+    const fallback = await $('[data-testid="panel-personas"] .is-default .row');
+    await fallback.waitForExist({ timeout: 30_000 });
+    expect(await fallback.getAttribute("title")).toContain("default");
   });
 
   /**

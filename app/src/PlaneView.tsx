@@ -7640,7 +7640,6 @@ export const PlaneView = memo(function PlaneView({
               offers={found}
               onPress={press}
               contributed={contributed}
-              views={views}
               shownRow={shownRow}
               onShowRow={setShownRow}
               vaults={vaults}

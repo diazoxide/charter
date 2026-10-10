@@ -2,7 +2,6 @@ import { useEffect, useId, useMemo, useState } from "react";
 import { useLentMemoryStores } from "./MemoryEdits";
 import {
   Archive,
-  ChartColumn,
   Circle,
   CircleDashed,
   Plus,
@@ -20,7 +19,7 @@ import { PanelList } from "./PanelList";
 import { HeadingOffer, PanelSection } from "./PanelSection";
 import { Vaults, type VaultsSaid } from "./Vaults";
 import { Chart, Facts } from "./Views";
-import { commands, type ExtensionView, type PanelView } from "./bindings";
+import { commands, type PanelView } from "./bindings";
 import {
   DISPATCHES_SHOW,
   listedMemoryOffers,
@@ -63,7 +62,6 @@ export function Panels({
   offers,
   onPress,
   contributed,
-  views = [],
   shownRow,
   onShowRow,
   vaults,
@@ -81,10 +79,6 @@ export function Panels({
    *  than once per workspace focus — a survey re-hashes every installed extension's directory,
    *  and that is not a cost the 100 ms of a workspace switch can carry. */
   contributed: readonly PanelView[];
-  /** The views approved extensions offer (`extension_views`), asked once per window for the
-   *  same reason. A view is offered on the heading of the panel about the same subject, and on
-   *  the tab of a view about it — both charter's choice of where, never the extension's. */
-  views?: readonly ExtensionView[];
   /**
    * The row whose card is open, as `<panel key>/<row key>`.
    *
@@ -151,7 +145,6 @@ export function Panels({
                 onPress={onPress}
                 shownRow={shownRow}
                 onShowRow={onShowRow}
-                views={[]}
               />
             ))}
         </>
@@ -179,7 +172,6 @@ export function Panels({
                 onPress={onPress}
                 shownRow={shownRow}
                 onShowRow={onShowRow}
-                views={views.filter((view) => panel.about !== null && view.about === panel.about)}
               />
             ))
           )}
@@ -253,7 +245,6 @@ function Contributed({
   onPress,
   shownRow,
   onShowRow,
-  views,
 }: {
   panel: PanelView;
   /** The focused workspace, which charter's todos panel writes to. */
@@ -263,8 +254,6 @@ function Contributed({
   onPress: (offer: Offer) => void;
   shownRow: string | undefined;
   onShowRow: (row: string | undefined) => void;
-  /** The views about this panel's subject, already filtered. */
-  views: readonly ExtensionView[];
 }) {
   const Mark = MARKS[panel.mark] ?? Circle;
   const open = shownRow?.startsWith(`${panel.key}/`)
@@ -286,13 +275,6 @@ function Contributed({
       provenance={panel.from ?? undefined}
       actions={
         <>
-          {views.map((view) => (
-            <ViewButton
-              key={`${view.extension}/${view.id}`}
-              offer={offers.get(`view.open:${view.extension}/${view.id}`)}
-              onPress={onPress}
-            />
-          ))}
           {/* charter's own panels are about things charter can make (SI-3): the heading's `+`
               is the catalogue's row for one more. By key, as the menus below are — the one
               place this file says what a panel is about. */}
@@ -348,6 +330,9 @@ function Contributed({
             empty={block.empty}
             label={panel.title}
             testid={`list-${named(panel)}`}
+            // One line a row on this side (#1674): the title, the note on hover, and a dated
+            // list under its days.
+            titleOnly
             open={open}
             // The empty list's way out (#1156): the catalogue's row, as a row's is.
             offerFor={lookUp}
@@ -504,32 +489,4 @@ function named(panel: PanelView): string {
     .replace(/^charter\//, "")
     .split("/")
     .join("-");
-}
-
-/**
- * One view's button on a panel's heading: **the catalogue's `view.open:<extension>/<view>` row,
- * drawn where a pointer looks for it.**
- *
- * The operator's *"button that will open statistics of personas"*, and it is on the heading
- * because an approved extension offers a view about the subject this panel is about — not
- * because anything here knows what statistics are. With no such extension there is no button,
- * which is what a *100% pluggable* personas panel means: the statistics are a plugin's, and so
- * is their absence. It opens the view in a tab of its own; the palette runs the same row.
- */
-function ViewButton({ offer, onPress }: { offer?: Offer; onPress: (offer: Offer) => void }) {
-  if (!offer) return null;
-  return (
-    <button
-      type="button"
-      className="panel-view"
-      // #190: WebKit leaves a button out of the tab sequence without `tabIndex`.
-      tabIndex={0}
-      disabled={!offer.available}
-      title={offer.title}
-      onClick={() => onPress(offer)}
-    >
-      <ChartColumn className="node-icon" aria-hidden="true" />
-      {offer.does.verb === "openView" ? offer.does.title : offer.title}
-    </button>
-  );
 }
