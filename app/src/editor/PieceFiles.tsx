@@ -47,8 +47,8 @@ import { REVEAL_SAID, type Offer } from "../actions";
 import type { ViewRef } from "../tabs";
 import { BranchTree } from "./BranchTree";
 import { LightEditor } from "./LightEditor";
-import { useYourEditor } from "../yourEditor";
-import { askSettingsLink, type SettingsLink } from "../settings/links";
+import { CHOOSE_EDITOR, NO_EDITOR, useYourEditor } from "../yourEditor";
+import { askSettingsLink } from "../settings/links";
 import { settleJump, usePendingJump } from "../fileJump";
 import { DragHandle, PickAChat, type Referenced } from "../references";
 import { useBranchMoved } from "./branchMoved";
@@ -163,11 +163,6 @@ function useCursorLine(plane: PlaneId, place: Place, path: string | undefined, s
     },
   };
 }
-
-/** What *Open in your editor* says when no editor is chosen. */
-const NO_EDITOR = "Choose your editor in Settings first.";
-/** Where an editor is chosen: Settings › You › Editor, its one setting focused (SE-22). */
-const CHOOSE_EDITOR: SettingsLink = { group: "you.editor", setting: "you.editor.yours" };
 
 /**
  * What a header's button answered — the core's refusal, or what was done — said under the
