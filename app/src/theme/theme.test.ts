@@ -46,11 +46,21 @@ describe("a theme is a complete set of semantic tokens", () => {
     // `contrast.test.ts` measured white on `#c05c5c` at 4.26:1, under AA, and the badge that
     // fails is the count of chats waiting for the operator. Darkening it to `#b85050` fixed
     // that one badge without touching the mark on an answer that cannot be undone, which is a
-    // move a shared palette token cannot make.
+    // move a shared palette token cannot make. The split paid again the other way (#1210): the
+    // mark on that answer is words on a button, `#c05c5c` on `control.base` was 3.73:1, and
+    // lightening `danger.base` alone to `#c97474` brought it over 4.5 without moving the badge.
     const dark = BUILT_IN["charter-dark"].values;
     expect(dark["needs-you.base"]).not.toEqual(dark["danger.base"]);
     expect(TOKENS).toContain("needs-you.base");
     expect(TOKENS).toContain("danger.base");
+  });
+
+  it.each(Object.keys(BUILT_IN))("%s washes in its own danger colour", (name) => {
+    // `danger.wash` is `danger.base` at a low alpha, so moving the one moves the other: a wash
+    // left at an old base would tint a warning's row in a red the theme no longer draws.
+    const values = BUILT_IN[name].values;
+    expect(values["danger.wash"].slice(0, 7)).toEqual(values["danger.base"]);
+    expect(values["danger.wash"]).toHaveLength(9);
   });
 
   it("holds nothing but hex, because a value is written into CSS and into xterm", () => {

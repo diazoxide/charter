@@ -35,10 +35,10 @@
     "needs-you.base": "#b85050",
     "needs-you.text": "#ffffff",
 
-    "danger.base": "#c05c5c",
+    "danger.base": "#c97474",
     "danger.surface": "#2a1a1a",
     "danger.text": "#f2a0a0",
-    "danger.wash": "#c05c5c1f",
+    "danger.wash": "#c974741f",
 
     "diff.deleted": "#f851491f",
     "diff.inserted": "#3fb9501f",
