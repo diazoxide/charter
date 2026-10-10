@@ -181,7 +181,7 @@ jobs:
           fetch-depth: 0
       # No cache: `--list` reads the source and `cargo metadata`, and builds nothing.
       - uses: ./.github/actions/rust-toolchain
-      - uses: taiki-e/install-action@183e4297cca2404691e9380e1307288dced5c82a # v2.87.25
+      - uses: taiki-e/install-action@f7e5d7c961414b23f5b25b2da9294395d08513ad # v2.87.26
         with:
           tool: cargo-mutants@${{ env.MUTANTS_VERSION }}
       - id: plan
@@ -265,7 +265,7 @@ jobs:
             echo
             echo "A **$SCOPE** run: the mutants $WHY."
           } >> "$GITHUB_STEP_SUMMARY"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: plan-diff
           path: |
@@ -320,7 +320,7 @@ jobs:
         shard: ${{ fromJSON(needs.plan.outputs.matrix) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: plan-diff
       # bubblewrap and socat, as `ci.yml` installs them: a project charter makes runs its chats
@@ -340,7 +340,7 @@ jobs:
       # `--package purlis-core` build never downloads.
       - name: Every crate the lock names
         run: cargo fetch --locked
-      - uses: taiki-e/install-action@183e4297cca2404691e9380e1307288dced5c82a # v2.87.25
+      - uses: taiki-e/install-action@f7e5d7c961414b23f5b25b2da9294395d08513ad # v2.87.26
         with:
           tool: cargo-mutants@${{ env.MUTANTS_VERSION }}
       # `timeout-minutes` on the STEP and not the job, so that when the budget is exceeded the
@@ -403,7 +403,7 @@ jobs:
           --verdict verdict-${{ matrix.shard }}.json
       - name: Keep the whole run, survivors and diffs included
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: mutants-${{ matrix.shard }}
           path: |
@@ -422,7 +422,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           path: artifacts
           pattern: mutants-*
@@ -442,7 +442,7 @@ jobs:
       # Always, and especially when the step above went red: this is the file you copy over
       # `.github/mutants-survivors.txt` once you have decided the new entries are acceptable.
       - if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: mutants-survivors-current
           path: mutants-survivors.current.txt
@@ -471,7 +471,7 @@ jobs:
           persist-credentials: false
       # What `plan` tested and which files the crate has. Missing when `plan` failed, and
       # `notice` then counts the whole crate as not known clean.
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         continue-on-error: true
         with:
           name: plan-diff
