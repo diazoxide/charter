@@ -4368,8 +4368,7 @@ h2.sidebar-title .node-icon {
    own — light grey chrome on a dark window — so `ends-it`'s red sat on a background it was
    never picked against, and a disabled Start was a greyed light button rather than a visibly
    unavailable one. */
-.answer button,
-.warning .doing button {
+.answer button {
   color: var(--text-primary);
   background: var(--control-base);
   border: 1px solid var(--border-subtle);
@@ -4379,20 +4378,17 @@ h2.sidebar-title .node-icon {
   cursor: pointer;
 }
 
-.answer button:hover:not(:disabled),
-.warning .doing button:hover:not(:disabled) {
+.answer button:hover:not(:disabled) {
   background: var(--border-subtle);
 }
 
 /* Unavailable, and said by more than a shade: the cursor stops offering it too. */
-.answer button:disabled,
-.warning .doing button:disabled {
+.answer button:disabled {
   opacity: 0.45;
   cursor: not-allowed;
 }
 
-.answer button:focus-visible,
-.warning .doing button:focus-visible {
+.answer button:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
@@ -4401,6 +4397,10 @@ h2.sidebar-title .node-icon {
 .answer .ends-it {
   border-color: var(--danger-base);
   color: var(--danger-base);
+}
+
+.answer .ends-it:hover:not(:disabled) {
+  background: var(--danger-surface);
 }
 
 /* What a chat is doing. A mark, plus a shape per state: colour alone is no state at all to
@@ -5870,18 +5870,6 @@ h2.sidebar-title .node-icon {
 .at-risk li {
   margin: 0.15rem 0;
   overflow-wrap: anywhere;
-}
-
-/* The answer that destroys something, marked in the one colour the window keeps for it. It is
-   never the one Return finds — every dialog here focuses Cancel — and the mark is so that a
-   pointer moving towards it has been told. */
-.warning .doing button.ends-it {
-  border-color: var(--danger-base);
-  color: var(--danger-base);
-}
-
-.warning .doing button.ends-it:hover:not(:disabled) {
-  background: var(--danger-surface);
 }
 
 /* ==========================================================================================

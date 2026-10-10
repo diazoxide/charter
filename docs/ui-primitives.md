@@ -83,9 +83,10 @@ What keeps it from becoming the library this file forbids:
   0037, not a commit.
 - **SettingActions is a row, and the buttons are the caller's.** Native `<button>`s with their
   own `type`, `disabled` and `onClick` (and `tabIndex={0}`, for #190), drawn alike; a button
-  that destroys something says so with `ends-it`. It ends a _form_. A dialog's answer bar — a
-  question with Cancel and one act and nothing to fill in, like the quit warning or a delete's
-  confirm — keeps its own `answer` or `doing` row.
+  that destroys something says so with `ends-it`. It ends a _form_. A dialog's answer bar (a
+  question with a way out and an act or two, and nothing to fill in, like the quit warning or a
+  delete's confirm) is an `AnswerBar` (`app/src/AnswerBar.tsx`, #1210): a row, not a settings
+  piece.
 - **A box the set's `Field` cannot hold goes in the row's control slot as a native element.**
   A `Field` is controlled; a secret's value is never held in React state (a vault's value box),
   so that box is a native `<input type="password">` drawn with `ui-field`, in a `SettingRow`.
