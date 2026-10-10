@@ -250,7 +250,9 @@ pub fn say_held_note(ctx: &Ctx, v: &Vault, io: &mut dyn Io) {
 fn read_saying(ctx: &Ctx, vault: &str, key: &str, io: &mut dyn Io) -> Result<String, VaultError> {
     let v = provider(ctx, vault)?;
     // `get` and `cp` are not handed to the app: a sandboxed chat never reads the keyring here.
-    if let Some(why) = super::brokered::refused_in_this_chat(ctx, &v, "read") {
+    if let Some(why) =
+        super::brokered::refused_in_this_chat(ctx, &v, super::brokered::Reader::GetOrCp)
+    {
         return Err(VaultError::new(why));
     }
     let value = get_value(ctx, &v, key)?;

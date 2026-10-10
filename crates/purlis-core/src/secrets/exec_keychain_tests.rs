@@ -1,4 +1,4 @@
-//! How often one `purlis secret exec` makes the Keychain ask the person (#1180, V16b).
+//! How often one `purlis secret exec` makes the Keychain ask the person (#1638).
 //!
 //! A 1Password vault whose service-account token is kept in the keyring is read by running
 //! `op` once per value, and every `op` is handed the token. Where the `purlis` command is the
@@ -7,48 +7,8 @@
 //! command ([`exec`]).
 
 use super::*;
+use crate::secrets::cmd::tests::Rec;
 use crate::secrets::{Ctx, Env, identity, keyring, registry};
-
-/// What `exec` said and printed.
-#[derive(Default)]
-struct Rec {
-    said: Vec<Say>,
-    out: Vec<u8>,
-}
-
-impl Rec {
-    fn errors(&self) -> Vec<&str> {
-        self.said
-            .iter()
-            .filter_map(|s| match s {
-                Say::Err(m) => Some(m.as_str()),
-                _ => None,
-            })
-            .collect()
-    }
-}
-
-impl Io for Rec {
-    fn say(&mut self, line: Say) {
-        self.said.push(line);
-    }
-    fn out(&mut self, bytes: &[u8]) {
-        self.out.extend_from_slice(bytes);
-    }
-    fn err(&mut self, _bytes: &[u8]) {}
-    fn stdout_is_terminal(&self) -> bool {
-        false
-    }
-    fn stdin_is_terminal(&self) -> bool {
-        true
-    }
-    fn read_stdin(&mut self) -> String {
-        String::new()
-    }
-    fn read_hidden(&mut self, _prompt: &str) -> String {
-        String::new()
-    }
-}
 
 /// A word that is no token's shape: the commit hook scans for those.
 const KEPT: &str = "kept-for-the-team";
@@ -103,6 +63,19 @@ fn three_values() -> Request {
     }
 }
 
+/// What a chat the app started sandboxed carries, where no app listens on its socket any more.
+fn sandboxed_no_app(tmp: &tempfile::TempDir) -> Vec<(&'static str, String)> {
+    let gone = tmp.path().join("no-app-listens.sock");
+    vec![
+        (crate::hookwire::SANDBOXED_ENV, "1".to_owned()),
+        (
+            crate::hookwire::SOCKET_ENV,
+            gone.to_string_lossy().into_owned(),
+        ),
+        (crate::hookwire::CHAT_ENV, "7".to_owned()),
+    ]
+}
+
 fn reads(ctx: &Ctx) -> usize {
     keyring::stub_reads(&ctx.state.join(keyring::STUB_FILE))
 }
@@ -116,7 +89,7 @@ fn one_secret_exec_reads_a_kept_token_from_the_keychain_once_however_many_values
 
     let code = exec(&ctx, &three_values(), &mut io);
 
-    assert_eq!(code, 0, "{:?}", io.errors());
+    assert_eq!(code, 0, "{}", io.said());
     // Every value was resolved (and is masked in what the child printed).
     assert_eq!(String::from_utf8_lossy(&io.out), "***|***|***");
     assert_eq!(
@@ -129,17 +102,9 @@ fn one_secret_exec_reads_a_kept_token_from_the_keychain_once_however_many_values
 #[test]
 fn a_sandboxed_chat_no_app_answers_is_refused_a_kept_token_and_the_keychain_is_never_read() {
     let (tmp, bin) = kept_plane();
-    let gone = tmp.path().join("no-app-listens.sock");
-    let gone = gone.to_string_lossy().into_owned();
-    let ctx = on_path(
-        tmp.path(),
-        bin.path(),
-        &[
-            (crate::hookwire::SANDBOXED_ENV, "1"),
-            (crate::hookwire::SOCKET_ENV, gone.as_str()),
-            (crate::hookwire::CHAT_ENV, "7"),
-        ],
-    );
+    let chat = sandboxed_no_app(&tmp);
+    let chat: Vec<(&str, &str)> = chat.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    let ctx = on_path(tmp.path(), bin.path(), &chat);
     let before = reads(&ctx);
     let mut io = Rec::default();
 
@@ -147,7 +112,7 @@ fn a_sandboxed_chat_no_app_answers_is_refused_a_kept_token_and_the_keychain_is_n
 
     assert_eq!(code, 1);
     assert!(io.out.is_empty(), "nothing was run");
-    let said = io.errors().join("\n");
+    let said = io.said();
     assert!(said.contains("vault 'team'"), "{said}");
     assert!(said.contains("app"), "{said}");
     assert_eq!(
@@ -171,21 +136,14 @@ fn a_sandboxed_chat_no_app_answers_still_runs_a_vault_the_keychain_does_not_hold
     for key in ["alpha", "beta", "gamma"] {
         crate::secrets::cmd::set_value(&ctx, &v, key, "a-plain-value").unwrap();
     }
-    let gone = tmp.path().join("no-app-listens.sock");
-    let gone = gone.to_string_lossy().into_owned();
-    let ctx = Ctx::new(
-        tmp.path(),
-        Env::of(&[
-            (crate::hookwire::SANDBOXED_ENV, "1"),
-            (crate::hookwire::SOCKET_ENV, gone.as_str()),
-            (crate::hookwire::CHAT_ENV, "7"),
-        ]),
-    );
+    let chat = sandboxed_no_app(&tmp);
+    let chat: Vec<(&str, &str)> = chat.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    let ctx = Ctx::new(tmp.path(), Env::of(&chat));
     let mut io = Rec::default();
 
     let code = exec(&ctx, &three_values(), &mut io);
 
-    assert_eq!(code, 0, "{:?}", io.errors());
+    assert_eq!(code, 0, "{}", io.said());
     assert_eq!(String::from_utf8_lossy(&io.out), "***|***|***");
 }
 
@@ -204,7 +162,7 @@ fn a_sandboxed_chat_is_refused_secret_get_of_a_kept_token_and_the_keychain_is_ne
 
     assert_eq!(code, 1);
     assert!(io.out.is_empty(), "nothing was said of the value");
-    let said = io.errors().join("\n");
+    let said = io.said();
     assert!(said.contains("secret exec team"), "{said}");
     assert_eq!(
         reads(&ctx) - before,
@@ -218,8 +176,31 @@ fn a_sandboxed_chat_is_refused_secret_get_of_a_kept_token_and_the_keychain_is_ne
     assert_eq!(
         crate::secrets::cmd::get(&person, "team", "alpha", false, false, &mut io),
         0,
-        "{:?}",
-        io.errors()
+        "{}",
+        io.said()
     );
-    assert_eq!(reads(&ctx) - before, 1);
+    assert_eq!(reads(&person) - before, 1);
+}
+
+#[test]
+fn any_other_read_of_a_kept_token_in_a_sandboxed_chat_is_refused_where_the_keyring_is_read() {
+    let (tmp, bin) = kept_plane();
+    let ctx = on_path(
+        tmp.path(),
+        bin.path(),
+        &[(crate::hookwire::SANDBOXED_ENV, "1")],
+    );
+    let before = reads(&ctx);
+    let mut io = Rec::default();
+
+    // Listing a 1Password vault runs `op`, which is handed the token.
+    let code = crate::secrets::cmd::list(&ctx, "team", &mut io);
+
+    assert_ne!(code, 0);
+    assert!(io.said().contains("secret exec team"), "{}", io.said());
+    assert_eq!(
+        reads(&ctx) - before,
+        0,
+        "the chat never reaches the Keychain"
+    );
 }

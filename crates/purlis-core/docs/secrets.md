@@ -45,13 +45,6 @@ purlis persona secret exec --env TOKEN=API_TOKEN -- some-cli       # the active 
   have four such runs at once. Output streams back with each value's literal text masked, even
   under `--stream` and `--exec`, then the exit status. stdin is passed through when it is not a
   terminal.
-- **A sandboxed chat never reads the Keychain through the command** (#1638). Where the app
-  does not take a sandboxed chat's `secret exec` (it is closed, or does not answer), a vault
-  whose values come from the keyring (a `keyring` vault, or a 1Password vault whose token is
-  kept there) is refused with a sentence saying so, and nothing runs: read in the chat, the
-  Keychain would ask you on the chat's behalf. `secret get` and `cp` in a sandboxed chat are
-  refused such a vault the same way, since the app runs only `exec`. Any other vault runs as
-  before.
 
   **A host the chat's hosts do not list.** The command's proxy refuses it, and the command
   reports that in its own words, which often name no host (kubectl says "Forbidden"). So the
@@ -82,6 +75,13 @@ purlis persona secret exec --env TOKEN=API_TOKEN -- some-cli       # the active 
   matches a value's literal text only. Prefer `--file` to `--env` for a command that can read
   its credential from a file: an environment variable is readable by the same user through `ps
   eww` while the command runs. Linux has no such sandbox yet (#1040), so there the app refuses.
+- **A sandboxed chat never reads the keyring through the command** (#1638). Where the app
+  does not take a sandboxed chat's `secret exec` (it is closed, or does not answer), a vault
+  whose values come from the keyring (a `keyring` vault, or a 1Password vault whose token is
+  kept there) is refused with a sentence saying so, and nothing runs: read in the chat, the
+  Keychain would ask you on the chat's behalf. `secret get`, `cp` and every other read of such
+  a vault in a sandboxed chat are refused the same way, since the app runs only `exec`. Any
+  other vault runs as before.
 - **`secret list <vault>`** prints the key names.
 - **`secret get <vault> <key>`** prints a size band and a keyed fingerprint —
   `devops/API_TOKEN: present · 16–31 bytes · fp:9c41a0b7e5d2` — never the value. The

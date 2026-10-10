@@ -380,8 +380,9 @@ pub fn exec(ctx: &Ctx, req: &Request, io: &mut dyn Io) -> i32 {
         )));
         return 2;
     }
-    // No app took it: a sandboxed chat still never reads the keyring here (#1180).
-    if let Some(why) = super::brokered::refused_in_this_chat(ctx, &v, "exec") {
+    // No app took it: a sandboxed chat still never reads the keyring here (#1638).
+    if let Some(why) = super::brokered::refused_in_this_chat(ctx, &v, super::brokered::Reader::Exec)
+    {
         io.say(Say::Err(why));
         return 1;
     }

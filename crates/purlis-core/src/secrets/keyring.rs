@@ -386,8 +386,15 @@ impl FileStore {
     }
 }
 
+/// Whether `vault`'s values come from the keyring: a `keyring` vault's own, or a vault whose
+/// token is kept there ([`super::identity::in_keyring`]). From the registry alone: the keyring
+/// itself is not read, so asking never makes it ask the person (#1638).
+pub fn holds_values_of(ctx: &Ctx, vault: &Vault) -> bool {
+    vault.provider == "keyring" || super::identity::in_keyring(ctx, vault)
+}
+
 /// How many times a fenced build's stub at each path was read for an item: what a test counts
-/// to say how often a run would make the Keychain ask the person (#1180, V16b). Per path, so
+/// to say how often a run would make the Keychain ask the person (#1638). Per path, so
 /// tests running at once in one process never count each other's reads.
 #[cfg(feature = "fenced")]
 static STUB_READS: std::sync::Mutex<BTreeMap<PathBuf, usize>> =
@@ -707,6 +714,11 @@ fn not_found(vault: &Vault, key: &str) -> VaultError {
 
 /// `get`: the value of `key`, read from the store under the vault's service.
 pub fn get(ctx: &Ctx, vault: &Vault, key: &str) -> Result<String, VaultError> {
+    if let Some(why) =
+        super::brokered::refused_in_this_chat(ctx, vault, super::brokered::Reader::Other)
+    {
+        return Err(VaultError::new(why));
+    }
     get_with(&*store(ctx), ctx, vault, key)
 }
 

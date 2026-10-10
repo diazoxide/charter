@@ -478,6 +478,11 @@ pub fn from_keyring(ctx: &Ctx, vault: &Vault, source: &str) -> Result<Option<Str
         return Ok(None);
     };
     let base = base_of(&rec, vault)?;
+    if let Some(why) =
+        super::brokered::refused_in_this_chat(ctx, vault, super::brokered::Reader::Other)
+    {
+        return Err(VaultError::new(why));
+    }
     let service = format!("{base}/{id}");
     if let Some(token) = ctx.kept.get(&service, source) {
         return Ok(Some(token));
@@ -492,7 +497,7 @@ pub fn from_keyring(ctx: &Ctx, vault: &Vault, source: &str) -> Result<Option<Str
     Ok(token)
 }
 
-/// **The kept tokens one command has read, so it reads each from the keyring once** (#1180).
+/// **The kept tokens one command has read, so it reads each from the keyring once** (#1638).
 ///
 /// A 1Password vault is read by one `op` per value, and each `op` is handed the token. Where the
 /// `purlis` command is the reader, each keyring read is one question the Keychain asks the
