@@ -563,13 +563,24 @@ fn taken_in(
             repo.display()
         ));
     }
-    let from = forge.map_or(firstrun::ForgeFrom::Repo(repo), firstrun::ForgeFrom::Named);
+    // An answer was asked for by this repo's remote: its host is carried over with it (#881).
+    let from = forge.map_or(firstrun::ForgeFrom::Repo(repo), |kind| {
+        firstrun::ForgeFrom::Answered { kind, repo }
+    });
     let root = match firstrun::ensure_local_plane(config, from) {
         Ok(root) => root,
         Err(firstrun::NotMade::AsksForForge(why)) => return Ok(Taken::AsksForge(why)),
         Err(firstrun::NotMade::Refused(why)) => return Err(why),
     };
     let taken = firstrun::take_in_from(&root, repo, choice)?;
+    // The repo is in whatever came of its forge; a forge that could not be added is the
+    // operator's to add in Settings › Project › Forges, and the window has no field to say it.
+    if let firstrun::ForgeTaken::NotAdded(why) = &taken.forge {
+        tracing::warn!(
+            "purlis: the forge of {} was not added ({why})",
+            repo.display()
+        );
+    }
     Ok(Taken::In(root, taken))
 }
 
@@ -615,19 +626,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("a directory");
         let config = dir.path().join("config");
         let repo = a_repo(&dir.path().join("widget"));
-        let added = purlis_core::forklock::output(
-            std::process::Command::new("git")
-                .arg("-C")
-                .arg(&repo)
-                .args([
-                    "remote",
-                    "add",
-                    "origin",
-                    "https://github.com/acme/widget.git",
-                ]),
-        )
-        .expect("git runs in a test");
-        assert!(added.status.success());
+        with_origin(&repo, "https://github.com/acme/widget.git");
 
         let (root, _) =
             taken(taken_in(&config, &repo, &firstrun::Choice::Fits, None).expect("answered"));
@@ -635,6 +634,89 @@ mod tests {
         let manifest = std::fs::read_to_string(root.join("charter.toml")).expect("made");
         assert!(manifest.contains("kind = \"github\""), "{manifest}");
         assert!(manifest.contains("owner = \"acme\""), "{manifest}");
+        assert!(
+            !manifest.contains("host ="),
+            "github.com wrote a host: {manifest}"
+        );
+    }
+
+    /// Points the repo at `repo`'s `origin` at `url`.
+    fn with_origin(repo: &Path, url: &str) {
+        let added = purlis_core::forklock::output(
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(repo)
+                .args(["remote", "add", "origin", url]),
+        )
+        .expect("git runs in a test");
+        assert!(added.status.success(), "git remote add origin {url}");
+    }
+
+    /// #881: a self-managed remote asks for the forge's kind, and the answer's project keeps
+    /// the remote's host, and the owner its path names, without either being typed.
+    #[test]
+    fn a_self_managed_remote_named_gitlab_makes_a_project_on_its_host() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let config = dir.path().join("config");
+        let repo = a_repo(&dir.path().join("widget"));
+        with_origin(&repo, "git@git.example.com:platform/widget.git");
+
+        let asked = taken_in(&config, &repo, &firstrun::Choice::Fits, None).expect("answered");
+        assert!(matches!(asked, Taken::AsksForge(_)), "{asked:?}");
+        let (root, _) = taken(
+            taken_in(&config, &repo, &firstrun::Choice::Fits, Some(Kind::GitLab))
+                .expect("answered"),
+        );
+
+        let cfg = purlis_core::forge::load_config(&root).expect("charter.toml reads");
+        let forges = purlis_core::forge::to_query(&cfg).expect("the forges read");
+        assert_eq!(forges.len(), 1, "{forges:?}");
+        let (forge, owner, _) = &forges[0];
+        assert_eq!(forge.kind, Kind::GitLab);
+        assert_eq!(forge.host, "git.example.com");
+        assert_eq!(owner, "platform");
+    }
+
+    /// #880: the first run's one project tracks the forge of every repo taken into it, so the
+    /// repo picker and `discover` (which both read `forge::to_query`) see both forges, and a
+    /// second repo on a forge already tracked adds nothing.
+    #[test]
+    fn a_repo_on_a_second_forge_adds_that_forge_to_the_first_run_project_once() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let config = dir.path().join("config");
+        let on = |name: &str, url: &str| {
+            let repo = a_repo(&dir.path().join(name));
+            with_origin(&repo, url);
+            repo
+        };
+        let take = |repo: &Path| {
+            taken(taken_in(&config, repo, &firstrun::Choice::NoTemplate, None).expect("answered"))
+        };
+
+        let (root, first) = take(&on("site", "https://github.com/acme/site.git"));
+        let (_, second) = take(&on("api", "git@gitlab.com:platform/api.git"));
+        let (_, third) = take(&on("web", "https://gitlab.com/platform/web.git"));
+
+        assert_eq!(first.forge, firstrun::ForgeTaken::Tracked);
+        assert!(
+            matches!(&second.forge, firstrun::ForgeTaken::Added(found) if found.kind == Kind::GitLab),
+            "{:?}",
+            second.forge
+        );
+        assert_eq!(third.forge, firstrun::ForgeTaken::Tracked);
+        let cfg = purlis_core::forge::load_config(&root).expect("charter.toml reads");
+        let seen: Vec<(Kind, String)> = purlis_core::forge::to_query(&cfg)
+            .expect("the forges read")
+            .into_iter()
+            .map(|(forge, owner, _)| (forge.kind, owner))
+            .collect();
+        assert_eq!(
+            seen,
+            [
+                (Kind::GitHub, "acme".to_owned()),
+                (Kind::GitLab, "platform".to_owned())
+            ]
+        );
     }
 
     #[test]
