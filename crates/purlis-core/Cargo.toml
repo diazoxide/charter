@@ -13,7 +13,7 @@ publish = false
 # async, so a chat's protocol runs on a thread of its own under `futures`' executor, and the
 # agent's pipes are made async by `blocking`'s `Unblock`; both are already in this workspace's
 # lockfile through the SDK, which brings no runtime of its own.
-agent-client-protocol = "2.2"
+agent-client-protocol = "3.0"
 blocking = "1"
 # A brokered `secret exec`'s output crosses the hook socket as base64 (#1407): a child's bytes
 # need not be UTF-8. The version the CLI and the app already use, so no crate is added.

@@ -51,7 +51,7 @@ tauri-plugin-single-instance = "2.4.4"
 tauri-plugin-dialog = "2"
 # The one dialog shown before Tauri is built (`refuse_beside_the_old_app`): the native dialog
 # the dialog plugin itself draws through, at the version it already brings in.
-rfd = { version = "0.16", default-features = false }
+rfd = { version = "0.17", default-features = false }
 # The app moving itself (ADR 0042). Its signature check is an ordinary dependency
 # of the plugin, not a feature, so there is no build of it that skips verification.
 tauri-plugin-updater = "2"
