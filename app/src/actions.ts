@@ -4197,6 +4197,9 @@ export type FileOn = {
   /** Why the file does not open, in the core's sentence, when the tree said: an ignored file,
    *  a link out of the branch, a file the branch deleted. */
   refused?: string;
+  /** The line last read in the file's preview, where it was read in this window (#1143,
+   *  `editor/lastRead.ts`): where *Open in your editor* opens it. Line 1 when it was not. */
+  line?: number;
 };
 
 /**
@@ -4296,10 +4299,21 @@ export function fileRows(what: FileOn): Offer[] {
   if (kind === "folder") {
     rows.push(can(`file.shell:${key}`, "Open a shell tab here", { verb: "shellInFolder", at }));
   } else {
+    // At the line its preview was last read at (#1143, D-1143-2), and line 1 when it was not.
+    const line = what.line ?? 1;
     rows.push(
-      what.refused === undefined
-        ? can(`file.editor:${key}`, "Open in your editor", { verb: "openInEditor", at, line: 1 })
-        : cannot(`file.editor:${key}`, "Open in your editor", what.refused),
+      what.refused !== undefined
+        ? cannot(`file.editor:${key}`, "Open in your editor", what.refused)
+        : line === 1
+          ? can(`file.editor:${key}`, "Open in your editor", { verb: "openInEditor", at, line })
+          : {
+              ...can(`file.editor:${key}`, "Open in your editor", {
+                verb: "openInEditor",
+                at,
+                line,
+              }),
+              note: `At line ${line}, where its preview was last read.`,
+            },
     );
   }
   rows.push(placed(`file.chat:${key}`, "Start a chat here", { verb: "startChatHere", at }));

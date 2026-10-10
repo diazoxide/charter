@@ -67,6 +67,7 @@ import type { WorkspaceState } from "./workspaceState";
 import { useTabStop } from "./roving";
 import { Breadcrumb, CockpitHeader, focusStands, useAheadBehind } from "./Cockpit";
 import { dragReference } from "./references";
+import { useLastRead } from "./editor/lastRead";
 import { touchingIn, touchSaid, useTouching, type Touching } from "./touching";
 
 /** No finished tasks, for a window that has not said. */
@@ -1421,9 +1422,15 @@ const NO_CATALOGUE: Catalogued = new Map();
  * has no way to carry a row out.
  */
 function FileMenu({ on, at, children }: { on: FileOn; at: FileRows; children: ReactNode }) {
+  // Where its preview was last read, so *Open in your editor* opens there (#1143).
+  const line = useLastRead(at.plane, at.place, on.at.path);
   if (at.onPress === undefined) return <>{children}</>;
   return (
-    <Menued on={on} offers={NO_CATALOGUE} onPress={at.onPress}>
+    <Menued
+      on={on.kind === "file" ? { ...on, line } : on}
+      offers={NO_CATALOGUE}
+      onPress={at.onPress}
+    >
       {children}
     </Menued>
   );
