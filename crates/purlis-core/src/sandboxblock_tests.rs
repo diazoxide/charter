@@ -1278,6 +1278,24 @@ fn a_lookup_the_sandbox_refused_is_a_lookup_of_a_host_with_nothing_to_grant() {
     }
 }
 
+/// A refused lookup is never said to be of a host the project does not allow (#1631 review):
+/// the host may well be allowed, and the chat told so would ask the person to allow it, which
+/// would not let the program through.
+#[test]
+fn a_refused_lookup_is_said_as_a_program_past_the_proxy_never_as_a_host_not_allowed() {
+    let said = block(Operation::Lookup, Kind::Host, false).said();
+    assert!(!said.contains("does not allow"), "{said}");
+    assert!(said.contains("proxy"), "{said}");
+    let told = told_the_chat(&[block(Operation::Lookup, Kind::Host, false)]).unwrap();
+    assert!(!told.contains("does not allow"), "{told}");
+    // A refused connection still names the project's allowlist.
+    assert!(
+        block(Operation::Connect, Kind::Host, false)
+            .said()
+            .contains("this project does not allow")
+    );
+}
+
 /// Docker's client refused its socket (#1631): a local socket, which no grant names.
 #[test]
 fn a_refused_docker_socket_is_a_connection_to_a_local_socket() {

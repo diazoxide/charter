@@ -287,6 +287,14 @@ pub struct Block {
 impl Block {
     /// What was blocked, as the notice says it: "a write to the project's own files".
     pub fn said(&self) -> String {
+        // A refused lookup is of a host the project may well allow (#1631): what was refused
+        // is the program's own lookup, past the proxy, so the host is never said to be one
+        // the project does not allow, which would have the person allow it to no effect.
+        if (self.operation, self.kind) == (Operation::Lookup, Kind::Host) {
+            return "a lookup of an internet host by a program that does not go through the \
+                    sandbox's proxy"
+                .to_owned();
+        }
         format!("{} {}", self.operation.phrase(), self.kind.phrase())
     }
 }
