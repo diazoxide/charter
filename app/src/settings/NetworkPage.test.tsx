@@ -277,6 +277,19 @@ describe("a chat's Network view", () => {
     expect(within(lookup).queryByRole("button")).toBeNull();
   });
 
+  it("says under each heading what goes there when a sandboxed chat reaches nothing and was refused nothing", async () => {
+    chatCore({ open: true, sandboxed: true, reach: [], refused: [] });
+    render(<ChatNetworkTab plane={PLANE} session={3} />);
+
+    const reach = await screen.findByTestId("chat-network-reaches-none");
+    expect(within(reach).getByText("It can reach no host on the internet")).toBeVisible();
+    expect(reach).toHaveTextContent(/A host you allow from a refusal below is listed here/);
+    const refused = screen.getByTestId("chat-network-refused-none");
+    expect(within(refused).getByText("Nothing was refused in the last 30 days")).toBeVisible();
+    expect(refused).toHaveTextContent(/with Allow where it may be kept/);
+    expect(screen.getByRole("region", { name: "Refused" })).toContainElement(refused);
+  });
+
   it("says a chat that is not open has nothing to show", async () => {
     chatCore({ open: false, sandboxed: false, reach: [], refused: [] });
     render(<ChatNetworkTab plane={PLANE} session={9} />);

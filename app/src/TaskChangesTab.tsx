@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { GitCompare, LoaderCircle } from "lucide-react";
 import { ChatAsk } from "./ChatAsk";
+import { EmptyState } from "./EmptyState";
 import { Notice } from "./Notice";
 import {
   commands,
@@ -188,11 +189,21 @@ export function TaskChangesTab({
         </p>
       )}
       {read.unknown === null && filesIn(read) === 0 && (
-        <p className="none">
-          {own === null
-            ? "No uncommitted file its edit tools wrote is listed here."
-            : "No changed file to show."}
-        </p>
+        <EmptyState
+          size="panel"
+          mark={GitCompare}
+          headline={
+            own === null
+              ? "No file its edit tools wrote is uncommitted here"
+              : "No changed file to show"
+          }
+          body={
+            own === null
+              ? "A file its edit tools write in this folder is listed here while it is uncommitted."
+              : `A file the task changes on ${own.branch ?? "its own branch"} is listed here, with its comparison against where the branch started.`
+          }
+          testid="task-changes-empty"
+        />
       )}
       {read.places.map((place) => (
         <Place

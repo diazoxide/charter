@@ -63,7 +63,12 @@ export function ChatNetworkTab({ plane, session }: { plane: PlaneId; session?: n
       <section aria-label="Can reach now">
         <h3>Can reach now</h3>
         {groups.length === 0 ? (
-          <p>No host on the internet.</p>
+          <EmptyState
+            size="panel"
+            headline="It can reach no host on the internet"
+            body="A host you allow from a refusal below is listed here, under why it can reach it."
+            testid="chat-network-reaches-none"
+          />
         ) : (
           groups.map((group) => (
             <div key={group.by} className="sandbox-hosts">
@@ -82,7 +87,12 @@ export function ChatNetworkTab({ plane, session }: { plane: PlaneId; session?: n
       <section aria-label="Refused">
         <h3>Refused</h3>
         {network.refused.length === 0 ? (
-          <p>Nothing was refused in the last 30 days.</p>
+          <EmptyState
+            size="panel"
+            headline="Nothing was refused in the last 30 days"
+            body="A connection its sandbox refuses is listed here, with Allow where it may be kept."
+            testid="chat-network-refused-none"
+          />
         ) : (
           <RefusedRows plane={plane} rows={network.refused} label="Refused" />
         )}
