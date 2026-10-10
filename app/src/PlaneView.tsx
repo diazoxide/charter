@@ -7776,7 +7776,6 @@ export const PlaneView = memo(function PlaneView({
               columns={facts.columns}
               cloning={cloning}
             />
-            />
           ),
           // **The attention region's views** (#1678): the "for you" side (ADR 0038 as amended
           // 2026-10-10), one panel per view, and each approved extension's panel a view too.

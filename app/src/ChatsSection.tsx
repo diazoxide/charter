@@ -1384,7 +1384,6 @@ const Row = memo(function Row({
               persona={persona}
               workspace={workspace}
               branch={branch}
-              task={task}
               runsOn={runsOn ?? null}
               cameFrom={from === null ? null : cameFromSaid(from, task, askerWaiting)}
               wentTo={handedToName === null ? null : handedOffSaid(handedToName, handedMore)}
@@ -1485,7 +1484,6 @@ function ChatCard({
   persona,
   workspace,
   branch,
-  task,
   runsOn,
   cameFrom,
   wentTo,
@@ -1499,7 +1497,6 @@ function ChatCard({
   persona: string | null;
   workspace: string;
   branch: string | null;
-  task: boolean;
   /** What it runs on (`ListedChat.runsOn`): its profile and harness, where it has a profile
    *  (#1673). */
   runsOn: string | null;

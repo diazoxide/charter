@@ -120,7 +120,7 @@ async function untilItSays(want: string | RegExp): Promise<void> {
 describe("the status line", () => {
   it("is the last thing in the window, under the regions", async () => {
     await untilTheStripIsRead();
-    await $('[data-testid="panels"]').waitForExist({ timeout: 20_000 });
+    await $('.region-views[data-region="aside"]').waitForExist({ timeout: 20_000 });
 
     const line = await $('[data-testid="status-line"]');
     const top = (await line.getLocation("y")) as number;
@@ -340,10 +340,14 @@ describe("the status line", () => {
     const names = ["Navigation", "Attention"];
     for (const name of names)
       await (await $(`button[aria-pressed="true"][aria-label="${name}"]`)).click();
-    await browser.waitUntil(async () => !(await $('[data-testid="panels"]').isExisting()), {
-      timeout: 20_000,
-      timeoutMsg: "the right-hand region did not go away when it was put away",
-    });
+    // Hidden, never unmounted (#1673, #1678): the right side's views are still there.
+    await browser.waitUntil(
+      async () => !(await $('.region-views[data-region="aside"]').isDisplayed()),
+      {
+        timeout: 20_000,
+        timeoutMsg: "the right-hand region did not go away when it was put away",
+      },
+    );
 
     expect(await $('[data-testid="status-line"]').isExisting()).toBe(true);
     expect(
@@ -352,6 +356,6 @@ describe("the status line", () => {
 
     for (const name of names)
       await (await $(`button[aria-pressed="false"][aria-label="${name}"]`)).click();
-    await $('[data-testid="panels"]').waitForExist({ timeout: 20_000 });
+    await $('.region-views[data-region="aside"]').waitForDisplayed({ timeout: 20_000 });
   });
 });

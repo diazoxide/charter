@@ -792,7 +792,7 @@ describe("the Search and Changes views", () => {
 
     await userEvent.click(tab("Chats"));
 
-    expect(screen.queryByRole("tabpanel")).toBeNull();
+    expect(within(screen.getByTestId("region-left")).queryByRole("tabpanel")).toBeNull();
     expect(tab("Changes")).toHaveAccessibleDescription("5 uncommitted files");
   });
 
@@ -1002,9 +1002,9 @@ describe("the window the stored arrangement asks for", () => {
     ]);
     core();
     render(<App />);
-    await screen.findByTestId("panels");
+    await screen.findByRole("tabpanel", { name: "Memory" });
 
-    expect(inSlot("left").getByTestId("panels")).toBeInTheDocument();
+    expect(inSlot("left").getByRole("tabpanel", { name: "Memory" })).toBeInTheDocument();
     expect(inSlot("right").getByTestId("chats-section")).toBeInTheDocument();
   });
 
@@ -1015,10 +1015,10 @@ describe("the window the stored arrangement asks for", () => {
     ]);
     core();
     render(<App />);
-    await screen.findByTestId("panels");
+    await screen.findByRole("tabpanel", { name: "Memory" });
 
-    const drawn = inSlot("left").getAllByTestId(/^(panels|chats-section)$/);
-    expect(drawn.map((one) => one.dataset.testid)).toEqual(["panels", "chats-section"]);
+    const drawn = inSlot("left").getAllByRole("tabpanel");
+    expect(drawn.map((one) => one.dataset.view)).toEqual(["memory", "chats"]);
   });
 
   it("draws a file that still places the bottom region, without it and without a word", async () => {
@@ -1092,7 +1092,7 @@ describe("the status line", () => {
   it("sits below every region, and outside the group that draws them", async () => {
     core();
     render(<App />);
-    await screen.findByTestId("panels");
+    await screen.findByRole("tabpanel", { name: "Memory" });
 
     const line = screen.getByTestId("status-line");
     const frame = document.querySelector(".region-frame");
@@ -1152,7 +1152,7 @@ describe("the status line", () => {
     // it is the frame, and a status line an operator can lose is one they will lose.
     core();
     render(<App />);
-    await screen.findByTestId("panels");
+    await screen.findByRole("tabpanel", { name: "Memory" });
 
     for (const name of ["Navigation", "Attention"]) {
       await userEvent.click(screen.getByRole("button", { name, pressed: true }));

@@ -180,7 +180,7 @@ describe("the terminal in the centre region", () => {
   });
 
   it("reaches the bottom of the centre with one pane", async () => {
-    await $('[data-testid="panels"]').waitForExist({ timeout: 20_000 });
+    await $('.region-views[data-region="aside"]').waitForExist({ timeout: 20_000 });
     await pressAndStart("New tab");
     await untilShows(0, READY);
 
@@ -218,7 +218,7 @@ describe("the terminal in the centre region", () => {
    * `rgb(0, 0, 0)` from `DIV.xterm-viewport`.
    */
   it("paints the slack under the last row in the terminal's colour, not black", async () => {
-    await $('[data-testid="panels"]').waitForExist({ timeout: 20_000 });
+    await $('.region-views[data-region="aside"]').waitForExist({ timeout: 20_000 });
     await pressAndStart("New tab");
     // The grid, not the harness's words: what is asked is the colour of the room the rows
     // do not use, which exists as soon as the terminal is fitted.

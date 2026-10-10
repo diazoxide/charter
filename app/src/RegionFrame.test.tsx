@@ -369,11 +369,7 @@ describe("the right side's activity bar (#1678)", () => {
   it("shows an extension's panel when it is the open view", () => {
     render(
       <WithViews
-        from={[
-          on("navigation", "left"),
-          { ...on("aside", "right"), view: "panel:ext/stats/burn" },
-          on("bottom", "bottom"),
-        ]}
+        from={[on("navigation", "left"), { ...on("aside", "right"), view: "panel:ext/stats/burn" }]}
         panels={[{ view: "panel:ext/stats/burn", name: "Burn rate", mark: Flame }]}
       />,
     );
@@ -386,11 +382,7 @@ describe("the right side's activity bar (#1678)", () => {
   it("opens on Memory when the panel picked last is not contributed any more", () => {
     render(
       <WithViews
-        from={[
-          on("navigation", "left"),
-          { ...on("aside", "right"), view: "panel:ext/stats/burn" },
-          on("bottom", "bottom"),
-        ]}
+        from={[on("navigation", "left"), { ...on("aside", "right"), view: "panel:ext/stats/burn" }]}
       />,
     );
 
