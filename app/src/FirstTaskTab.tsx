@@ -79,6 +79,9 @@ export function FirstTaskTab({
   const [starting, setStarting] = useState<number>();
   /** The harnesses whose program is not installed here (#1698), by kind, with their titles. */
   const [notInstalled, setNotInstalled] = useState<NotInstalled>({});
+  /** Whether that look has answered once, or failed: until then a built-in profile, whose
+   *  program the look judges, does not start (a missing harness never starts on a quick press). */
+  const [looked, setLooked] = useState(false);
   /** The runs whose branch is in the clone (#945): the ones that started before this launch. */
   const [onDisk, setOnDisk] = useState<Partial<Record<number, string>>>({});
   const groupId = useId();
@@ -115,7 +118,10 @@ export function FirstTaskTab({
         }
         setNotInstalled(missing);
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => {
+        if (!gone) setLooked(true);
+      });
     return () => {
       gone = true;
     };
@@ -165,10 +171,13 @@ export function FirstTaskTab({
     const title = profile?.source === "built-in" ? notInstalled[profile.kind] : undefined;
     return title === undefined ? undefined : `${title} is not installed on this machine.`;
   };
+  /** Whether `profile` cannot start yet or here: not looked at, or its program is missing. */
+  const held = (profile: ProfileRow): boolean =>
+    (!looked && profile.source === "built-in") || missing(profile) !== undefined;
 
   async function start(run: number) {
     const profile = chosen(run);
-    if (!profile || !options || missing(profile)) return;
+    if (!profile || !options || held(profile)) return;
     setStarting(run);
     setTrouble(undefined);
     if (profile.approval !== null) {
@@ -294,11 +303,7 @@ export function FirstTaskTab({
                   <button
                     type="button"
                     tabIndex={0}
-                    disabled={
-                      profile === undefined ||
-                      missing(profile) !== undefined ||
-                      starting !== undefined
-                    }
+                    disabled={profile === undefined || held(profile) || starting !== undefined}
                     onClick={() => void start(run)}
                   >
                     {profile?.approval != null

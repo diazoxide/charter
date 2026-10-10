@@ -146,6 +146,29 @@ describe("the First task tab, on this machine (#1698)", () => {
     expect(within(run2).getByRole("radio", { name: "codex" })).toBeEnabled();
   });
 
+  it("starts no built-in profile before the machine has been looked at", async () => {
+    let answer: (found: unknown) => void = () => {};
+    const look = new Promise((resolve) => (answer = resolve));
+    mockIPC((cmd) => {
+      if (cmd === "start_options") return START_OPTIONS;
+      if (cmd === "harness_setup_found") return look;
+      if (cmd === "worktree_list") return [];
+      return null;
+    });
+    render(<FirstTaskTab plane={PLANE} clone={CLONE} does={DOES} />);
+
+    const run1 = await screen.findByRole("radiogroup", { name: "First chat" });
+    // A quick press while the look is out could start codex, whose program is missing.
+    await waitFor(() => expect(within(run1).getByRole("radio", { name: "claude" })).toBeChecked());
+    const start = within(runSection("First chat")).getByRole("button", {
+      name: "Start the first chat",
+    });
+    expect(start).toBeDisabled();
+
+    answer(NO_CODEX);
+    await waitFor(() => expect(start).toBeEnabled());
+  });
+
   it("judges only a built-in profile: one the project defines names its own command", async () => {
     mockIPC((cmd) => {
       if (cmd === "start_options")
