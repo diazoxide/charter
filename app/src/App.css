@@ -8381,7 +8381,7 @@ h2.sidebar-title .node-icon {
   margin-top: 1rem;
 }
 
-/* Settings › Sandbox › Granted (#1348): one grant a row, its Revoke beside it; and the folders
+/* Settings › Sandbox › Network (#1348, #1662): one Allow a row, its Remove beside it; and the folders
    chats may be granted, each with Remove. */
 .granted-list li {
   display: flex;

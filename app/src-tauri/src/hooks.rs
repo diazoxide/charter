@@ -367,18 +367,17 @@ pub struct ChatBlocked {
     pub levels: Vec<crate::sandboxing::GrantLevel>,
 }
 
-/// What the app does with a sandbox block chat `block.chat`'s hook sent on the project at
-/// `root` (#1338), heard at `at` (seconds since 1970, and now): let through the chat's
-/// [`purlis_core::sandboxblock::Throttle`], then kept for `purlis doctor`'s count, then handed
-/// to whoever `slot` holds for the chat's notice. A block the throttle holds back is neither
-/// kept nor shown. It holds an operation and a kind only, so keeping it keeps nothing of what
-/// the chat ran. The listener is taken out of the lock before it runs, as an answer is.
+/// What the app does with a sandbox block chat `block.chat`'s hook sent (#1338), heard at `at`:
+/// let through the chat's [`purlis_core::sandboxblock::Throttle`], then handed to whoever `slot`
+/// holds, which records it in this machine's network record for `purlis doctor`'s count and
+/// the Network views (#1662, `planes.rs`) and shows the chat's notice. A block the throttle
+/// holds back is neither kept nor shown. The listener is taken out of the lock before it runs,
+/// as an answer is.
 fn heard_block(
-    root: &Path,
     throttle: &Mutex<purlis_core::sandboxblock::Throttle>,
     slot: &Mutex<Option<Blocks>>,
     block: purlis_core::hookwire::SandboxBlocked,
-    at: (u64, std::time::Instant),
+    at: std::time::Instant,
 ) {
     let let_through = throttle
         .lock()
@@ -387,16 +386,10 @@ fn heard_block(
             block.chat,
             &block.sandbox_blocked,
             block.target.as_deref(),
-            at.1,
+            at,
         );
     if !let_through {
         return;
-    }
-    if let Err(why) = purlis_core::sandboxblock::record(root, &block.sandbox_blocked, at.0) {
-        tracing::warn!(
-            "purlis: a sandbox block of chat {} was not kept for the doctor's count ({why})",
-            block.chat
-        );
     }
     let listener = slot.lock().unwrap_or_else(PoisonError::into_inner).clone();
     if let Some(listener) = listener {
@@ -881,25 +874,14 @@ impl Hooks {
         let doings = crate::doing::Doings::new(plane.clone());
         let blocked: Arc<Mutex<Option<Blocks>>> = Arc::new(Mutex::new(None));
         let secret_exec: Arc<Mutex<Option<SecretExecs>>> = Arc::new(Mutex::new(None));
-        // A sandbox block (#1338), a chat's hook's or a brokered run's: kept for `purlis
-        // doctor`'s count, then handed on for the chat's Notice. It holds an operation and a
-        // kind only, so keeping it keeps nothing of what the chat ran. Taken out of the lock
-        // before it runs, as an answer is. One throttle for both roads.
+        // A sandbox block (#1338), a chat's hook's or a brokered run's: handed on for the
+        // network record and the chat's Notice (#1662). Taken out of the lock before it runs,
+        // as an answer is. One throttle for both roads.
         let hear_block: Blocks = {
             let blocked = Arc::clone(&blocked);
-            let plane = plane.clone();
             let throttle = Mutex::new(purlis_core::sandboxblock::Throttle::default());
             Arc::new(move |block| {
-                let at = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map_or(0, |since| since.as_secs());
-                heard_block(
-                    plane.root(),
-                    &throttle,
-                    &blocked,
-                    block,
-                    (at, std::time::Instant::now()),
-                );
+                heard_block(&throttle, &blocked, block, std::time::Instant::now());
             })
         };
         let reading = listener.hear(Hearing {
@@ -2361,25 +2343,13 @@ mod tests {
     }
 
     #[test]
-    fn a_heard_block_is_kept_then_told_and_a_flood_is_held_back() {
+    fn a_heard_block_is_told_once_and_a_flood_is_held_back() {
         use purlis_core::hookwire::SandboxBlocked;
-        let dir = tempfile::tempdir().expect("a directory");
         let throttle = Mutex::new(purlis_core::sandboxblock::Throttle::default());
         let told: Arc<Mutex<Vec<SandboxBlocked>>> = Arc::new(Mutex::new(Vec::new()));
         let slot: Mutex<Option<Blocks>> = Mutex::new(Some({
             let told = Arc::clone(&told);
-            let root = dir.path().to_path_buf();
-            Arc::new(move |block| {
-                // Kept before it is told: the doctor's count already has it.
-                assert_eq!(
-                    purlis_core::sandboxblock::counts(&root, 100)
-                        .iter()
-                        .map(|count| count.blocks)
-                        .sum::<u64>(),
-                    told.lock().unwrap().len() as u64 + 1
-                );
-                told.lock().unwrap().push(block);
-            })
+            Arc::new(move |block| told.lock().unwrap().push(block))
         }));
         let now = std::time::Instant::now();
         let line = SandboxBlocked {
@@ -2389,16 +2359,12 @@ mod tests {
             target: None,
         };
         for _ in 0..50 {
-            heard_block(dir.path(), &throttle, &slot, line.clone(), (100, now));
+            heard_block(&throttle, &slot, line.clone(), now);
         }
         assert_eq!(
             *told.lock().unwrap(),
             vec![line.clone()],
             "one, however often it is sent"
-        );
-        assert_eq!(
-            purlis_core::sandboxblock::counts(dir.path(), 100)[0].blocks,
-            1
         );
     }
 
@@ -2424,13 +2390,7 @@ mod tests {
             harness: None,
             target: Some("api.cluster.example-k8s.com:6443".to_owned()),
         };
-        heard_block(
-            &root,
-            &throttle,
-            &slot,
-            line.clone(),
-            (100, std::time::Instant::now()),
-        );
+        heard_block(&throttle, &slot, line.clone(), std::time::Instant::now());
         assert_eq!(*told.lock().unwrap(), vec![line.clone()]);
         // Another host within the minute has its own Notice; the same one again does not.
         let other = purlis_core::hookwire::SandboxBlocked {
@@ -2438,13 +2398,7 @@ mod tests {
             ..line.clone()
         };
         for again in [other.clone(), line.clone()] {
-            heard_block(
-                &root,
-                &throttle,
-                &slot,
-                again,
-                (101, std::time::Instant::now()),
-            );
+            heard_block(&throttle, &slot, again, std::time::Instant::now());
         }
         assert_eq!(*told.lock().unwrap(), vec![line.clone(), other]);
         let said = blocked(&plane, &line);

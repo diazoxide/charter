@@ -364,6 +364,9 @@ pub struct Doctor {
     /// The machine store whose forge request budgets the `forge budget` rows read (FW-4).
     /// `None` for a doctor a test names, which must never read the operator's own.
     pub(crate) budgets: Option<PathBuf>,
+    /// This machine's network record, which the `sandbox blocks` row counts (#1662). `None` for
+    /// a doctor a test names, which must never read the operator's own.
+    pub(crate) network: Option<crate::sandboxblock::record::Record>,
 }
 
 impl Doctor {
@@ -384,6 +387,7 @@ impl Doctor {
         d.persona_env = crate::envvar::var(crate::active::PERSONA_ENV);
         d.home = crate::profiles::home();
         d.budgets = crate::machine::config_root_if_there();
+        d.network = crate::sandboxblock::record::Record::to_read();
         d.forges = Some((
             crate::forge::Caller::command(),
             std::sync::Arc::new(crate::forge::cli::Cli::default()),
@@ -406,6 +410,12 @@ impl Doctor {
         transport: std::sync::Arc<dyn crate::forge::transport::Transport>,
     ) -> Self {
         self.forges = Some((caller, transport));
+        self
+    }
+
+    /// This doctor, reading the network record kept under the data home `data` (#1662).
+    pub fn reading_network_in(mut self, data: &Path) -> Self {
+        self.network = Some(crate::sandboxblock::record::Record::in_data(data));
         self
     }
 
@@ -437,6 +447,7 @@ impl Doctor {
             home: None,
             forges: None,
             budgets: None,
+            network: None,
         }
     }
 

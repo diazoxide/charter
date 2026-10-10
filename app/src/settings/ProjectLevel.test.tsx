@@ -344,7 +344,7 @@ describe("the Project level", () => {
         "work",
         "Sandbox",
         "Your hosts",
-        "Granted",
+        "Network",
         "Dispatch",
         "Forges",
         "Extensions",

@@ -58,6 +58,7 @@ mod lifecycle;
 mod live;
 mod memories;
 mod navguard;
+mod network;
 mod off_the_main_thread;
 mod opener;
 mod overlimit;
@@ -3104,6 +3105,9 @@ pub fn run() {
                 )
                 // The host's event log (FD-9): one event per hook call, from every project.
                 .recording_events(events())
+                // This machine's network record (#1662): every block and Allow, for the
+                // Network page, a chat's Network view and the doctor.
+                .recording_network(purlis_core::sandboxblock::record::Record::here())
                 // A chat a handoff opened goes to the window, which files it on its workspace's
                 // strip without taking the front (`handoff::Arrived`).
                 .telling_arrivals({

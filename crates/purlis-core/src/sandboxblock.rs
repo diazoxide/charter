@@ -53,11 +53,14 @@
 //! # What is kept of it
 //!
 //! **An operation, a kind, and whether it was purlis's own** ([`Block`]). The path or host is
-//! read here, in the hook, to sort it, and dropped: no path, argument, host name or output
-//! leaves this module.
+//! read here, in the hook, to sort it: no path, argument or output leaves this module, and the
+//! host a refused connection was to travels beside the block only for its Allow
+//! ([`detect_with_targets`]).
 //!
-//! The app keeps each block it hears in [`path`] for seven days ([`record`]), which is what
-//! `purlis doctor` counts ([`counts`]), and the window shows it as a notice on the chat's tab.
+//! The app keeps each block it hears in this machine's network record ([`record`], #1662) for
+//! 30 days, with the chat it came from and, for a refused connection, the host and port. That
+//! is what `purlis doctor` counts ([`record::counts`]), Settings' Network page and a chat's
+//! Network view list, and the window shows it as a notice on the chat's tab.
 //! A block of purlis's own is a purlis bug, and the notice offers a Report whose draft is made
 //! from the block alone (`report::Draft::of_sandbox_block`). Nothing is sent without a press.
 
@@ -1085,109 +1088,10 @@ impl Throttle {
 
 // ---- what the app keeps ----------------------------------------------------------------------
 
-/// The file, relative to the project's state folder ([`path`]).
-pub const IN_STATE: &str = "app/sandbox-blocks.json";
-
-/// How long a block is kept, and the window `purlis doctor` counts over: seven days.
-pub const KEPT_FOR_SECS: u64 = 7 * 24 * 60 * 60;
-
-/// The most blocks the file holds; the oldest go first.
-pub const AT_MOST_KEPT: usize = 1000;
-
-/// The file in the project at `root`.
-pub fn path(root: &Path) -> PathBuf {
-    crate::names::state(root).join(IN_STATE)
-}
-
-/// One block as the file keeps it: when the app heard it, in seconds since 1970, and the block.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct Kept {
-    pub at: u64,
-    #[serde(flatten)]
-    pub block: Block,
-}
-
-/// The file's shape. Each block is read on its own, as `reopen`'s `lenient` reads a field: one
-/// that does not read as a [`Kept`], such as a kind a newer build added, is kept as it was by
-/// [`record`] and let go of by its `at` like any other, and [`counts`] passes over it.
-#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
-struct OnDisk {
-    #[serde(default)]
-    blocks: Vec<serde_json::Value>,
-}
-
-/// When `entry` was heard, if it says.
-fn heard_at(entry: &serde_json::Value) -> Option<u64> {
-    entry["at"].as_u64()
-}
-
-/// Keeps `block`, heard at `at` (seconds since 1970), in the project at `root`, and lets go of
-/// every block older than [`KEPT_FOR_SECS`]. Written by the app, under purlis's lock on the
-/// directory; a sandboxed chat cannot write it (the integrity class's `.purlis/app/`).
-pub fn record(root: &Path, block: &Block, at: u64) -> std::io::Result<()> {
-    let path = path(root);
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    crate::rewrite::update(root, &path, |now| {
-        // A file that is not this shape reads as empty, and the count starts again.
-        let mut held: OnDisk = now
-            .and_then(|text| serde_json::from_str(text).ok())
-            .unwrap_or_default();
-        held.blocks.retain(|entry| {
-            heard_at(entry).is_some_and(|then| then.saturating_add(KEPT_FOR_SECS) > at)
-        });
-        held.blocks
-            .push(serde_json::to_value(Kept { at, block: *block }).map_err(std::io::Error::other)?);
-        let over = held.blocks.len().saturating_sub(AT_MOST_KEPT);
-        held.blocks.drain(..over);
-        serde_json::to_string_pretty(&held)
-            .map(|text| Some(format!("{text}\n")))
-            .map_err(std::io::Error::other)
-    })
-    .map(|_| ())
-}
-
-/// The blocks of one operation over the last seven days.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Count {
-    pub operation: Operation,
-    pub blocks: u64,
-    /// Of them, purlis's own operations: purlis bugs.
-    pub ours: u64,
-}
-
-/// The blocks kept in the project at `root` in the seven days before `now`, per operation, in
-/// [`Operation::ALL`]'s order, and only the operations that had any.
-pub fn counts(root: &Path, now: u64) -> Vec<Count> {
-    let held: OnDisk = std::fs::read_to_string(path(root))
-        .ok()
-        .and_then(|text| serde_json::from_str(&text).ok())
-        .unwrap_or_default();
-    let read: Vec<Kept> = held
-        .blocks
-        .into_iter()
-        .filter_map(|entry| serde_json::from_value(entry).ok())
-        .collect();
-    let recent: Vec<&Kept> = read
-        .iter()
-        .filter(|kept| kept.at <= now && kept.at.saturating_add(KEPT_FOR_SECS) > now)
-        .collect();
-    Operation::ALL
-        .into_iter()
-        .filter_map(|operation| {
-            let mine: Vec<&&Kept> = recent
-                .iter()
-                .filter(|kept| kept.block.operation == operation)
-                .collect();
-            (!mine.is_empty()).then(|| Count {
-                operation,
-                blocks: mine.len() as u64,
-                ours: mine.iter().filter(|kept| kept.block.ours).count() as u64,
-            })
-        })
-        .collect()
-}
+/// **The network record** (#1662): every block the app heard, and every Allow and its removal,
+/// per project in purlis's data home for 30 days. What `purlis doctor` counts.
+#[path = "sandboxblock_record.rs"]
+pub mod record;
 
 #[cfg(test)]
 #[path = "sandboxblock_tests.rs"]
