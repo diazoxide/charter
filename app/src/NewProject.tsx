@@ -212,7 +212,7 @@ export function NewProject({
             >
               <SettingRow
                 label="Folder"
-                help="It does not have to exist yet. purlis makes it, and writes the plane into it."
+                help="It does not have to exist yet. purlis makes it, and writes the project into it."
                 control={(ids) => (
                   <>
                     <Field
@@ -248,9 +248,9 @@ export function NewProject({
                 label="Repository to adopt"
                 help={
                   <>
-                    Optional: the plane goes in the folder above and this repo becomes its first
-                    clone, in <code>workspaces/</code>. Nothing is written into the repo — it is
-                    read, and only read. Leave it empty for a plane with no clones yet.
+                    Optional: the project goes in the folder above, and this repo is cloned into its{" "}
+                    <code>workspaces/</code>. Nothing is written into the repo — it is read, and
+                    only read. Leave it empty for a project with no repos yet.
                   </>
                 }
                 control={(ids) => (
@@ -290,9 +290,9 @@ export function NewProject({
                     Only for a folder that is the top of a git repository, and only when you mean
                     it: it writes <code>charter.toml</code>, <code>personas/</code>,{" "}
                     <code>workspaces/</code> and purlis&rsquo;s rules into that repository&rsquo;s
-                    tracked <code>.gitignore</code>. purlis&rsquo;s own plane is one of these. Left
-                    unticked, purlis writes nothing into a repository and says how to make a plane
-                    beside it.
+                    tracked <code>.gitignore</code>. purlis&rsquo;s own project is one of these.
+                    Left unticked, purlis writes nothing into a repository and says how to make a
+                    project beside it.
                   </>
                 }
                 control={(ids) => (

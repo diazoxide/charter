@@ -3,7 +3,8 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { copyFaults } from "./copy";
+import { copyFaults, retiredTerms } from "./copy";
+import { OUTSIDE_THE_FIRST_HOUR } from "./firstHour";
 import { uiStrings } from "./uiStrings";
 
 describe("the copy guide's mechanical rules (docs/ui-copy.md)", () => {
@@ -121,6 +122,9 @@ describe("the copy guide's mechanical rules (docs/ui-copy.md)", () => {
     expect(copyFaults("Set `TMPDIR` and try again.", "shown")).toEqual([]);
     // Outside the window, an all-caps word is a constant.
     expect(copyFaults("NOT_FOUND")).toEqual([]);
+    // An assignment is typed as written, and a product keeps its own capitals.
+    expect(copyFaults("NAME=value, one per line.", "shown")).toEqual([]);
+    expect(copyFaults("IntelliJ IDEA, or another JetBrains IDE", "shown")).toEqual([]);
   });
 
   it("finds 'please' in words a person reads, not in an id or a code span (#1156)", () => {
@@ -128,6 +132,60 @@ describe("the copy guide's mechanical rules (docs/ui-copy.md)", () => {
     expect(copyFaults("ask.please")).toEqual([]);
     expect(copyFaults("hooks/please-hold.sh")).toEqual([]);
     expect(copyFaults("Run `please --now` to see it.", "shown")).toEqual([]);
+  });
+});
+
+describe("no retired term on what the window shows (FR-3, ADR 0072, #602)", () => {
+  const PLANE = "a retired term: say project, not plane";
+  const WORKTREE = "a retired term: say branch or folder, not worktree";
+  const PIECE = "a retired term: say branch or folder, not piece";
+  const SYNC = "a retired term: sync is purlis sync's alone";
+
+  it("refuses plane, worktree and piece in the window's words", () => {
+    expect(retiredTerms("Reading the plane…", "shown")).toEqual([PLANE]);
+    expect(retiredTerms("This plane's owners", "shown")).toEqual([PLANE]);
+    expect(retiredTerms("Plane updated since this chat started", "shown")).toEqual([PLANE]);
+    expect(retiredTerms("No planes open", "shown")).toEqual([PLANE]);
+    expect(retiredTerms("Remove the worktree", "shown")).toEqual([WORKTREE]);
+    expect(retiredTerms("Clones and worktrees", "shown")).toEqual([WORKTREE]);
+    expect(retiredTerms("pieces", "shown")).toEqual([PIECE]);
+    // Each term is said once, and two terms are two faults.
+    expect(retiredTerms("The plane holds a plane", "shown")).toEqual([PLANE]);
+    expect(retiredTerms("Every worktree in the plane", "shown")).toEqual([PLANE, WORKTREE]);
+  });
+
+  it("refuses Sync for anything but purlis sync", () => {
+    expect(retiredTerms("Sync settings across devices", "shown")).toEqual([SYNC]);
+    expect(retiredTerms("Saved and synced", "shown")).toEqual([SYNC]);
+    expect(retiredTerms("Syncing…", "shown")).toEqual([SYNC]);
+    // The command itself, and the window's own name for it.
+    expect(retiredTerms("Run purlis sync to fetch every clone", "shown")).toEqual([]);
+    expect(retiredTerms("charter sync fetches every clone", "shown")).toEqual([]);
+    expect(retiredTerms("Sync repos", "shown")).toEqual([]);
+  });
+
+  it("passes the words that replace them, and English that only looks like them", () => {
+    expect(retiredTerms("Reading the project…", "shown")).toEqual([]);
+    expect(retiredTerms("Remove folder", "shown")).toEqual([]);
+    // "A piece of work" is English, not the format's piece.
+    expect(retiredTerms("A named piece of work", "shown")).toEqual([]);
+    // A word that only contains one is not it.
+    expect(retiredTerms("Planed and planet", "shown")).toEqual([]);
+    expect(retiredTerms("asynchronous", "shown")).toEqual([]);
+  });
+
+  it("leaves code spans, ids and the source alone", () => {
+    // What a person types, and what the code or the format calls a thing.
+    expect(retiredTerms("Run `purlis worktree list` to see them.", "shown")).toEqual([]);
+    expect(retiredTerms("Set `[plane] worktrees` in the file.", "shown")).toEqual([]);
+    expect(retiredTerms("plane-updated fresh-mark", "shown")).toEqual([]);
+    expect(retiredTerms("workspaces/alpha/.worktrees/svc", "shown")).toEqual([]);
+    // Outside the window, plane is still the code's word until the rename lands.
+    expect(retiredTerms("purlis found no plane")).toEqual([]);
+  });
+
+  it("is a rule of its own, so the other rules' guards carry no debt for it", () => {
+    expect(copyFaults("Reading the plane…", "shown")).toEqual([]);
   });
 });
 
@@ -191,6 +249,51 @@ describe("shown text reached through an expression", () => {
       "Open in its pane",
     ]);
   });
+
+  it("reads the properties and attributes that carry a setting's or a row's words as shown", () => {
+    // A settings group's title and note, a field's hint and help, a provider's line, the
+    // sandbox table's rows and an empty state's: each is drawn as written (#602).
+    expect(
+      shown(
+        `const g = { id: "g", title: "Plane", note: "How it is saved.", hint: "Under the project." };
+         const f = { help: "Where folders go.", says: "A plaintext file.", what: "Clones", why: "It asks." };
+         const e = { headline: "Nothing yet", body: "Make one." };`,
+      ),
+    ).toEqual([
+      "Plane",
+      "How it is saved.",
+      "Under the project.",
+      "Where folders go.",
+      "A plaintext file.",
+      "Clones",
+      "It asks.",
+      "Nothing yet",
+      "Make one.",
+    ]);
+    expect(shown(`<SettingRow label="Folder" help="It is made for you." hint="A path" />`)).toEqual(
+      ["Folder", "It is made for you.", "A path"],
+    );
+  });
+
+  it("reads a settings control's label, hint and unset value, and not its key", () => {
+    expect(
+      shown(
+        `textAt(key("plane", "worktrees"), "Branch folders");
+         listAt(key("chat_env", "pass"), "Environment passed", "One per line.");
+         pickAt(key("harness", "default"), "Default profile", "profile", "Where it starts.");
+         onOffAt(key("x", "y"), "Hold it", "When on, it holds.", "not set");`,
+      ),
+    ).toEqual([
+      "Branch folders",
+      "Environment passed",
+      "One per line.",
+      "Default profile",
+      "Where it starts.",
+      "Hold it",
+      "When on, it holds.",
+      "not set",
+    ]);
+  });
 });
 
 /**
@@ -207,6 +310,66 @@ const SOURCES = Object.keys({
   .map((path) => `src/${path.slice(2)}`)
   .sort();
 
+/** Why a retired term is still in a file: the file is another branch's while it is being built. */
+const TRAIN_27 = "train 27 (impl/qw76-qw79) is rebuilding this dialog";
+const CC_DA = "CC and DA (impl/qw72, qw75) hold this file, and EE after them";
+
+/**
+ * **The retired terms still in the window, and why** (#602): `file: "the string"`, one entry
+ * per string, exactly, so paying one off or adding one is a visible change — the way
+ * `Notice.guard.test.ts` keeps its `COPY_ONLY`. Each is in a file another branch holds while
+ * this rule landed, so it is fixed by that file's next owner, never by widening the rule. The
+ * reason is beside each, to be read at that change.
+ */
+const RETIRED_TERM_DEBT: readonly (readonly [string, string])[] = [
+  [
+    "src/DeleteWorkspace.tsx: and everything in it: every repo cloned there, every worktree cut in it, its memory and its todos. There is no undo.",
+    TRAIN_27,
+  ],
+  ["src/Explorer.tsx: Reading the plane…", CC_DA],
+  [
+    "src/NewProject.tsx: Make this repo itself the plane",
+    "the label is free, but Modals.keyboard.test.tsx (train 27) finds the box by it",
+  ],
+  [
+    "src/Panels.tsx: The plane root is not a workspace: it has no todos or memory of its own. Chats here look after the plane and its workspaces; focus a workspace to see its panels.",
+    CC_DA,
+  ],
+  ["src/Panels.tsx: Reading the plane…", CC_DA],
+  ["src/SavingView.tsx: Reading the plane", TRAIN_27],
+  [
+    "src/StartChat.tsx: This plane declares no profiles of its own, so these are purlis&apos;s built-ins. Declare your own in",
+    TRAIN_27,
+  ],
+  ["src/Updates.tsx: The plane&apos;s pin", TRAIN_27],
+  ["src/Vaults.tsx: No vaults on this plane", TRAIN_27],
+  ["src/Views.tsx: Reading the plane…", CC_DA],
+  [
+    "src/actions.ts: Makes a plane in a directory of its own. It never writes into a repo you point at.",
+    CC_DA,
+  ],
+  ["src/actions.ts: New chat at the plane root", CC_DA],
+  ["src/actions.ts: New chat at the plane root", CC_DA],
+  [
+    "src/actions.ts: In no workspace: it looks after the plane and names a workspace with -w.",
+    CC_DA,
+  ],
+  ["src/actions.ts: New shell at the plane root", CC_DA],
+  ["src/actions.ts: New shell at the plane root", CC_DA],
+  ["src/actions.ts: purlis found no plane, so there is nowhere to make a workspace.", CC_DA],
+  ["src/actions.ts: What every persona on this plane reads, in a tab of its own.", CC_DA],
+  ["src/actions.ts: This plane has no vaults yet. New vault… makes one.", CC_DA],
+  ["src/actions.ts: purlis found no plane, so it cannot reach a branch.", CC_DA],
+];
+
+/** Every fault `rule` finds in `app/src`, with where it is and the string itself. */
+const FAULTS = (rule: typeof copyFaults) =>
+  SOURCES.flatMap((path) =>
+    uiStrings(readFileSync(join(process.cwd(), path), "utf8")).flatMap(({ text, seen, line }) =>
+      rule(text, seen).map((fault) => ({ path, line, text, fault })),
+    ),
+  );
+
 describe("every string in app/src", () => {
   it("reads the source tree", () => {
     // A glob that matched nothing would make the next case pass by having nothing to fail.
@@ -214,11 +377,29 @@ describe("every string in app/src", () => {
   });
 
   it("follows the copy guide's mechanical rules", () => {
-    const faults = SOURCES.flatMap((path) =>
-      uiStrings(readFileSync(join(process.cwd(), path), "utf8")).flatMap(({ text, seen, line }) =>
-        copyFaults(text, seen).map((fault) => `${path}:${line} ${JSON.stringify(text)}: ${fault}`),
-      ),
+    const faults = FAULTS(copyFaults).map(
+      ({ path, line, text, fault }) => `${path}:${line} ${JSON.stringify(text)}: ${fault}`,
     );
     expect(faults).toEqual([]);
+  });
+
+  it("says no retired term but the ones listed as debt (#602)", () => {
+    const retired = FAULTS(retiredTerms).map(({ path, text }) => `${path}: ${text}`);
+    expect(retired).toEqual(RETIRED_TERM_DEBT.map(([where]) => where));
+  });
+
+  it("would refuse a retired term added to a label (#602)", () => {
+    // The mutation the rule is for: one word, in the place a hurried change puts it.
+    const added = uiStrings(`const row = { id: "plane.open", label: "Open the plane…" };`);
+    expect(added.flatMap(({ text, seen }) => retiredTerms(text, seen))).toEqual([
+      "a retired term: say project, not plane",
+    ]);
+  });
+
+  it("keeps the retired terms among the first hour's (ADR 0072 §3)", () => {
+    // FR-3's three words are retired everywhere on screen, so the first hour never says them
+    // either: one family of lists, not two that drift.
+    for (const term of ["plane", "worktree", "piece"])
+      expect(OUTSIDE_THE_FIRST_HOUR).toContain(term);
   });
 });

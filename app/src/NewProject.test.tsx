@@ -195,10 +195,10 @@ describe("making a project", () => {
       expect(within(dialog).getByLabelText(name).closest(".ui-setting-row")).not.toBeNull();
 
     expect(within(dialog).getByLabelText("Folder")).toHaveAccessibleDescription(
-      "It does not have to exist yet. purlis makes it, and writes the plane into it.",
+      "It does not have to exist yet. purlis makes it, and writes the project into it.",
     );
     expect(within(dialog).getByLabelText("Repository to adopt")).toHaveAccessibleDescription(
-      /^Optional: the plane goes in the folder above/,
+      /^Optional: the project goes in the folder above/,
     );
     expect(
       within(dialog).getByLabelText("Make this repo itself the plane"),

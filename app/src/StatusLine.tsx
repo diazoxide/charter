@@ -55,7 +55,8 @@ import { ago } from "./BottomBar";
  * taken whole:
  *
  * - **A count lives next to the thing it counts.** The todos are the focused workspace's, so
- *   they sit beside its name; the pieces are that workspace's worktrees; `ws N` is how many
+ *   they sit beside its name; the pieces are that workspace's worktrees, said as `branches N`
+ *   because the window says branch for a piece (ADR 0072, #602); `ws N` is how many
  *   others there are; and `N chats running` is the project's, which is why it came here when
  *   the title bar's breadcrumb went (ADR 0054).
  * - **Zero renders NOTHING.** A `todo 0` present every turn is furniture within a day, and a
@@ -224,7 +225,7 @@ export function StatusLine({
           // or one whose workspaces all went away. Said, because it is the answer.
           <span className="none">no workspace</span>
         ) : (
-          <span className="pending">reading the plane…</span>
+          <span className="pending">reading the project…</span>
         )}
       </span>
 
@@ -236,7 +237,7 @@ export function StatusLine({
 
       {pieces !== undefined && (
         <span className="status-cell" data-testid="status-pieces">
-          <span className="status-label">pieces</span> {pieces}
+          <span className="status-label">branches</span> {pieces}
         </span>
       )}
 

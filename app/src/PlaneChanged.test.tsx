@@ -457,7 +457,7 @@ describe("a chat running on instructions the plane has changed since (charter#36
     from: null,
   };
   // On the strip the mark is the button that starts the chat fresh (NO-3), named for both.
-  const mark = () => screen.queryByRole("button", { name: /plane updated/i });
+  const mark = () => screen.queryByRole("button", { name: /project updated/i });
 
   it("has its tab marked once the plane says so, naming what changed", async () => {
     chatsOpen = [steward];

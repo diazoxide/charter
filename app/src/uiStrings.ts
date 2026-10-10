@@ -9,7 +9,8 @@
  * Test-only: nothing the window bundles imports this file.
  *
  * - **Shown:** JSX text and a JSX child in braces; the value of an attribute a person reads or
- *   hears (`SHOWN_ATTRIBUTES`); a `label:` property (`SHOWN_PROPERTIES`); and the catalogue's
+ *   hears (`SHOWN_ATTRIBUTES`); a `label:` property and the others like it (`SHOWN_PROPERTIES`);
+ *   and the catalogue's
  *   titles and reasons (`SHOWN_ARGUMENTS`). Through an expression, a conditional's branches
  *   and a logical operator's right-hand side are shown; its condition is source. A template's
  *   interpolations are read as `…`.
@@ -23,7 +24,7 @@ import ts from "typescript";
 import type { Seen } from "./copy";
 
 /** The attributes whose value is copy: read on screen or by a screen reader. `headline` and
- *  `body` are `EmptyState`'s. */
+ *  `body` are `EmptyState`'s; `help` and `hint` are a `SettingRow`'s. */
 export const SHOWN_ATTRIBUTES = new Set([
   "aria-label",
   "title",
@@ -32,16 +33,44 @@ export const SHOWN_ATTRIBUTES = new Set([
   "label",
   "headline",
   "body",
+  "help",
+  "hint",
 ]);
 
-/** Object properties whose value is a label the window draws: a menu row's, a palette row's. */
-export const SHOWN_PROPERTIES = new Set(["label"]);
+/**
+ * Object properties whose value the window draws: a menu row's and a palette row's `label`; a
+ * settings group's `title` and `note`, and a field's `help` and `hint`; a vault provider's
+ * `says`; the sandbox table's `what` and `why`; an empty state's `headline` and `body` (#602).
+ * A property of the same name that holds no copy holds nothing a rule refuses either: an id
+ * has no spaces, and the rules read none.
+ */
+export const SHOWN_PROPERTIES = new Set([
+  "label",
+  "title",
+  "note",
+  "help",
+  "hint",
+  "says",
+  "what",
+  "why",
+  "headline",
+  "body",
+]);
 
 /**
  * Calls whose arguments, by position, are drawn: the catalogue's `can(id, title, does)` and
- * `cannot(id, title, reason)` in `actions.ts`. The id is not.
+ * `cannot(id, title, reason)` in `actions.ts`, and the settings' control builders. The id and
+ * the key path are not.
  */
-export const SHOWN_ARGUMENTS: Record<string, readonly number[]> = { can: [1], cannot: [1, 2] };
+export const SHOWN_ARGUMENTS: Record<string, readonly number[]> = {
+  can: [1],
+  cannot: [1, 2],
+  // The settings' controls (`settings/fileControls.ts`): a label, a hint and an unset value.
+  textAt: [1],
+  listAt: [1, 2],
+  pickAt: [1, 3],
+  onOffAt: [1, 2, 3],
+};
 
 export type UiString = { text: string; seen: Seen; line: number };
 

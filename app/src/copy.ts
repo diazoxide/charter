@@ -1,6 +1,6 @@
 /**
  * **The copy guide's rules a machine can hold** (`docs/ui-copy.md`, DS-2). The guide has more
- * rules than these; the rest need a reader, and DS-8's audit is that reader. These three are here
+ * rules than these; the rest need a reader, and DS-8's audit is that reader. These four are here
  * because each is cheap to check, has no false alarm in the window's copy as it stands, and is
  * the first thing a hurried change gets wrong:
  *
@@ -10,12 +10,20 @@
  *   charter is lowercase, but for the About dialog's title.
  * - **No raised voice on what the window shows** (#1156): no sentence ends in "!", and no word
  *   of four letters or more is written in capitals ("NEVER close"). Acronyms keep theirs.
+ * - **No retired term on what the window shows** (FR-3, ADR 0072, #602): "plane" is a project,
+ *   a "worktree" or "piece" is a branch or its folder, and "sync" is only ever `purlis sync`'s
+ *   (*Sync repos* in the window). These four are the glossary's _Avoid_ words a machine can
+ *   hold without a false alarm; "clone" and "session" are English as often as they are terms,
+ *   so they need a reader (DS-8). The code and the format still say plane until the rename
+ *   lands, so the rule reads only what the window shows.
  *
  * A code span (`` `git log` ``) and an id (`ask.please`, `hooks/please-hold.sh`) are what a
  * person types or what the code calls something, not words, so none of the rules reads them.
  *
  * `copy.test.ts` runs them over every string in `app/src`, and `copy.rust.test.ts` over the
- * window's copy written in Rust.
+ * window's copy written in Rust. The retired terms are `retiredTerms`, a function of their own:
+ * the ones still in files other work holds are `copy.test.ts`'s debt list, exactly, so paying
+ * one off or adding one is a visible change.
  */
 
 /** Where a string was found: drawn in the window, or anywhere else in the source. */
@@ -29,7 +37,7 @@ const STOCK =
  * here fails the guard on its first label; adding it is the fix, and it is the only list.
  */
 const NAMES =
-  /\b(Claude Code|Codex|opencode|GitHub|GitLab|Keychain|Touch ID|Windows Hello|LM Studio|Ollama|Finder|File Explorer|Files|macOS|Linux|Windows)\b/g;
+  /\b(Claude Code|Codex|opencode|GitHub|GitLab|Keychain|Touch ID|Windows Hello|LM Studio|Ollama|Finder|File Explorer|Files|macOS|Linux|Windows|IntelliJ IDEA|JetBrains)\b/g;
 
 /**
  * Acronyms of four letters or more, the environment variables the window names, and a
@@ -44,11 +52,11 @@ const ACRONYMS = /\b(JSON|YAML|TOML|HTML|HTTP|HTTPS|README|UUID|ASCII|PATH|LIVE|
 const CODE_SPAN = /`[^`]*`/g;
 
 /**
- * An id or a path: letters or digits joined by `.`, `/`, `:`, `_` or `-` with no space, such
- * as `ask.please` or `hooks/please-hold.sh`. "Re-arm" is one too, which is harmless: a stock
- * phrase is never hyphenated.
+ * An id, a path or an assignment: letters or digits joined by `.`, `/`, `:`, `_`, `=` or `-`
+ * with no space, such as `ask.please`, `hooks/please-hold.sh` or `NAME=value`. "Re-arm" is one
+ * too, which is harmless: a stock phrase is never hyphenated.
  */
-const ID = /\S*[A-Za-z0-9][./:_-][A-Za-z0-9]\S*/g;
+const ID = /\S*[A-Za-z0-9][./:_=-][A-Za-z0-9]\S*/g;
 
 /** The words of `text` a person reads: without its code spans and its ids. */
 function words(text: string): string {
@@ -105,6 +113,33 @@ function titleCased(text: string): boolean {
       .filter((word) => word.length >= 4);
     return words.length >= 2 && words.every((word) => /^[A-Z][a-z]/.test(word));
   });
+}
+
+/**
+ * The retired terms, each with what to say instead (CONTEXT.md's _Avoid_ lines). "Piece of" is
+ * English ("a piece of work"), not the format's piece.
+ */
+const RETIRED: readonly { term: RegExp; fault: string }[] = [
+  { term: /\bplanes?\b/i, fault: "a retired term: say project, not plane" },
+  { term: /\bworktrees?\b/i, fault: "a retired term: say branch or folder, not worktree" },
+  { term: /\bpieces?\b(?! of\b)/i, fault: "a retired term: say branch or folder, not piece" },
+  { term: /\bsync(s|ed|ing)?\b/i, fault: "a retired term: sync is purlis sync's alone" },
+];
+
+/** The two ways the window may say sync: the command, and its row's label. */
+const SYNC_ITSELF = /\b(purlis|charter) sync\b|\bSync repos\b/gi;
+
+/**
+ * **The retired terms `text` uses in the window's words** (FR-3, #602): empty for a string the
+ * window does not show. It is a rule of its own, beside `copyFaults` rather than inside it,
+ * because the window still says some of them in files other work holds: each guard that runs
+ * it lists its own debt (`copy.test.ts`'s `RETIRED_TERM_DEBT`), and `copyFaults` stays a rule
+ * set with none.
+ */
+export function retiredTerms(text: string, seen: Seen = "source"): string[] {
+  if (seen !== "shown") return [];
+  const said = words(text.trim()).replace(SYNC_ITSELF, " ");
+  return RETIRED.filter(({ term }) => term.test(said)).map(({ fault }) => fault);
 }
 
 /** What is wrong with `text` by the guide's mechanical rules; empty when nothing is. */

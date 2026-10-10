@@ -197,20 +197,20 @@ describe("the status line", () => {
     // workspaces. Every count is the focused workspace's except `ws`, which is the project's —
     // charter's own footer rule: a count lives next to the thing it counts.
     await untilItSays(/todo\s*1/);
-    await untilItSays(/pieces\s*1/);
+    await untilItSays(/branches\s*1/);
     await untilItSays(/ws\s*2/);
   });
 
   it("drops a count rather than drawing a zero", async () => {
     // `beta` holds no repos at all, so there are no worktrees to count. charter's own footer
-    // drops the cell at zero — presence is the signal — and a `pieces 0` sitting there every
+    // drops the cell at zero — presence is the signal — and a `branches 0` sitting there every
     // day is furniture by the end of the week.
     await untilTheStripIsRead();
     await focus("beta");
     await untilItSays("beta");
 
     const line = await $('[data-testid="status-line"]');
-    await expect(line).not.toHaveText(expect.stringContaining("pieces"));
+    await expect(line).not.toHaveText(expect.stringContaining("branches"));
     await expect(line).not.toHaveText(expect.stringContaining("todo"));
 
     await focus("alpha");

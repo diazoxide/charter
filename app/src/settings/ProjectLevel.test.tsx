@@ -401,13 +401,7 @@ describe("every project setting there is, at the Project level", () => {
   it.each([
     [
       "General",
-      [
-        "Default workspace",
-        "Default persona",
-        "Update channel",
-        "Version lock",
-        "Worktrees folder",
-      ],
+      ["Default workspace", "Default persona", "Update channel", "Version lock", "Branch folders"],
     ],
     [
       "Saving",
@@ -468,8 +462,8 @@ describe("a change at the Project level", () => {
     const { sent } = core();
     await atProject();
 
-    // ST-1 made the defaults pickers: Worktrees folder is one line of text.
-    await userEvent.type(screen.getByLabelText("Worktrees folder"), "../wt");
+    // ST-1 made the defaults pickers: Branch folders is one line of text.
+    await userEvent.type(screen.getByLabelText("Branch folders"), "../wt");
     expect(sent).toHaveLength(0);
     await userEvent.tab();
 
@@ -593,7 +587,7 @@ describe("a change at the Project level", () => {
   it("keeps a typed value that goes back to what it was while the first write is pending", async () => {
     const { sent, release } = core({ hold: true });
     await atProject();
-    const box = () => screen.getByLabelText("Worktrees folder");
+    const box = () => screen.getByLabelText("Branch folders");
 
     await userEvent.type(box(), "../wt");
     await userEvent.tab();
@@ -926,7 +920,7 @@ describe("one form for Shared and Local (SE-18)", () => {
   });
 
   it.each([
-    ["General", "Worktrees folder"],
+    ["General", "Branch folders"],
     ["Sandbox", "Internet access"],
     ["Forges", "Forge 1: kind"],
   ])(

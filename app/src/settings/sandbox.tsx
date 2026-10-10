@@ -452,7 +452,7 @@ function canChange(caches: boolean): Reason[] {
       why: "The chat asks purlis to write them, so they work from any chat, one in a clone included.",
     },
     {
-      what: "Clones and worktrees",
+      what: "Repos and their branch folders",
       why: "The chat asks purlis, which writes the git settings the sandbox keeps from the chat.",
     },
     {

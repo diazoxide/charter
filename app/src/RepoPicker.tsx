@@ -142,7 +142,7 @@ export function RepoPicker({
           ))}
           {found.repos.length === 0 && found.trouble.length === 0 && (
             <p className="came-back">
-              Your forge login reaches no repos under this plane&apos;s owners.
+              Your forge login reaches no repos under this project&apos;s owners.
             </p>
           )}
           <span id={listLabel} hidden>

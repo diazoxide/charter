@@ -639,7 +639,7 @@ describe("the status line", () => {
     // The mock's `alpha` holds one clone with two worktrees cut off it, on a plane of two
     // workspaces.
     const line = screen.getByTestId("status-line");
-    await waitFor(() => expect(line).toHaveTextContent(/pieces\s*2/));
+    await waitFor(() => expect(line).toHaveTextContent(/branches\s*2/));
     expect(line).toHaveTextContent(/ws\s*2/);
 
     const listings = asked.filter(
