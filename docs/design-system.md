@@ -540,13 +540,19 @@ carries are the dialog's to keep, and every question keeps the same ones:
 - **Focus and Escape stay the dialog's.** The bar handles no key. Escape is the dialog's Cancel,
   or whatever that dialog says it is.
 
-`answerBar.guard.test.ts` fails on a dialog that builds an `answer` or `doing` row by hand.
+`answerBar.guard.test.ts` fails on a dialog that builds an `answer` or `doing` row by hand, and
+on a dialog that puts an `ends-it` act in a form's `SettingActions` (D-1210-8).
 
 **One rule for both rows.** A form's `SettingActions` stands at the leading edge, in the form's
 flow, with its act first (Create workspace, then Cancel). A question's bar stands at the
 trailing edge with its act last. In both, the act that moves things on stands at the edge the
-row is anchored to, and the way out sits inward of it. A dialog that holds a form (a delete that
-asks for the name typed) ends in the form's row, not the bar.
+row is anchored to, and the way out sits inward of it. A dialog that holds a form that makes or
+changes something (New vault, Rename) ends in the form's row, not the bar. **A confirm whose
+only field is the typed name of what it ends is a question** (D-1210-8): Delete vault ends in the
+bar, Cancel first and the delete last, as Delete workspace does. Its keyboard lands in the name
+box, because typing is the answer, and Return there deletes only once the name is typed exactly
+(D-1210-9). Whether every dialog that holds a form should end at the trailing edge would amend
+V89j, and is left open.
 
 **Lucide** is the icon set (`lucide-react`). The property that matters is that it draws with
 `stroke="currentColor"` and `fill="none"`, so an icon takes the colour of the text it sits in
