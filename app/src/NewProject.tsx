@@ -179,6 +179,8 @@ export function NewProject({
                 {said}
               </p>
             )}
+            {/* What it is doing, in the first run's words, while a repo opens (#630). */}
+            {opening && <p className="pending">Copying your repo into its workspace…</p>}
             {/* Asked for whichever form was sent last, as the refusal is (#839). */}
             {forgeAsk && <ForgeQuestion ask={forgeAsk} />}
             <SettingActions>
@@ -245,7 +247,7 @@ export function NewProject({
 
               {/* ADR 0035's default, as a second directory rather than a refusal about one. */}
               <SettingRow
-                label="Repository to adopt"
+                label="Repo to adopt"
                 help={
                   <>
                     Optional: the project goes in the folder above, and this repo is cloned into its{" "}
@@ -269,7 +271,7 @@ export function NewProject({
                     <button
                       type="button"
                       tabIndex={0}
-                      aria-label="Browse for the repository to adopt"
+                      aria-label="Browse for the repo to adopt"
                       disabled={planeIsThisRepo}
                       onClick={() => pick(setAdopt)}
                     >
@@ -287,12 +289,12 @@ export function NewProject({
                 label="Make this repo itself the project"
                 help={
                   <>
-                    Only for a folder that is the top of a git repository, and only when you mean
-                    it: it writes <code>charter.toml</code>, <code>personas/</code>,{" "}
-                    <code>workspaces/</code> and purlis&rsquo;s rules into that repository&rsquo;s
-                    tracked <code>.gitignore</code>. purlis&rsquo;s own project is one of these.
-                    Left unticked, purlis writes nothing into a repository and says how to make a
-                    project beside it.
+                    Only for a folder that is the top of a git repo, and only when you mean it: it
+                    writes <code>charter.toml</code>, <code>personas/</code>,{" "}
+                    <code>workspaces/</code> and purlis&rsquo;s rules into that repo&rsquo;s tracked{" "}
+                    <code>.gitignore</code>. purlis&rsquo;s own project is one of these. Left
+                    unticked, purlis writes nothing into a repo and says how to make a project
+                    beside it.
                   </>
                 }
                 control={(ids) => (
@@ -316,7 +318,7 @@ export function NewProject({
                 in the middle, where neither the engine nor Radix reaches. */}
               <SettingActions>
                 <button type="submit" tabIndex={0} disabled={!ready}>
-                  Create project
+                  {making ? "Creating…" : "Create project"}
                 </button>
               </SettingActions>
             </form>

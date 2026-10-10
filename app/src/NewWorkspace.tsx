@@ -178,7 +178,7 @@ export function NewWorkspace({
                 were reachable and the one that acts on them was not. */}
             <SettingActions>
               <button type="submit" tabIndex={0} disabled={!ready}>
-                Create workspace
+                {making ? "Creating…" : "Create workspace"}
               </button>
               <button type="button" tabIndex={0} onClick={onCancel}>
                 Cancel

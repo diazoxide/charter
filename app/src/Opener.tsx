@@ -195,7 +195,7 @@ export function Opener({
         <>
           <h1 id="opener-heading">You have not opened a project yet</h1>
           <p className="came-back" role="status">
-            A project is a directory with a <code>charter.toml</code> in it. Open one, and charter
+            A project is a directory with a <code>charter.toml</code> in it. Open one, and purlis
             opens its workspaces, its chats and its personas with it.
           </p>
         </>

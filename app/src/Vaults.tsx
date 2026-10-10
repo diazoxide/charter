@@ -103,6 +103,9 @@ const NO_VAULTS = {
   offer: null,
 };
 
+/** What Open vault says when there is none: the dialog has no + to point at (#630). */
+const NO_VAULTS_TO_OPEN = { ...NO_VAULTS, body: "Make one with New vault… in the palette." };
+
 /**
  * One vault as a row: its name, then its provider and count. Pressing it runs the catalogue's
  * `vault.open:<name>`, which opens the vault's tab. A vault charter cannot read is marked, and
@@ -162,7 +165,7 @@ export function OpenVault({
           <div ref={list}>
             <PanelList
               rows={vaults.map(rowOf)}
-              empty={NO_VAULTS}
+              empty={NO_VAULTS_TO_OPEN}
               label="Vaults to open"
               open={undefined}
               onOpen={() => undefined}

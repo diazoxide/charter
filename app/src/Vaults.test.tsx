@@ -198,6 +198,16 @@ describe("the vault picker", () => {
     return { pressed, cancel };
   }
 
+  it("says how to make a vault when there is none, without a + it does not have (#630)", async () => {
+    pick([]);
+    const dialog = await screen.findByRole("dialog", { name: "Open vault" });
+    expect(within(dialog).getByText("No vaults in this project")).toBeInTheDocument();
+    expect(
+      within(dialog).getByText("Make one with New vault… in the palette."),
+    ).toBeInTheDocument();
+    expect(within(dialog).queryByText(/\+ above/)).not.toBeInTheDocument();
+  });
+
   it("lists the plane's vaults, and opens the one picked", async () => {
     const { pressed, cancel } = pick([vault("files", { provider: "plain-file" }), vault("ops")]);
     const dialog = await screen.findByRole("dialog", { name: "Open vault" });

@@ -1,7 +1,12 @@
-import { useId, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import * as Alert from "@radix-ui/react-alert-dialog";
 import { ENDS_IT, type Offer } from "./actions";
 import { AnswerBar } from "./AnswerBar";
+import { Choice, SettingRow } from "./settings/components";
+
+/** The two answers about the chats at work below a closing chat. */
+const KEEP = "keep";
+const STOP = "stop";
 
 /**
  * What charter asks before it ends a chat.
@@ -115,7 +120,6 @@ export function EndingChat({
 }) {
   // Keep is where it starts: the answer that ends nothing more than was asked for.
   const [stop, setStop] = useState(false);
-  const theirs = useId();
   // Focused by the dialog itself rather than by `autoFocus`: see `StartChat` for why.
   const cancel = useRef<HTMLButtonElement>(null);
   const close = useRef<HTMLButtonElement>(null);
@@ -180,30 +184,25 @@ export function EndingChat({
           {/* **Asked once, here, with both answers** (`RUNNING_SAYS`): the chats this one
               asked for are not ended by its close unless the person says so. */}
           {running.length > 0 && (
-            <fieldset className="persona-chats-running" aria-describedby={theirs}>
-              <legend>{RUNNING_SAYS(running)}</legend>
-              <label>
-                <input
-                  type="radio"
-                  name="persona-chats-running"
-                  checked={!stop}
-                  onChange={() => setStop(false)}
+            // The settings set's radio group (#630, DS-8): a Radix radio group, in WebKit's tab
+            // sequence where a native radio `<input>` is not (`docs/ui-primitives.md`), and each
+            // answer says what it does under itself.
+            <SettingRow
+              label={RUNNING_SAYS(running)}
+              grouped
+              control={(ids) => (
+                <Choice
+                  ids={ids}
+                  kind="radio"
+                  options={[
+                    { value: KEEP, label: "Keep them running", says: KEEP_SAYS },
+                    { value: STOP, label: "Stop them", says: STOP_SAYS },
+                  ]}
+                  value={stop ? STOP : KEEP}
+                  onValueChange={(to) => setStop(to === STOP)}
                 />
-                Keep them running
-              </label>
-              <label>
-                <input
-                  type="radio"
-                  name="persona-chats-running"
-                  checked={stop}
-                  onChange={() => setStop(true)}
-                />
-                Stop them
-              </label>
-              <p className="honest" id={theirs}>
-                {stop ? STOP_SAYS : KEEP_SAYS}
-              </p>
-            </fieldset>
+              )}
+            />
           )}
           {/* `tabIndex={0}` on each, per `docs/ui-primitives.md` (charter-app#186). Cancel
               first and Smart close last, at the edge where a primary answer sits. */}

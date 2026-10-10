@@ -88,9 +88,8 @@ export function LinkWorkItem({
                     </>
                   ) : (
                     <>
-                      A chat works on one work item at a time. The link is kept in the
-                      workspace&apos;s work link log, so your other devices see it when the
-                      workspace is LIVE.
+                      A chat works on one work item at a time. The link is kept with the workspace,
+                      so your other devices see it when the workspace is LIVE.
                     </>
                   )}
                 </>
@@ -114,8 +113,9 @@ export function LinkWorkItem({
 
             {/* `tabIndex={0}` on both, per `docs/ui-primitives.md` (charter-app#186). */}
             <SettingActions>
+              {/* A verb and what it acts on, and what it is doing while it does it (#630). */}
               <button type="submit" tabIndex={0} disabled={linking}>
-                Link
+                {linking ? "Linking…" : "Link work item"}
               </button>
               <button type="button" tabIndex={0} onClick={onCancel}>
                 Cancel

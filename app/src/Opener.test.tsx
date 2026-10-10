@@ -181,6 +181,13 @@ describe("the opener", () => {
     );
   });
 
+  it("names the program purlis where it says what a project is (#630)", async () => {
+    core(() => undefined);
+    render(<App />);
+    await screen.findByRole("heading", { level: 1, name: "You have not opened a project yet" });
+    expect(screen.getByText(/Open one, and purlis opens its workspaces/)).toBeInTheDocument();
+  });
+
   it("reads differently when a project it already approved has started doing more", async () => {
     // An approval is consent to a CONTRIBUTION, not to a path, so a project that gains a
     // plugin after it was approved has been handed a grant nobody looked at. The words for

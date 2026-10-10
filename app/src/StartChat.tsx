@@ -339,7 +339,7 @@ export function StartChat({
                 ids={ids}
                 kind="radio"
                 options={[
-                  { value: NO_PERSONA, label: "none" },
+                  { value: NO_PERSONA, label: "None" },
                   ...options.personas.map((who) => {
                     const own = ownProfile(who);
                     const says = [
@@ -366,7 +366,7 @@ export function StartChat({
               panels repeat most of what the footer says, and the footer says it about THIS
               chat's own workspace. */}
           <SettingRow
-            label="draw purlis's footer in this chat"
+            label="Draw purlis's footer in this chat"
             help={
               "Blank by default, because the panels already draw the project. The footer says " +
               "which workspace this chat is on, which the panels say only for the focused one. " +
@@ -384,7 +384,7 @@ export function StartChat({
 
           {repo !== undefined && (
             <SettingRow
-              label={`start on a new branch in ${repo}`}
+              label={`Start on a new branch in ${repo}`}
               help={
                 `Its own branch and folder, cut from what ${repo} has checked out, so this ` +
                 "chat's changes stay apart from other chats'. Named after the chat, or chat-1, " +
@@ -417,7 +417,7 @@ export function StartChat({
             <SettingGroup label="Sandbox">
               {sandbox.state === "sandboxed" && locked === null && (
                 <SettingRow
-                  label="start without the sandbox"
+                  label="Start without the sandbox"
                   help={
                     "This project runs every chat sandboxed: it reaches only the hosts the " +
                     "project allows, and never your vaults. Ticked, this one chat runs without " +

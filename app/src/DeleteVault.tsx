@@ -135,7 +135,7 @@ export function DeleteVault({
                 </button>
               </AlertDialog.Cancel>
               <button type="submit" className="ends-it" tabIndex={0} disabled={!ready}>
-                Delete vault
+                {deleting ? "Deleting…" : "Delete vault"}
               </button>
             </AnswerBar>
           </form>

@@ -145,6 +145,10 @@ export function RepoPicker({
               Your forge login reaches no repos under this project&apos;s owners.
             </p>
           )}
+          {/* A filter that matched nothing says so, rather than leave an empty list (#630). */}
+          {shown.length === 0 && found.repos.length > 0 && (
+            <p className="came-back">No repo you can reach matches {filter.trim()}.</p>
+          )}
           <span id={listLabel} hidden>
             Repos you can reach
           </span>

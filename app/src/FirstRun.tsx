@@ -161,8 +161,9 @@ export function FirstRun({
           )}
         />
         <SettingActions>
+          {/* The same act as New project's, in the same words (`docs/ui-copy.md`, #630). */}
           <button type="submit" tabIndex={0} disabled={!typed.trim() || opening}>
-            Open
+            Open repo
           </button>
         </SettingActions>
       </form>
