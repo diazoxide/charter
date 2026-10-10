@@ -737,27 +737,47 @@ describe("the explorer is drawn as a tree", () => {
 });
 
 /**
- * **The tree's guides may not paint a background**, because a region moves (ADR 0038).
+ * **The tree's guides may not paint a surface**, because a region moves (ADR 0038).
  *
  * The usual way to stop a tree's vertical line at its last row is a rectangle in the background
  * colour laid over the line's tail. That works exactly as long as the tree is on that
- * background — and the explorer can be put in the bottom slot, which is `surface.deep`, where
- * the mask would be a visible block. So each row draws only its own segment, and this holds
- * the rule a well-meaning simplification would break.
+ * background — and the explorer can be moved to a slot on another surface, where the mask would
+ * be a visible block. The shared tree style (#1672) draws straight guides that need no mask: a
+ * nested level's is its group's border, and a flat row's is a background of the guide's colour
+ * and nothing else. This holds the rule a well-meaning simplification would break.
  */
 describe("the explorer's tree guides", () => {
-  const css = readFileSync(join(process.cwd(), "src/App.css"), "utf8");
-  const guides = [...css.matchAll(/([^{}]*\.explorer[^{}]*::(?:before|after)[^{}]*)\{([^}]*)\}/g)];
+  const css = readFileSync(join(process.cwd(), "src/App.css"), "utf8").replace(
+    /\/\*[\s\S]*?\*\//g,
+    "",
+  );
+  const guides = [...css.matchAll(/([^{}]*\.tree\b[^{}]*)\{([^}]*)\}/g)].filter(([, , body]) =>
+    body.includes("var(--tree-guide)"),
+  );
 
   it("are drawn by rules the stylesheet has", () => {
-    expect(guides.length).toBeGreaterThan(0);
+    expect(guides.map(([, selector]) => selector.trim())).toEqual(
+      expect.arrayContaining(['.tree [role="group"]', ".tree li[data-level]"]),
+    );
   });
 
-  it("draw with borders only, so they need to know nothing about what is behind them", () => {
-    const painted = guides
-      .filter(([, , body]) => /(?:^|[;\s])background(?:-color)?\s*:/.test(body))
-      .map(([, selector]) => selector.trim());
+  it("paint the guide's colour and nothing else, so they need to know nothing about what is behind them", () => {
+    const painted = guides.flatMap(([, selector, body]) =>
+      [...body.matchAll(/var\((--[\w-]+)\)/g)]
+        .map((hit) => hit[1])
+        .filter(
+          (read) =>
+            !["--tree-guide", "--tree-indent", "--tree-depth", "--tree-guide-at"].includes(read),
+        )
+        .map((read) => `${selector.trim()} reads ${read}`),
+    );
     expect(painted).toEqual([]);
+    // And no surface spelled any other way: a guide's background is the guide and transparent.
+    expect(guides.filter(([, , body]) => /background(?:-color)?\s*:/.test(body))).toEqual([]);
+  });
+
+  it("are no longer drawn as elbows by the rows", () => {
+    expect([...css.matchAll(/\.explorer[^{}]*::(?:before|after)[^{}]*\{[^}]*border/g)]).toEqual([]);
   });
 });
 

@@ -802,7 +802,7 @@ export function ChatsSection({
         >
           {drawn.length > 0 && (
             <RovingFocusGroup.Root asChild orientation="vertical" {...stop}>
-              <ul role="tree" aria-label="Chats of this project">
+              <ul className="tree" role="tree" aria-label="Chats of this project">
                 {/* One flat list of keyed items, so a row that changes place is moved and not
                     made again: a list of lists would key each row by where it stands. */}
                 {drawn.flatMap((row, at) => {

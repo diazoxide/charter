@@ -1069,7 +1069,7 @@ describe("the explorer", () => {
  * **The tree's rows, measured — because jsdom lays nothing out.**
  *
  * Every assertion in this block is about a used value: a height in pixels, a `scrollWidth`, the
- * position an `::after` was actually painted at. `getComputedStyle` in jsdom answers from the
+ * position a guide was actually painted at. `getComputedStyle` in jsdom answers from the
  * cascade it managed to build and gives every box a size of zero, so a vitest assertion that a
  * row "does not wrap" or that the region "scrolls" checks nothing at all. These need a window
  * that really lays out, which is why they are here.
@@ -1184,78 +1184,52 @@ describe("the explorer's rows, in a region too narrow for them", () => {
   });
 
   /**
-   * **The tree's elbows, against the line they are drawn for.**
+   * **The tree's guides, straight and under the row they hang from** (#1672).
    *
-   * #154 draws a clone's and a piece's at a fixed offset down the row (`0.9em`) tuned to the
-   * padding and the font size of those rows, and its author wrote that *"any padding change
-   * misaligns them, and no test would notice"*. This is the test that notices: the elbow's
-   * painted position against the middle of the name it points at, read off the real WebView. A
-   * row's padding changed by 0.2rem moves one and not the other.
-   *
-   * A chat's elbow is drawn by its own button at half the button's height (train 58: a persona's
-   * mark made the row taller than the length it was tuned to), so there it is the button's
-   * `::before` that is read, and what goes red is a name that is no longer in the row's middle.
+   * A level is a group, and the group's inline-start edge is its guide: one painted hairline down
+   * the whole level, VS Code's. The elbows that came before it were tuned to each row's metrics
+   * and pointed above the name whenever those moved (#154, train 58); a straight guide has no
+   * such number. What is held here is what only a real WebView can say: every level's guide is
+   * painted one pixel wide, it stands under the row it hangs from (inside that row's box, before
+   * the row's name), and the rows of the level start after it.
    */
-  it("draws each elbow at the middle of the line it points at", async () => {
+  it("draws each level's guide straight, under the row it hangs from", async () => {
     await onAlpha();
     await $('[data-testid="piece-svc-fix-login"]').waitForExist({ timeout: 20_000 });
 
-    const elbows = await browser.execute(() => {
-      const explorer = document.querySelector<HTMLElement>('[data-testid="explorer"]');
-      if (!explorer) throw new Error("no explorer");
-
-      /** Where the elbow `drawn` draws, as the pseudo-element `pseudo`, was actually painted. */
-      const elbowOf = (drawn: Element | null, pseudo: "::after" | "::before") => {
-        if (!drawn) return Number.NaN;
-        const css = getComputedStyle(drawn, pseudo);
-        // A row that draws no elbow at all is crooked, not straight.
-        if (css.content === "none") return Number.NaN;
-        // The rule is written in logical properties; a computed style answers in whichever of
-        // the two this engine resolves, so both are asked and the first number wins.
-        for (const value of [css.insetBlockStart, css.top]) {
-          const at = Number.parseFloat(value);
-          if (Number.isFinite(at)) return drawn.getBoundingClientRect().top + at;
-        }
-        return Number.NaN;
-      };
-
-      /** `by` is what draws the row's elbow: the row itself, or its child of that selector. */
-      const measure = (
-        selector: string,
-        name: string,
-        what: string,
-        by?: { child: string; pseudo: "::before" },
-      ) =>
-        [...explorer.querySelectorAll(selector)].flatMap((li) => {
-          const label = li.querySelector(name);
-          if (!label) return [];
-          const box = label.getBoundingClientRect();
-          return [
-            {
-              what: `${what} (${label.textContent ?? ""})`,
-              elbow: by
-                ? elbowOf(li.querySelector(`:scope > ${by.child}`), by.pseudo)
-                : elbowOf(li, "::after"),
-              middle: box.top + box.height / 2,
-            },
-          ];
-        });
-
-      return [
-        ...measure(".clones > .clone", "summary .repo", "a clone's elbow"),
-        ...measure(".pieces > li", ".spot-name", "a piece's elbow"),
-        ...measure(".here > li", ".session", "a chat's elbow", {
-          child: ".chat",
-          pseudo: "::before",
-        }),
-      ];
+    const guides = await browser.execute(() => {
+      const tree = document.querySelector<HTMLElement>(
+        '[data-testid="explorer"] [role="tree"].tree',
+      );
+      if (!tree) throw new Error("no explorer tree drawn in the shared tree style");
+      return [...tree.querySelectorAll<HTMLElement>('[role="group"]')].flatMap((group) => {
+        // The row a level hangs from: the treeitem drawn just before the group, in its own row.
+        const parent = group.parentElement?.querySelector<HTMLElement>(
+          ':scope > [role="treeitem"], :scope > * > [role="treeitem"], :scope > summary',
+        );
+        const child = group.querySelector<HTMLElement>('[role="treeitem"]');
+        if (!parent || !child) return [];
+        const css = getComputedStyle(group);
+        const at = group.getBoundingClientRect().left;
+        const name = parent.querySelector(".spot-name, .repo") ?? parent;
+        return [
+          {
+            what: parent.textContent?.trim().slice(0, 40) ?? "",
+            width: Number.parseFloat(css.borderLeftWidth),
+            style: css.borderLeftStyle,
+            under:
+              at >= parent.getBoundingClientRect().left && at < name.getBoundingClientRect().left,
+            before: child.getBoundingClientRect().left > at,
+          },
+        ];
+      });
     });
 
-    // A run where a level drew nothing is a run that proved nothing about it.
-    expect(elbows.length).toBeGreaterThan(1);
-    const crooked = elbows
-      .filter((at) => !(Math.abs(at.elbow - at.middle) <= 2.5))
-      .map((at) => `${at.what}: drawn at ${at.elbow}px, its line centred on ${at.middle}px`);
+    // A run where no level was drawn is a run that proved nothing about one.
+    expect(guides.length).toBeGreaterThan(1);
+    const crooked = guides
+      .filter((one) => !(one.width === 1 && one.style === "solid" && one.under && one.before))
+      .map((one) => `${one.what}: ${JSON.stringify(one)}`);
     expect(crooked).toEqual([]);
   });
 });

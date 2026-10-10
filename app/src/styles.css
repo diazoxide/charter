@@ -75,6 +75,9 @@
   --color-accent-surface: var(--accent-surface);
   --color-focus-ring: var(--focus-ring);
   --color-tab-active: var(--tab-active);
+  --color-list-selected: var(--list-selected);
+  --color-list-selected-edge: var(--list-selected-edge);
+  --color-tree-guide: var(--tree-guide);
   --color-layer-project: var(--layer-project);
   --color-layer-workspace: var(--layer-workspace);
   --color-layer-chat: var(--layer-chat);

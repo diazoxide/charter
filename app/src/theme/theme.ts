@@ -93,6 +93,21 @@ export const TOKENS = [
   "focus.ring",
   "tab.active",
 
+  // **The row a tree or a list has selected** (#1672): the chat in front in the Chats tree, the
+  // spot the next chat starts in, the file a file tab shows. A fill in the accent's hue and an
+  // edge down the row's start, so it is told by a shape as well as a colour. Its own group,
+  // because it is neither the pointer (`surface.hover`, which it was drawn in until a selected
+  // chat looked exactly like a hovered one) nor the tab you are on (`layer.selected`, which
+  // belongs to the three strips of the axis). The keyboard's place is `focus.ring`, a ring and
+  // not a fill, so the three never read as one.
+  "list.selected",
+  "list.selected-edge",
+
+  // A tree's indent guides: one straight hairline per level, under the row a level hangs from
+  // (#1672). Quieter than `border.subtle`'s rules between things, since a guide is structure
+  // to be read past, not a divider.
+  "tree.guide",
+
   // **The three strips of the axis, one quiet shade each, and the tab you are on** (ADR
   // 0036, charter-app#193). A project holds workspaces and a workspace holds chats; #171
   // drew that by indenting each row under the one above, the operator read the indent as stray
@@ -268,6 +283,9 @@ export const TINTED_WINDOW: readonly Token[] = [
   "accent.surface",
   "focus.ring",
   "tab.active",
+  // A selected row is drawn in the accent's hue, so it turns with the accent (#1672).
+  "list.selected",
+  "list.selected-edge",
 ];
 
 /**
