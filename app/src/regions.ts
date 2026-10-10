@@ -337,7 +337,8 @@ function sayWhatTheLayoutCost(path: string, started: ReturnType<typeof startingL
     sayAboutThisMachine("layout", {
       severity: "warn",
       detail: `${started.trouble} — the window is drawn in the default arrangement`,
-      remedy: `fix ${where(path)} or delete it; the next change you make to the layout replaces it`,
+      remedy: `fix ${where(path)}, or use the default layout, which moves it aside; the next change you make to the layout replaces it`,
+      defaultLayout: true,
     });
   } else if (started.said.length > 0 && !started.legacy) {
     sayAboutThisMachine("layout", {

@@ -12,7 +12,12 @@ import type { AlertsReading } from "./alerts";
 import { identityNowOf, sendIdentity, useFixForm, type Fixer } from "./Doctor";
 import { drawWhatIsInForce } from "./Extensions";
 import { Notice, type NoticeAction } from "./Notice";
-import { sayAboutThisMachine, usingTheBuiltIn, type MachineAlert } from "./windowprefs";
+import {
+  sayAboutThisMachine,
+  usingTheBuiltIn,
+  usingTheDefaultLayout,
+  type MachineAlert,
+} from "./windowprefs";
 import { landSettingsFocus } from "./settings/entering";
 
 /**
@@ -43,8 +48,9 @@ import { landSettingsFocus } from "./settings/entering";
  * **Each row carries its way out** (NO-6, #1238; V91a): a row is a {@link Notice}, and its
  * button is what the core says fixes it (`AlertRow.way`) — a Settings group, a fix of the
  * doctor's registry, the outer project, the Saving view — never a command to type elsewhere.
- * A row about this machine links to its Settings group, offers Use built-in for the theme file,
- * or, with nothing to press, can be dismissed for this launch.
+ * A row about this machine links to its Settings group, offers Use built-in for the theme file
+ * and Use the default layout for a layout file purlis could not use or write into, or, with
+ * nothing to press, can be dismissed for this launch.
  */
 export function AlertsDrawer({
   open,
@@ -408,8 +414,54 @@ function ProjectRow({
 }
 
 /**
- * A row about this machine: its Settings group, Use built-in for the theme file (which asks
- * first, in the row), or — with neither — Dismiss, which takes it back for this launch.
+ * A file of this machine's that a row can move aside (NO-6, #1289): the theme file, for Use
+ * built-in, and the layout file, for Use the default layout. Each asks first, in the row, with
+ * what moving it aside does.
+ */
+type Aside = {
+  /** The press that asks. */
+  ask: string;
+  /** The answer that moves it. */
+  yes: string;
+  /** What the question says. */
+  question: string;
+  move: () => ReturnType<typeof commands.useBuiltInTheme>;
+  /** What the window does once it has moved. */
+  moved: () => void;
+};
+
+const THEME_ASIDE: Aside = {
+  ask: "Use built-in…",
+  yes: "Use built-in",
+  question:
+    "Use the built-in theme? purlis moves the theme file aside to theme.aside.json (or the next free theme.aside-N.json), never over a file, and draws what is in force without it.",
+  move: () => commands.useBuiltInTheme(),
+  moved: () => {
+    usingTheBuiltIn();
+    void drawWhatIsInForce();
+  },
+};
+
+/**
+ * **What moving the layout aside loses is said in the question** (D-1289-1): the file keeps more
+ * than the arrangement. The pins, the Notices dismissed in each project and the ones seen once on
+ * this machine go aside with it, so a Notice a dismissal was hiding can show again.
+ */
+const LAYOUT_ASIDE: Aside = {
+  ask: "Use the default layout…",
+  yes: "Use the default layout",
+  question:
+    "Use the default layout? purlis moves the layout file aside to layout.aside.json (or the next free layout.aside-N.json), never over a file, and the next launch starts from the default layout. What the file kept goes aside with it: your pins, the Notices you dismissed, which can show again, and the ones seen once on this machine.",
+  move: () => commands.useDefaultLayout(),
+  moved: usingTheDefaultLayout,
+};
+
+/**
+ * A row about this machine: its Settings group, a file it can move aside (which asks first, in
+ * the row), or — with neither — Dismiss, which takes it back for this launch. A layout row that
+ * can move its file aside keeps its Dismiss too (D-1289-2): a machine row's Dismiss lasts one
+ * launch, since the layout file is where dismissals are kept, and a broken one cannot hold its
+ * own.
  */
 function MachineRow({
   alert,
@@ -420,17 +472,17 @@ function MachineRow({
 }) {
   const [asking, setAsking] = useState(false);
   const [said, setSaid] = useState<string>();
-  const useBuiltIn = () => {
+  const aside = alert.builtIn ? THEME_ASIDE : alert.defaultLayout ? LAYOUT_ASIDE : undefined;
+  const moveAside = (aside: Aside) => {
     setAsking(false);
-    void commands
-      .useBuiltInTheme()
+    void aside
+      .move()
       .then((answer) => {
         if (answer.status === "error") {
           setSaid(answer.error);
           return;
         }
-        usingTheBuiltIn();
-        void drawWhatIsInForce();
+        aside.moved();
       })
       .catch((err: unknown) => setSaid(String(err)));
   };
@@ -439,22 +491,20 @@ function MachineRow({
   const shown = { severity: alert.severity, subject: alert.subject, said };
   const words = <Words {...shown} detail={alert.detail} then={alert.remedy} />;
   const settings = alert.settings;
+  const dismiss = () => sayAboutThisMachine(alert.subject, undefined);
   let notice: ReactNode;
-  if (asking)
+  if (asking && aside !== undefined)
     notice = (
       <Notice
         cause={cause}
         at="drawer"
         tone={tone}
         fixes={[
-          { label: "Use built-in", onPress: useBuiltIn },
+          { label: aside.yes, onPress: () => moveAside(aside) },
           { label: "Keep it", onPress: () => setAsking(false) },
         ]}
       >
-        <Words
-          {...shown}
-          detail="Use the built-in theme? purlis moves the theme file aside to theme.aside.json (or the next free theme.aside-N.json), never over a file, and draws what is in force without it."
-        />
+        <Words {...shown} detail={aside.question} />
       </Notice>
     );
   else if (settings !== undefined)
@@ -468,33 +518,29 @@ function MachineRow({
         {words}
       </Notice>
     );
-  else if (alert.builtIn)
+  else if (aside !== undefined) {
+    const ask: [NoticeAction] = [
+      {
+        label: aside.ask,
+        onPress: () => {
+          setSaid(undefined);
+          setAsking(true);
+        },
+      },
+    ];
+    notice =
+      aside === LAYOUT_ASIDE ? (
+        <Notice cause={cause} at="drawer" tone={tone} fixes={ask} onDismiss={dismiss}>
+          {words}
+        </Notice>
+      ) : (
+        <Notice cause={cause} at="drawer" tone={tone} fixes={ask}>
+          {words}
+        </Notice>
+      );
+  } else
     notice = (
-      <Notice
-        cause={cause}
-        at="drawer"
-        tone={tone}
-        fixes={[
-          {
-            label: "Use built-in…",
-            onPress: () => {
-              setSaid(undefined);
-              setAsking(true);
-            },
-          },
-        ]}
-      >
-        {words}
-      </Notice>
-    );
-  else
-    notice = (
-      <Notice
-        cause={cause}
-        at="drawer"
-        tone={tone}
-        onDismiss={() => sayAboutThisMachine(alert.subject, undefined)}
-      >
+      <Notice cause={cause} at="drawer" tone={tone} onDismiss={dismiss}>
         {words}
       </Notice>
     );

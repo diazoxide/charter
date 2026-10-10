@@ -70,7 +70,8 @@ function reading(raw: unknown): Reading {
 /**
  * One thing said about this machine: an alert and its way out (NO-6) — when its fix is a
  * setting, the Settings group it is made in, by the group's address (`you.text`; SE-22), which
- * the drawer links to; for the theme file, Use built-in. One with neither can be dismissed for
+ * the drawer links to; for the theme file, Use built-in; for a layout file purlis could not use
+ * or write into, Use the default layout (#1289). One with none of these can be dismissed for
  * this launch. `remedy` is a sentence, never a command: the drawer reads it after the detail.
  */
 export type MachineAlert = Pick<AlertRow, "severity" | "subject" | "detail"> & {
@@ -78,6 +79,9 @@ export type MachineAlert = Pick<AlertRow, "severity" | "subject" | "detail"> & {
   settings?: string;
   /** The theme file's way out: move it aside and draw the built-in ({@link usingTheBuiltIn}). */
   builtIn?: true;
+  /** The layout file's way out: move it aside, so the next launch starts from the default
+   *  layout and the next change writes a new file ({@link usingTheDefaultLayout}). */
+  defaultLayout?: true;
 };
 
 const said = new Map<string, MachineAlert>();
@@ -133,6 +137,17 @@ export function forgetTheirTheme() {
 export function usingTheBuiltIn() {
   theirs = { theme: undefined };
   sayAboutThisMachine("theme", undefined);
+}
+
+/**
+ * **The layout file was moved aside** (#1289, Use the default layout): there is no file of the
+ * operator's in the way any more, so nothing is left to say about the one that could not be used
+ * or written into. The window keeps what it draws now; the next change it keeps writes a new
+ * file, and the next launch starts from the default layout.
+ */
+export function usingTheDefaultLayout() {
+  sayAboutThisMachine("layout", undefined);
+  sayAboutThisMachine("dismissed", undefined);
 }
 
 /**

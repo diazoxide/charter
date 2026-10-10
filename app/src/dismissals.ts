@@ -164,7 +164,9 @@ function change(
         ? {
             severity: "warn",
             detail: `purlis could not keep what you dismissed: ${kept.error}`,
-            remedy: "it stays hidden until you quit; after a relaunch those Notices show again",
+            remedy:
+              "it stays hidden until you quit; after a relaunch those Notices show again. Where the layout file is what is in the way, use the default layout, which moves it aside",
+            defaultLayout: true,
           }
         : undefined,
     );

@@ -1809,6 +1809,12 @@ export const commands = {
 	 *  file went.
 	 */
 	useBuiltInTheme: () => typedError<string, string>(__TAURI_INVOKE("use_built_in_theme")),
+	/**
+	 *  **Use the default layout** (#1289): moves the layout file aside to `layout.aside.json`,
+	 *  never over another file, so the next launch draws the default arrangement. Its pins and the
+	 *  Notices dismissed or seen once go aside with it. Answers where the file went.
+	 */
+	useDefaultLayout: () => typedError<string, string>(__TAURI_INVOKE("use_default_layout")),
 	/**  One secret's value, to show in the window for a while ([`reveal`]). */
 	vaultSecretReveal: (plane: PlaneId, vault: string, key: string) => typedError<SecretValue, string>(__TAURI_INVOKE("vault_secret_reveal", { plane, vault, key })),
 	/**

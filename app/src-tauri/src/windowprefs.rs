@@ -92,6 +92,18 @@ pub async fn use_built_in_theme() -> Result<String, String> {
         .map_err(|err| format!("moving the theme aside did not finish: {err}"))?
 }
 
+/// **Use the default layout** (#1289): moves the layout file aside to `layout.aside.json`,
+/// never over another file, so the next launch draws the default arrangement. Its pins and the
+/// Notices dismissed or seen once go aside with it. Answers where the file went.
+#[tauri::command]
+#[specta::specta]
+pub async fn use_default_layout() -> Result<String, String> {
+    let root = config_root()?;
+    tauri::async_runtime::spawn_blocking(move || windowprefs::use_default_layout(&root))
+        .await
+        .map_err(|err| format!("moving the layout aside did not finish: {err}"))?
+}
+
 /// Keeps the Notices dismissed in one project until their cause changes (NO-2, V91j):
 /// `causes` replaces that project's list in the layout file and nothing else, so two windows
 /// dismissing in different projects both keep theirs. An empty list takes the project out.

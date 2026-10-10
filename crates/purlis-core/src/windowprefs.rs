@@ -116,14 +116,46 @@ pub fn theme_path(config_root: &Path) -> PathBuf {
 /// it went. Only on the operator's press, after the window asked. Refused, moving nothing, when
 /// there is no theme file or it is not a plain file (a link is moved by nobody here).
 pub fn use_built_in_theme(config_root: &Path) -> Result<String, String> {
-    let file = theme_path(config_root);
+    move_aside(config_root, THEME, "theme", |file| {
+        format!(
+            "there is no theme file at {}, so the built-in is already in force",
+            file.display()
+        )
+    })
+}
+
+/// **Use the default layout** (#1289): the layout file moved aside to `layout.aside.json`, or
+/// the next free `layout.aside-N.json`, as [`use_built_in_theme`] moves the theme: **never over
+/// anything**, never deleted, refused for no file or one that is not a plain file. The next
+/// launch draws the default arrangement, and the file is still there to mend.
+///
+/// **What goes aside with it** is everything the file keeps besides the arrangement: the
+/// pins, the Notices dismissed in each project ([`set_dismissed`]) and the ones seen once on
+/// this machine ([`see_on_this_machine`]). The window says so before it asks. Under the
+/// layout's lock, so a dismissal written meanwhile goes either into the file moved aside or
+/// into the next one, and is never written over the move.
+pub fn use_default_layout(config_root: &Path) -> Result<String, String> {
+    let _held = crate::machine::Lock::named(config_root, LAYOUT_LOCK);
+    move_aside(config_root, LAYOUT, "layout", |file| {
+        format!(
+            "there is no layout file at {}, so the default layout is already in force",
+            file.display()
+        )
+    })
+}
+
+/// `name` in the machine's directory, moved to `<stem>.aside.json` or the next free
+/// `<stem>.aside-N.json`, never over a file; `absent` says there is none to move.
+fn move_aside(
+    config_root: &Path,
+    name: &str,
+    stem: &str,
+    absent: impl FnOnce(&Path) -> String,
+) -> Result<String, String> {
+    let dir = crate::machine::dir(config_root);
+    let file = dir.join(name);
     match file.symlink_metadata() {
-        Err(e) if e.kind() == io::ErrorKind::NotFound => {
-            return Err(format!(
-                "there is no theme file at {}, so the built-in is already in force",
-                file.display()
-            ));
-        }
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Err(absent(&file)),
         Err(e) => return Err(format!("purlis could not look at {}: {e}", file.display())),
         Ok(meta) if !meta.is_file() => {
             return Err(format!(
@@ -133,12 +165,11 @@ pub fn use_built_in_theme(config_root: &Path) -> Result<String, String> {
         }
         Ok(_) => {}
     }
-    let dir = crate::machine::dir(config_root);
     for n in 1..=99 {
         let to = if n == 1 {
-            dir.join("theme.aside.json")
+            dir.join(format!("{stem}.aside.json"))
         } else {
-            dir.join(format!("theme.aside-{n}.json"))
+            dir.join(format!("{stem}.aside-{n}.json"))
         };
         match crate::guest::rename_new(&file, &to) {
             Ok(true) => return Ok(to.display().to_string()),
@@ -152,8 +183,8 @@ pub fn use_built_in_theme(config_root: &Path) -> Result<String, String> {
         }
     }
     Err(format!(
-        "every name from theme.aside.json to theme.aside-99.json is taken beside {}, so nothing \
-         was moved",
+        "every name from {stem}.aside.json to {stem}.aside-99.json is taken beside {}, so \
+         nothing was moved",
         file.display()
     ))
 }
@@ -708,6 +739,82 @@ mod tests {
             assert!(link.contains("not a plain file"), "{link}");
             assert!(theme_path(home.path()).symlink_metadata().is_ok());
         }
+    }
+
+    /// **Use the default layout** (#1289): the layout file is moved aside as the theme is,
+    /// never deleted and never over another file, and the next read has no layout in force.
+    #[test]
+    fn using_the_default_layout_moves_the_layout_aside_and_never_over_a_file() {
+        let home = home();
+        put(home.path(), LAYOUT, "{\"version\": 99}");
+        assert!(
+            read_layout(home.path()).trouble.is_some(),
+            "a layout not in force"
+        );
+        let dir = crate::machine::dir(home.path());
+
+        let first = use_default_layout(home.path()).expect("moved aside");
+        assert_eq!(first, dir.join("layout.aside.json").display().to_string());
+        let after = read_layout(home.path());
+        assert!(!after.found, "{after:?}");
+        assert_eq!(after.trouble, None);
+        assert_eq!(
+            std::fs::read_to_string(&first).unwrap(),
+            "{\"version\": 99}"
+        );
+
+        put(home.path(), LAYOUT, "[[[ not json");
+        let second = use_default_layout(home.path()).expect("moved aside again");
+        assert_eq!(
+            second,
+            dir.join("layout.aside-2.json").display().to_string()
+        );
+        assert_eq!(
+            std::fs::read_to_string(&first).unwrap(),
+            "{\"version\": 99}"
+        );
+        // The theme is not the layout's to move.
+        assert!(!dir.join("theme.aside.json").exists());
+    }
+
+    #[test]
+    fn using_the_default_layout_with_no_layout_file_or_a_link_moves_nothing() {
+        let home = home();
+        let none = use_default_layout(home.path()).expect_err("nothing to move");
+        assert!(none.contains("no layout file"), "{none}");
+
+        #[cfg(unix)]
+        {
+            let target = home.path().join("elsewhere.json");
+            std::fs::write(&target, A_LAYOUT).unwrap();
+            std::fs::create_dir_all(crate::machine::dir(home.path())).unwrap();
+            std::os::unix::fs::symlink(&target, layout_path(home.path())).unwrap();
+            let link = use_default_layout(home.path()).expect_err("a link is not moved");
+            assert!(link.contains("not a plain file"), "{link}");
+            assert!(layout_path(home.path()).symlink_metadata().is_ok());
+            assert_eq!(std::fs::read_to_string(&target).unwrap(), A_LAYOUT);
+        }
+    }
+
+    #[test]
+    fn a_layout_moved_aside_takes_its_dismissals_with_it() {
+        // What the window's ask says: the dismissals live in the file, so they go with it.
+        let home = home();
+        write_layout(home.path(), A_LAYOUT).unwrap();
+        set_dismissed(home.path(), "/p", &["pin-dormant:a".to_owned()]).unwrap();
+        assert_eq!(
+            dismissed_in(home.path()),
+            serde_json::json!({ "/p": ["pin-dormant:a"] })
+        );
+
+        let aside = use_default_layout(home.path()).expect("moved aside");
+
+        assert!(!read_layout(home.path()).found, "no layout in force");
+        assert!(
+            std::fs::read_to_string(aside)
+                .unwrap()
+                .contains("pin-dormant:a")
+        );
     }
 
     // ---------------------------------------------------------------- write
