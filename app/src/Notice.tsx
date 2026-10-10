@@ -34,12 +34,13 @@ import { PersonaMark } from "./PersonaMark";
  *
  * `tone` is `news` (nothing is wrong, the operator is being told) or `trouble` (something went
  * wrong), and it is only the look: a Notice is always a polite `status`, because it stands
- * until it is dealt with and an `alert` would interrupt a screen reader on every relaunch. `at` is where it stands: under the strip (`band`, the
- * default), in a pane's corner over its terminal, where it takes no row (`pane`), or as a row of
- * the Alerts drawer (`drawer`, NO-6).
+ * until it is dealt with and an `alert` would interrupt a screen reader on every relaunch.
+ * `at` is where it stands: under the strip (`band`, the default), in its pane's row of Notices
+ * above the terminal, never over it (`pane`, `NoticePaneRow`, #1647), or as a row of the Alerts
+ * drawer (`drawer`, NO-6).
  *
- * **A Notice in a pane's corner fits its pane, whatever it says** (#1481). It began as one short
- * line; it now also carries a long sentence, three long buttons and what one of them opens. So
+ * **A Notice in a pane fits its pane, whatever it says** (#1481). It began as one short line;
+ * it now also carries a long sentence, three long buttons and what one of them opens. So
  * `at="pane"` draws one box (`notice-pane-box`) holding the line and, under it, what a way out
  * opened. The sentence has the row; the ways out share it only when all of it fits unwrapped,
  * and otherwise go under the sentence; nothing is ever wider or taller than the pane
@@ -198,7 +199,12 @@ export function Notice(props: NoticeProps) {
   // drawer the two stay siblings, as the band moves them.
   const drawn =
     at === "pane" ? (
-      <div className={opened === null ? "notice-pane-box" : "notice-pane-box notice-opened"}>
+      <div
+        className={opened === null ? "notice-pane-box" : "notice-pane-box notice-opened"}
+        // What the pane's row stands first (`NoticePaneRow`): a Notice with something to do
+        // about it, before one whose only way out is to put it away.
+        data-asks={fixes !== undefined || link !== undefined ? "" : undefined}
+      >
         {line}
         {opened}
       </div>
@@ -390,5 +396,122 @@ export function NoticeBand({ children }: { children: ReactNode }) {
         />
       </div>
     </Band.Provider>
+  );
+}
+
+/**
+ * **A pane's Notices: a row of their own at the top of the pane, above its terminal** (#1647).
+ *
+ * The operator's screenshot (2026-10-10): three Notices stacked over a chat's terminal and hid
+ * the conversation. They had been drawn in the pane's corner, over the terminal and taking no
+ * row (#1481). Now they take a row, and the terminal gives that height up, so nothing purlis
+ * says is ever drawn over what the chat wrote.
+ *
+ * **Two at a time, as under the strip** (V91i): the rest are behind **+N more**, which opens
+ * them in the row, with their ways out, and closes on Escape or a press outside the row. Unlike
+ * the band, the order is the pane's own, the order its Notices are written in (`ChatNotices`):
+ * the one that waits for an answer first, then the hidden chats'. **The two that stand are the
+ * first two that ask something** (a fix or a link, `data-asks`), and only then the first that
+ * only say something (Dismiss alone): an "Allowed." the person can read later never keeps a
+ * question that waits for them behind "+N more". Every Notice is drawn where it is written, and
+ * the row only hides the others (`hidden`), so the order on screen is still the pane's, React
+ * keeps each one's state, and nothing is moved out from under the keyboard.
+ *
+ * **The terminal is refitted on every change of the row's height** (its `ResizeObserver`), and
+ * that resizes the chat's pty and redraws its harness. With two at most, the row's height
+ * changes when a pane goes from none to one or from one to two, and when one that stands is
+ * answered or opens something; a third and every one after it changes nothing but the count.
+ *
+ * **A Notice the keyboard is on is never hidden** (as the band never moves one): one that
+ * arrives above it stands as a third until the focus leaves it.
+ */
+export function NoticePaneRow({ children }: { children: ReactNode }) {
+  const stackAt = useRef<HTMLDivElement>(null);
+  const moreAt = useRef<HTMLButtonElement>(null);
+  const rowAt = useRef<HTMLDivElement>(null);
+  const [count, setCount] = useState(0);
+  const [open, setOpen] = useState(false);
+  const behind = Math.max(count - SHOWN, 0);
+  // Nothing behind it: the list closes, so the next one to fall behind does not open it again.
+  if (behind === 0 && open) setOpen(false);
+
+  // Each Notice is one element of the stack (`notice-pane-box`). Read off the stack itself, so
+  // a Notice is counted however deep in the pane's components it is written.
+  useLayoutEffect(() => {
+    const stack = stackAt.current;
+    if (stack === null) return;
+    const place = () => {
+      const boxes = [...stack.children] as HTMLElement[];
+      setCount(boxes.length);
+      // The pane's order, those that ask first: a stable sort keeps the pane's order in each.
+      const asks = (box: HTMLElement) => (box.hasAttribute("data-asks") ? 0 : 1);
+      const stand = new Set([...boxes].sort((a, b) => asks(a) - asks(b)).slice(0, SHOWN));
+      const on = document.activeElement;
+      for (const box of boxes) {
+        const hide = !open && !stand.has(box) && !(on !== null && box.contains(on));
+        if (box.hidden !== hide) box.hidden = hide;
+      }
+    };
+    place();
+    const watching = new MutationObserver(place);
+    watching.observe(stack, { childList: true });
+    // A Notice kept for the keyboard goes behind "+N more" once the keyboard has left it: after
+    // the focus has moved, which is after `focusout`.
+    let later: ReturnType<typeof setTimeout> | undefined;
+    const left = () => {
+      clearTimeout(later);
+      later = setTimeout(place, 0);
+    };
+    stack.addEventListener("focusout", left);
+    return () => {
+      watching.disconnect();
+      stack.removeEventListener("focusout", left);
+      clearTimeout(later);
+    };
+  }, [open]);
+
+  // **The list closes on Escape and on a press outside the row** (F3, as the band's).
+  useEffect(() => {
+    const row = rowAt.current;
+    if (!open || row === null) return;
+    const escape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.stopPropagation();
+      // The focus first, so the Notice it was on is not kept for it.
+      moreAt.current?.focus();
+      setOpen(false);
+    };
+    const outside = (event: PointerEvent) => {
+      if (!row.contains(event.target as Node)) setOpen(false);
+    };
+    row.addEventListener("keydown", escape);
+    document.addEventListener("pointerdown", outside);
+    return () => {
+      row.removeEventListener("keydown", escape);
+      document.removeEventListener("pointerdown", outside);
+    };
+  }, [open]);
+
+  return (
+    <div
+      className={count === 0 ? "pane-notice-row pane-notice-row-empty" : "pane-notice-row"}
+      ref={rowAt}
+    >
+      <div className="pane-notices" ref={stackAt}>
+        {children}
+      </div>
+      {behind > 0 && (
+        <button
+          type="button"
+          className="notice-more notice-more-pane"
+          ref={moreAt}
+          tabIndex={0}
+          aria-expanded={open}
+          onClick={() => setOpen((was) => !was)}
+        >
+          +{behind} more
+        </button>
+      )}
+    </div>
   );
 }

@@ -176,9 +176,9 @@ beside the settings set: the one way to draw a standing line in a project's wind
 primitive, only a native element and native buttons (`tabIndex={0}` on each, for #186), so the
 argument above about props being the primitive's own does not apply; its props are the line's
 own words instead. What it adds is a type that refuses a line with no way out: `fixes`, `link`,
-`copy` or `onDismiss`, at least one, and always a `cause`. `at="pane"` draws it in a pane's
-corner, over the terminal and taking no row; `at="drawer"` draws it as a row of the alerts
-drawer (NO-6 #1238); the default is the band under the strip.
+`copy` or `onDismiss`, at least one, and always a `cause`. `at="pane"` draws it in its pane's
+row of Notices, above the terminal and never over it (#1647); `at="drawer"` draws it as a row
+of the alerts drawer (NO-6 #1238); the default is the band under the strip.
 `Notice.guard.test.ts` fails on a hand-built one.
 
 Under the strip, Notices are stacked by `NoticeBand` (V91i, NO-2 #1229): at most two stand, the
@@ -190,12 +190,25 @@ others come and go. A Dismiss of a
 cause the core answers for lasts until the cause changes, across relaunches
 (`app/src/dismissals.ts`).
 
-In a pane's corner (`at="pane"`), a Notice is one box: its line, and under it what a way out
-opened. A pane's Notices are stacked in `.pane-notices`, the one that waits for an answer before
-anything starts first, and the stack is never wider or taller than the pane: the sentence has
-the row, the ways out go under it when they do not fit beside it, and the stack scrolls
-(#1481). `Notice.pane.test.tsx` holds the shape and the rules, and `pane-notices.e2e.ts`
-measures them. Everything the window draws is ordered inside `#root`, which is one stacking
+In a pane (`at="pane"`), a Notice is one box: its line, and under it what a way out opened. A
+pane's Notices stand in **a row of their own at the top of the pane** (`NoticePaneRow`, #1647),
+and the terminal has the height the row leaves, so no Notice is ever drawn over what a chat
+wrote. They were in the pane's corner, over the terminal, until the operator's screenshot of
+three of them hiding the conversation. In the row they are stacked in `.pane-notices`, in the
+order the pane writes them: the shown chat's own, the one that waits for an answer before
+anything starts first, then each hidden chat's. **At most two stand, and the rest are behind
+"+N more"**, as under the strip; it sits beside the stack, so a third Notice takes no line, and
+it opens the rest in the row, closing on Escape (back on "+N more") or a press outside the row.
+A Notice past two is `hidden` where it is drawn, never moved, so it keeps its state, and one the
+keyboard is on stays until the focus leaves it. The row is never more than three fifths of the
+pane, and inside it the stack is never wider or taller than the pane: the sentence has the row,
+the ways out go under it when they do not fit beside it, and the stack scrolls (#1481). Every
+change of the row's height refits the terminal, which resizes the chat's pty and redraws its
+harness; with two at most, a third Notice and every one after it change only the count. The
+chat at a glance (the gauge, the harness, the breadcrumb) stays in the corner over the
+terminal: one short line. `Notice.pane.test.tsx` holds the shape and the rules, and
+`pane-notices.e2e.ts` measures them, with no Notice over the terminal in a narrow pane and a
+wide one. Everything the window draws is ordered inside `#root`, which is one stacking
 context, so no `z-index` in the window is over a dialog or a menu: those are portaled to the
 body and need no number.
 

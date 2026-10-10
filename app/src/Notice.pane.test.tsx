@@ -1,8 +1,10 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
-import { Notice } from "./Notice";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { useState } from "react";
+import { Notice, NoticePaneRow } from "./Notice";
 
 /**
  * **A Notice in a pane's corner fits its pane, whatever it says** (#1481).
@@ -102,6 +104,130 @@ describe("a Notice in a pane's corner", () => {
   });
 });
 
+/**
+ * **A pane's Notices stand in a row of their own, above the terminal, two at a time** (#1647).
+ *
+ * The operator's screenshot (2026-10-10): three cards stacked over a chat's terminal and hid the
+ * conversation. The row takes height from the terminal instead, and like the band under the
+ * strip (V91i) it shows at most two and keeps the rest behind "+N more".
+ */
+describe("a pane's row of Notices", () => {
+  /** A pane Notice with one answer and a Dismiss, as `ChatNotices` draws them. */
+  const one = (cause: string, says: string) => (
+    <Notice
+      key={cause}
+      cause={cause}
+      at="pane"
+      label={says}
+      fixes={[{ label: `Answer ${says}`, onPress: () => undefined }]}
+      onDismiss={() => undefined}
+    >
+      {says}
+    </Notice>
+  );
+  /** The Notices a person can see, top to bottom, by their names. */
+  const seen = () => screen.queryAllByRole("status").map((line) => line.getAttribute("aria-label"));
+
+  it("draws two and keeps the rest behind +N more, in the order the pane wrote them", async () => {
+    render(
+      <NoticePaneRow>
+        {[one("a:1", "first"), one("b:1", "second"), one("c:1", "third")]}
+      </NoticePaneRow>,
+    );
+
+    await waitFor(() => expect(seen()).toEqual(["first", "second"]));
+    const more = screen.getByRole("button", { name: "+1 more" });
+    expect(more).toHaveAttribute("aria-expanded", "false");
+    expect(more).toHaveAttribute("tabindex", "0");
+    // Behind it, not gone: every way out is still in the row.
+    expect(document.querySelector('[data-cause="c:1"]')).not.toBeNull();
+  });
+
+  it("opens the rest in the row with every way out, and closes on Escape back on +N more", async () => {
+    const user = userEvent.setup();
+    render(
+      <NoticePaneRow>
+        {[one("a:1", "first"), one("b:1", "second"), one("c:1", "third")]}
+      </NoticePaneRow>,
+    );
+    const more = await screen.findByRole("button", { name: "+1 more" });
+
+    await user.click(more);
+    expect(seen()).toEqual(["first", "second", "third"]);
+    expect(more).toHaveAttribute("aria-expanded", "true");
+    const third = screen.getByRole("status", { name: "third" });
+    expect(within(third).getByRole("button", { name: "Answer third" })).toBeVisible();
+    expect(within(third).getByRole("button", { name: "Dismiss" })).toBeVisible();
+
+    within(third).getByRole("button", { name: "Answer third" }).focus();
+    await user.keyboard("{Escape}");
+    expect(seen()).toEqual(["first", "second"]);
+    expect(more).toHaveFocus();
+  });
+
+  it("draws no +N more for two, and no row at all for none", async () => {
+    const { container, rerender } = render(
+      <NoticePaneRow>{[one("a:1", "first"), one("b:1", "second")]}</NoticePaneRow>,
+    );
+    await waitFor(() => expect(seen()).toEqual(["first", "second"]));
+    expect(screen.queryByRole("button", { name: /more/ })).toBeNull();
+
+    rerender(<NoticePaneRow>{null}</NoticePaneRow>);
+    await waitFor(() =>
+      expect(container.querySelector(".pane-notice-row")).toHaveClass("pane-notice-row-empty"),
+    );
+  });
+
+  it("stands the ones that ask before one that only says, keeping the pane's order on screen", async () => {
+    // The session's own "Allowed." came first in the pane, and the question two of its tasks
+    // wait on came third: the question stands, and what can be read later is behind +1 more.
+    render(
+      <NoticePaneRow>
+        <Notice cause="said:1" at="pane" label="allowed" onDismiss={() => undefined}>
+          Allowed for this chat.
+        </Notice>
+        {one("b:1", "second")}
+        {one("c:1", "third")}
+      </NoticePaneRow>,
+    );
+
+    await waitFor(() => expect(seen()).toEqual(["second", "third"]));
+    expect(screen.getByRole("button", { name: "+1 more" })).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "+1 more" }));
+    expect(seen()).toEqual(["allowed", "second", "third"]);
+  });
+
+  it("follows Notices that come and go, and never hides the one the keyboard is on", async () => {
+    const user = userEvent.setup();
+    let raise: (cause: string) => void = () => undefined;
+    function Pane() {
+      const [first, setFirst] = useState<string[]>([]);
+      raise = (cause) => setFirst((was) => [cause, ...was]);
+      return (
+        <NoticePaneRow>
+          {first.map((cause) => one(cause, cause))}
+          {one("b:1", "second")}
+          {one("c:1", "third")}
+        </NoticePaneRow>
+      );
+    }
+    render(<Pane />);
+    await waitFor(() => expect(seen()).toEqual(["second", "third"]));
+
+    // The person is on the second Notice's answer when one arrives above it.
+    await user.click(screen.getByRole("button", { name: "Answer third" }));
+    expect(screen.getByRole("button", { name: "Answer third" })).toHaveFocus();
+    raise("new:1");
+    await waitFor(() => expect(screen.getByRole("button", { name: "+1 more" })).toBeTruthy());
+    expect(seen()).toEqual(["new:1", "second", "third"]);
+    expect(screen.getByRole("button", { name: "Answer third" })).toHaveFocus();
+
+    // Once the keyboard leaves it, it goes behind +N more like the rest.
+    screen.getByRole("button", { name: "Answer new:1" }).focus();
+    await waitFor(() => expect(seen()).toEqual(["new:1", "second"]));
+  });
+});
+
 describe("the dispatch question's extras, in a pane", () => {
   it("draws what is under the answers in the Notice's own box: the choice, then the brief", () => {
     // The shape the dispatch question hands the Notice (#1505): its workspace choice and the
@@ -162,13 +288,31 @@ describe("the pane Notice's rules", () => {
   const rule = (selector: string) =>
     new RegExp(`(^|[},])\\s*${selector}\\s*\\{([^}]*)\\}`).exec(css)?.[2] ?? "";
 
-  it("keeps the corner inside the pane, on both axes", () => {
-    const corner = rule("\\.pane-corner\\.at-start");
-    expect(corner).toMatch(/flex-direction:\s*column/);
-    expect(corner).toMatch(/max-width:\s*calc\(100% - 16px\)/);
-    expect(corner).toMatch(/max-height:\s*calc\(100% - 6px\)/);
+  it("keeps the corner inside the pane", () => {
+    expect(rule("\\.pane-corner\\.at-start")).toMatch(/max-width:\s*calc\(100% - 16px\)/);
     // And nothing a pane draws is drawn outside it, by a box that cannot be scrolled.
     expect(rule("\\.pane-frame")).toMatch(/overflow:\s*clip/);
+  });
+
+  it("gives the Notices a row of their own above the terminal, never over it (#1647)", () => {
+    // The pane is a column: the row, then the body the terminal and its corners are in, which
+    // has what the row leaves.
+    const frame = rule("\\.pane-frame");
+    expect(frame).toMatch(/display:\s*flex/);
+    expect(frame).toMatch(/flex-direction:\s*column/);
+    const body = rule("\\.pane-body");
+    expect(body).toMatch(/position:\s*relative/);
+    expect(body).toMatch(/flex:\s*1 1 0/);
+    expect(body).toMatch(/min-height:\s*0/);
+    // The row is in the column, not positioned over anything, and leaves the terminal most of
+    // the pane whatever is opened.
+    const row = rule("\\.pane-notice-row");
+    expect(row).not.toMatch(/position|z-index/);
+    expect(row).toMatch(/max-height:\s*60%/);
+    expect(row).toMatch(/min-height:\s*0/);
+    expect(rule("\\.pane-notice-row\\.pane-notice-row-empty")).toMatch(/display:\s*none/);
+    // What the row keeps behind "+N more" is not drawn, whatever its box's own display says.
+    expect(rule("\\.pane-notices > \\[hidden\\]")).toMatch(/display:\s*none/);
   });
 
   it("lets the terminal be reached through the part of the corner that draws nothing", () => {
@@ -257,9 +401,8 @@ describe("the pane Notice's rules", () => {
     expect(rule("\\.pane-notices")).toMatch(/overflow-y:\s*auto/);
   });
 
-  it("is opaque, and over all of the terminal", () => {
+  it("is opaque", () => {
     expect(rule("\\.notice-pane-box")).toMatch(/background:\s*var\(--surface-raised\)/);
-    expect(rule("\\.pane")).toMatch(/isolation:\s*isolate/);
   });
 
   it("is under whatever is opened over the window: a dialog, a menu", () => {

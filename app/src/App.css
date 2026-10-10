@@ -935,11 +935,19 @@ button.show-more:focus-visible {
   border-color: var(--accent-base);
 }
 
-/* A pane and what charter draws over it. Everything in the corner is a SIBLING of the element
-   xterm draws into, never a child of it, so nothing charter draws is ever inside the terminal's
-   own DOM — and the frame is what those siblings are positioned against. */
+/* A pane: what purlis has to say of its chats, in a row of its own at the top (#1647), and under
+   it the terminal with what charter draws over it. Everything in a corner is a SIBLING of the
+   element xterm draws into, never a child of it, so nothing charter draws is ever inside the
+   terminal's own DOM — and the pane's body is what those siblings are positioned against.
+
+   **A column: the row of Notices, then the body**, which has whatever height the row leaves.
+   The terminal is refitted to it (`SessionPane`'s `ResizeObserver`), so a Notice takes rows
+   from the terminal and never covers one. A view's pane and an empty one have no row and draw
+   their one child at the whole height, as before. */
 .pane-frame {
   position: relative;
+  display: flex;
+  flex-direction: column;
   height: 100%;
   width: 100%;
   min-height: 0;
@@ -947,6 +955,16 @@ button.show-more:focus-visible {
      can still be scrolled by a focus, and a pane scrolled sideways by a button that overflowed
      it is the defect this rule answers; a clipped one cannot be scrolled at all. */
   overflow: clip;
+}
+
+/* What a pane shows, under its row of Notices: the terminal (or a task that is away) and the two
+   corners over it. `flex-basis: 0` so its height is the pane's less the row's, never its
+   content's; `position: relative` so the corners and the find bar sit on the terminal, under
+   the row. */
+.pane-body {
+  position: relative;
+  flex: 1 1 0;
+  min-height: 0;
 }
 
 /* **A pane's two corners, and the only two things in this window that position anything over a
@@ -969,21 +987,15 @@ button.show-more:focus-visible {
   gap: 0.3rem;
 }
 
-/* **The start corner is a column: the chat at a glance on one row, and under it what purlis
-   has to say** (#1481). It was one row that did not wrap, written when a Notice was one short
-   line; a long sentence, three long buttons and what one of them opened were then all items of
-   that row, so the sentence was squeezed to one word and the opened block was drawn beside the
-   Notice and off the pane.
+/* **The start corner: the chat at a glance, on one row.** It held the pane's Notices under that
+   row too (#1481), over the terminal; they have a row of their own above it now (#1647).
 
-   - **Never wider or taller than the pane**: the two `max-` rules are the pane's inner box, less
-     the corner's own margin on each side.
-   - **It takes no clicks of its own**: it can be as wide as the pane now, and what is under the
-     part of it that draws nothing is the terminal. Its two rows take theirs. */
+   - **Never wider than the pane**: the pane's inner box, less the corner's margin on each side.
+   - **It takes no clicks of its own**: what is under the part of it that draws nothing is the
+     terminal. Its row takes its own. */
 .pane-corner.at-start {
   left: 8px;
-  flex-direction: column;
   max-width: calc(100% - 16px);
-  max-height: calc(100% - 6px);
   pointer-events: none;
 }
 
@@ -1001,26 +1013,68 @@ button.show-more:focus-visible {
   max-width: 100%;
 }
 
-/* **A pane's Notices, one under another** (`PlaneView`, `PaneFrame`), in the order the pane
-   wrote them: the one that waits for an answer first.
+/* **A pane's row of Notices, above its terminal** (`NoticePaneRow`, #1647): the stack, and
+   beside it "+N more" while more than two have something to say.
 
-   - **Together never taller than the pane**: this is the row of the corner that gives way
-     (`min-height: 0`), and it scrolls, so a Notice's buttons are always reachable.
+   - **Never over the terminal**: it is in the pane's column, before the body, and the terminal
+     has what it leaves.
+   - **Never more than most of the pane**: the terminal keeps at least two fifths of it, whatever
+     is opened (`max-height`); past that the stack scrolls, and the box that is too tall gives way
+     first (`.notice-pane-box`).
+   - **None, no row**: a pane with nothing to say is all terminal. */
+.pane-notice-row {
+  display: flex;
+  flex: 0 1 auto;
+  align-items: stretch;
+  gap: 0.3rem;
+  min-height: 0;
+  max-height: 60%;
+  padding: 3px 8px;
+  background: var(--surface-base);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.pane-notice-row.pane-notice-row-empty {
+  display: none;
+}
+
+/* **A pane's Notices, one under another** (`PlaneView`, `PaneFrame`), in the order the pane
+   wrote them: the one that waits for an answer first. Two stand; the rest are `hidden` by the
+   row until "+N more" is open.
+
+   - **Together never taller than the row**: the stack is the row's height (`stretch`), gives
+     way (`min-height: 0`) and scrolls, so a Notice's buttons are always reachable.
    - **Each as wide as what it says, never wider than the pane, and no wider than a sentence
      reads well** (`max-width`). The cap is here and not on each Notice, so the stack is never
-     wider than its widest Notice may be, and takes no clicks meant for the terminal beside it. */
+     wider than its widest Notice may be. */
 .pane-notices {
   display: flex;
   flex-direction: column;
+  flex: 0 1 auto;
   align-items: flex-start;
   gap: 0.3rem;
+  min-width: 0;
   max-width: min(100%, 40rem);
   min-height: 0;
   overflow-y: auto;
 }
 
-.pane-notices:empty {
+/* `hidden` hides a Notice the row keeps behind "+N more": its box's own `display` would
+   otherwise win over the browser's rule for the attribute. */
+.pane-notices > [hidden] {
   display: none;
+}
+
+/* "+N more", beside the stack and at its top, so it takes no line of its own: a third Notice
+   changes the row's width by a button, never its height. */
+.pane-notice-row > .notice-more-pane {
+  flex: none;
+  align-self: flex-start;
+  width: auto;
+  padding: 0.1rem 0.5rem;
+  font-size: 0.78rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
 }
 
 .pane-corner.at-end {
@@ -2005,15 +2059,15 @@ button.show-more:focus-visible {
   font-size: 0.9em;
 }
 
-/* **A Notice in a pane's corner** (`Notice` with `at="pane"`), first for a harness started by
-   hand in a shell tab (ADR 0062): in the pane's top-left
-   corner, over the terminal and taking no row, for the gauge's reason — a pane does not change
-   height because charter has something to say. Bordered in the waiting colour so it reads as
+/* **A Notice in a pane** (`Notice` with `at="pane"`), first for a harness started by hand in a
+   shell tab (ADR 0062). It stood in the pane's top-left corner, over the terminal and taking no
+   row; since #1647 it stands in the pane's row of Notices, above the terminal, and the terminal
+   is that much shorter, two Notices at most. Bordered in the waiting colour so it reads as
    charter speaking to the operator and not as the shell's output, and quieter than a needs-you
    item: nothing is waiting, and the harness is running whatever is pressed.
 
    **One box: the line, and under it what a way out opened** (#1481). The box has the border and
-   the ground, so the two read as one thing and the terminal never shows between them. */
+   the ground, so the two read as one thing. */
 /* **Never taller than the pane** (#1483's dispatch question in a short pane): the box may
    shrink in the stack (`flex` and `min-height: 0`), the line and its answers never do, and
    what a way out opened under them gives way first, its brief before anything else, then by

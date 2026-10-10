@@ -433,11 +433,14 @@ describe("a refused vault, on a pane whose chat has already asked that persona",
     await screen.findByRole("status", { name: "Vault" });
 
     expect(said()).toEqual(["Dispatch to devops", "Vault"]);
-    // The chat at a glance is a row of its own, and the Notices are not items of it.
+    // The chat at a glance is the corner's one row, and the Notices are not items of it: they
+    // are the pane's row above its terminal (#1647).
     const corner = document.querySelector(".pane-corner.at-start");
-    expect([...(corner?.children ?? [])].map((one) => one.className)).toEqual([
-      "pane-chips",
-      "pane-notices",
+    expect([...(corner?.children ?? [])].map((one) => one.className)).toEqual(["pane-chips"]);
+    const frame = corner?.closest(".pane-frame");
+    expect([...(frame?.children ?? [])].map((one) => one.className)).toEqual([
+      "pane-notice-row",
+      "pane-body",
     ]);
   });
 

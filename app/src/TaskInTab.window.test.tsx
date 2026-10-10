@@ -1821,7 +1821,11 @@ describe("what a task asks, on its session's tab (#1508)", () => {
     // Nothing was allowed for the session that asked them.
     expect(commandsOf(asked, "allow_sandbox_block")).toEqual([]);
     await waitFor(() => expect(notice("Sandbox block for 3 tasks")).toBeNull());
-    expect(notice("Sandbox block")?.textContent).toContain("Allowed for each");
+    // What the answer did only says something, so it stands behind "+N more" while the
+    // pane has two that ask (#1647): still drawn, and read there.
+    expect(
+      screen.queryByRole("status", { name: "Sandbox block", hidden: true })?.textContent,
+    ).toContain("Allowed for each");
 
     // Each restarts on its conversation once its turn ends.
     for (const task of [4, 5, 6]) await move(task, "waiting", 20 + task);
@@ -1932,7 +1936,11 @@ describe("what a task asks, on its session's tab (#1508)", () => {
       await screen.findByRole("status", { name: "“sweep” (a task of “steward 1”): Sandbox block" }),
     ).toBeTruthy();
     expect(notice("“talk” (a task of “steward 1”): Sandbox block")).toBeNull();
-    expect(notice("Sandbox block")?.textContent).toContain("allowed for chat 4 only");
+    // What the answer did only says something, so it stands behind "+N more" while the
+    // pane has two that ask (#1647): still drawn, and read there.
+    expect(
+      screen.queryByRole("status", { name: "Sandbox block", hidden: true })?.textContent,
+    ).toContain("allowed for chat 4 only");
   });
 
   it("asks a task blocked after the answer in a new question, and Keep blocked answers each listed", async () => {
