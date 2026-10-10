@@ -361,8 +361,10 @@ pub struct Windows {
     /// Whether any window is shown now, asked from a look's own thread. Until it is set, every
     /// window counts as shown.
     shown: OnceLock<Box<dyn Fn() -> bool + Send + Sync>>,
-    /// Each watched root, and the changes its looks had to tell.
-    missed: Mutex<HashMap<PathBuf, Missed>>,
+    /// Each watched root: how many watches watch it, and the changes their looks had to tell.
+    /// Counted, so a project's watch started again before the old one is dropped is not
+    /// forgotten when the old one goes.
+    missed: Mutex<HashMap<PathBuf, (usize, Missed)>>,
 }
 
 #[derive(Debug, Default)]
@@ -400,6 +402,25 @@ pub fn windows() -> &'static Arc<Windows> {
     &WINDOWS
 }
 
+/// A window's focus changed (`lib.rs`'s `WindowEvent::Focused` arm, #756): the first time, the
+/// app's [`Windows`] learn how to ask whether any window is shown — visible and not minimised —
+/// and each time a window gains focus, every plane watch looks now and goes on looking.
+pub fn window_focused(app: &tauri::AppHandle, focused: bool) {
+    let watches = windows();
+    if watches.shown.get().is_none() {
+        let app = app.clone();
+        watches.shown_when(move || {
+            use tauri::Manager as _;
+            app.webview_windows().values().any(|window| {
+                window.is_visible().unwrap_or(false) && !window.is_minimized().unwrap_or(false)
+            })
+        });
+    }
+    if focused {
+        watches.focused();
+    }
+}
+
 impl Windows {
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
@@ -430,7 +451,7 @@ impl Windows {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .get(root)
-            .copied()
+            .map(|(_, missed)| *missed)
     }
 
     fn any_shown(&self) -> bool {
@@ -493,14 +514,19 @@ impl Windows {
         self.missed
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .insert(root.to_path_buf(), Missed::default());
+            .entry(root.to_path_buf())
+            .or_default()
+            .0 += 1;
     }
 
     fn not_watching(&self, root: &Path) {
-        self.missed
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .remove(root);
+        let mut missed = self.missed.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some((watches, _)) = missed.get_mut(root) {
+            *watches = watches.saturating_sub(1);
+            if *watches == 0 {
+                missed.remove(root);
+            }
+        }
     }
 
     fn told_missed(&self, root: &Path, count: usize, at: Instant) {
@@ -509,6 +535,7 @@ impl Windows {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .get_mut(root)
+            .map(|(_, missed)| missed)
         {
             missed.count += count as u64;
             missed.last = Some(at);
@@ -1689,6 +1716,22 @@ mod tests {
 
         assert_eq!(windows.missed(&root), None);
         assert!(told.recv_timeout(TOLD_BY_NOW).is_err());
+    }
+
+    /// A project watched again before its old watch is dropped is still counted once the old
+    /// one goes: the doctor's row does not say it is not watched.
+    #[test]
+    fn a_watch_started_again_is_counted_after_the_old_one_is_dropped() {
+        use crate::watchset::raw::Raw;
+        let plane = plane_with_todos(&["m8-1"]);
+        let root = plane.path().canonicalize().expect("canonical");
+        let windows = Windows::new();
+        let (old, _) = looking_on::<Raw>(&root, &windows, NEVER);
+        let (_new, _) = looking_on::<Raw>(&root, &windows, NEVER);
+
+        drop(old);
+
+        assert_eq!(windows.missed(&root), Some(Missed::default()));
     }
 
     #[test]
