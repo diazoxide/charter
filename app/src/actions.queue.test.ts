@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { catalogue, type Now } from "./actions";
+import { catalogue, withQueue, type Now } from "./actions";
 import type { ListedChat } from "./chatsTree";
-import { withQueue } from "./queueRows";
 import { noTabs, openTab } from "./tabs";
 
 /** A window with three chats in tabs, one of them stopped by its Smart close. */
