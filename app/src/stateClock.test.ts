@@ -1,7 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { act, renderHook } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { moved, nothingKnown, type ChatStates, type State } from "./chatState";
 import { chatsTree, type ListedChat } from "./chatsTree";
-import { stateClock } from "./stateClock";
+import { stateClock, useStateSince } from "./stateClock";
+import { forgetShown, windowShown } from "./test-shown";
 
 const listed = (session: number): ListedChat => ({
   session,
@@ -134,5 +136,35 @@ describe("how long a chat has been in its state, as the window saw it (V100-19)"
     clock.read(states, chatsTree([listed(2)]), 3000);
 
     expect(clock.since(1)).toBeNull();
+  });
+});
+
+describe("a row's time while the window is hidden (#1392)", () => {
+  afterEach(() => {
+    forgetShown();
+    vi.useRealTimers();
+  });
+
+  it("is not read while hidden, and is right the moment the window is shown again", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000_000);
+    const rows = chatsTree([listed(1)]);
+    const clock = stateClock();
+    let states = after(nothingKnown, 1, "running", 1);
+    clock.read(states, rows, 1_000_000);
+    states = after(states, 1, "waiting", 2);
+    clock.read(states, rows, 1_000_000);
+    const { result, unmount } = renderHook(() => useStateSince(clock, 1));
+    expect(result.current).toBe(0);
+
+    act(() => windowShown(false));
+    act(() => void vi.advanceTimersByTime(10 * 60_000));
+    // Nothing woke to draw it: the row still says what it said as the window went.
+    expect(result.current).toBe(0);
+
+    act(() => windowShown(true));
+    // No beat waited for: ten minutes, at once.
+    expect(result.current).toBe(600);
+    unmount();
   });
 });

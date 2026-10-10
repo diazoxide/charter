@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { commands, type ChatUsage, type GaugeTone, type PlaneId, type UsageTurn } from "./bindings";
+import { everyWhileShown } from "./whileShown";
 
 /**
  * **A chat's `ctx`/`cache` gauge, in its own pane's corner.**
@@ -32,8 +33,8 @@ import { commands, type ChatUsage, type GaugeTone, type PlaneId, type UsageTurn 
  * window. So it is read when this pane opens, when the chat's state moves (a turn starting or
  * ending — the moments a number changes), once more a moment after each move (Claude Code
  * renders its status line a little after the `Stop` that ended the turn), and every few seconds
- * while the chat is mid-turn. Each read is one bounded read of a sixteen-line file in the
- * core — nothing spawns.
+ * while the chat is mid-turn and the window is shown. Each read is one bounded read of a
+ * sixteen-line file in the core — nothing spawns.
  *
  * # What it draws
  *
@@ -91,11 +92,13 @@ export function useChatUsage(
     };
     read();
     const again = setTimeout(read, AFTER_A_MOVE_MS);
-    const ticking = running ? setInterval(read, WHILE_RUNNING_MS) : undefined;
+    // Mid-turn, on the window's one beat: nothing while the window is hidden, one read the
+    // moment it is shown again (`whileShown.ts`).
+    const ticking = running ? everyWhileShown(WHILE_RUNNING_MS, read) : undefined;
     return () => {
       gone = true;
       clearTimeout(again);
-      if (ticking !== undefined) clearInterval(ticking);
+      ticking?.();
     };
   }, [plane, session, moved, running]);
 
