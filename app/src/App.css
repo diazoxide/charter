@@ -6696,6 +6696,41 @@ h2.sidebar-title .node-icon {
   font-size: 0.8rem;
 }
 
+/* **Play and Pause beside an animated image's caption** (#1132): a control with words in a line
+   of muted text, so it wears `button.show-more`'s family (no border, no fill, muted until a
+   pointer is on it) rather than a bordered control box that would outweigh the caption it sits
+   in. Its icon is Lucide's, beside the words (design-system.md, Lucide). */
+.piece-image figcaption {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+}
+
+button.piece-image-play {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.15rem 0.4rem;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--text-muted);
+  font: inherit;
+  cursor: pointer;
+}
+
+button.piece-image-play:hover:not(:disabled) {
+  color: var(--text-primary);
+  background: var(--surface-hover);
+}
+
+button.piece-image-play:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
 .piece-markdown {
   flex: 1 1 auto;
   min-height: 0;

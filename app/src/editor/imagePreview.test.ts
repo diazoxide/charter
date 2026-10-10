@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
-import { animated, svgSide } from "./imagePreview";
+import { describe, expect, it, vi } from "vitest";
+import { act, renderHook } from "@testing-library/react";
+import { animated, svgSide, usePlayback, type Frames } from "./imagePreview";
 
 const ascii = (text: string) => [...text].map((c) => c.charCodeAt(0));
 
@@ -100,10 +101,61 @@ describe("the size an SVG declares (#1132)", () => {
     expect(performance.now() - started).toBeLessThan(1000);
   });
 
+  it("is unread, and so not decoded, when it sizes itself in a way the preview cannot measure", () => {
+    expect(svgSide('<svg width="100000em" height="100000em">')).toBe("unread");
+    expect(svgSide('<svg width="10" height="50vh">')).toBe("unread");
+    expect(svgSide('<svg width="-5" height="5">')).toBe("unread");
+    expect(svgSide('<svg style="width:100000px;height:100000px">')).toBe("unread");
+    expect(svgSide('<svg style="font-size:9999px" width="10em" height="1">')).toBe("unread");
+    expect(svgSide("<svg width='4' height='5'>")).toEqual({ width: 4, height: 5 });
+    expect(svgSide('<svg width="auto" height="5">')).toBeUndefined();
+  });
+
   it("does not take another attribute's width for the root's", () => {
     expect(svgSide('<svg stroke-width="9" width="2" height="3">')).toEqual({
       width: 2,
       height: 3,
     });
+  });
+});
+
+describe("playing an animated image's frames (#1132)", () => {
+  /** Frames that say which index was asked, each shown for 10 ms. */
+  function framesOf(count: number, asked: number[]): Frames {
+    return {
+      count,
+      loops: Infinity,
+      frame: (index) => {
+        asked.push(index);
+        return Promise.resolve({
+          image: Object.assign(document.createElement("canvas"), { close: () => {} }),
+          ms: 10,
+        });
+      },
+      close: () => {},
+    };
+  }
+
+  it("starts new frames from their first, as when the file changed on disk", async () => {
+    vi.useFakeTimers();
+    try {
+      const before: number[] = [];
+      const after: number[] = [];
+      const { rerender } = renderHook(({ frames }) => usePlayback(frames, () => {}, true), {
+        initialProps: { frames: framesOf(5, before) },
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(35);
+      });
+      expect(before.at(-1)).toBeGreaterThan(0);
+
+      rerender({ frames: framesOf(2, after) });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(after[0]).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

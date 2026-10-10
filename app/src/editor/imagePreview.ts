@@ -44,34 +44,48 @@ const UNIT: Record<string, number> = {
   pc: 16,
 };
 
-/** One length attribute of the root's start tag, in pixels; `undefined` for none or a relative one. */
-function length(tag: string, name: string): number | undefined {
-  const found = new RegExp(
-    `\\s${name}\\s*=\\s*["']\\s*((?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:e[+-]?[0-9]+)?)([a-z]*)\\s*["']`,
-    "i",
-  ).exec(tag);
-  if (found === null) return undefined;
-  const per = UNIT[found[2].toLowerCase()];
-  return per === undefined ? undefined : Number(found[1]) * per;
+/** One attribute of the root's start tag, as written; `undefined` when it is not there. Each try
+ *  stops at the next quote, so a hostile tag is read in linear time. */
+function attribute(tag: string, name: string): string | undefined {
+  const found = new RegExp(`\\s${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`, "i").exec(tag);
+  return found === null ? undefined : (found[1] ?? found[2]);
+}
+
+/**
+ * One length attribute of the root's start tag, in pixels: `undefined` for none, `auto` or a
+ * percentage (sized by where it is drawn), and `"unread"` for a unit the preview cannot turn into
+ * pixels here (`em`, `vw`, a number it cannot read), which the preview then does not decode.
+ */
+function length(tag: string, name: string): number | "unread" | undefined {
+  const said = attribute(tag, name)?.trim();
+  if (said === undefined || said === "" || /^auto$/i.test(said) || said.endsWith("%"))
+    return undefined;
+  const found = /^((?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:e[+-]?[0-9]+)?)([a-z]*)$/i.exec(said);
+  const per = found === null ? undefined : UNIT[found[2].toLowerCase()];
+  return found === null || per === undefined ? "unread" : Number(found[1]) * per;
 }
 
 /**
  * **The size an SVG declares**, read from its root's start tag: its `width` and `height`, the
- * missing one of the two from `viewBox`'s proportions. `undefined` when it declares no size the
- * preview can read, which an SVG drawn as an image then takes as the platform's default.
+ * missing one of the two from `viewBox`'s proportions. `undefined` when it declares no size,
+ * which an SVG drawn as an image then takes as the platform's default; `"unread"` when it sizes
+ * itself in a way the preview cannot measure before decoding (a relative unit, or a `style` on
+ * the root that sets a size or a font), which the preview does not decode (fail-closed).
  *
  * Read as text, never parsed into a document, so that a huge canvas is said rather than decoded.
  */
-export function svgSide(text: string): { width: number; height: number } | undefined {
+export function svgSide(text: string): { width: number; height: number } | "unread" | undefined {
   const start = /<svg\b/i.exec(text)?.index;
   const end = start === undefined ? -1 : text.indexOf(">", start);
   if (start === undefined || end < 0) return undefined;
   const tag = text.slice(start, end + 1);
   let width = length(tag, "width");
   let height = length(tag, "height");
-  const box = /\sviewBox\s*=\s*["']([^"']*)["']/i
-    .exec(tag)?.[1]
-    .trim()
+  const style = attribute(tag, "style");
+  if (width === "unread" || height === "unread" || (style && /width|height|font/i.test(style)))
+    return "unread";
+  const box = attribute(tag, "viewBox")
+    ?.trim()
     .split(/[\s,]+/)
     .map(Number);
   const ratio =
@@ -277,7 +291,7 @@ export async function openFrames(
 /**
  * **Plays `frames` through `draw` while `playing`**, each frame for its own delay, as many times
  * as the image asks. Stopping keeps the frame it was on, and playing again goes on from there;
- * one that had played to its end starts again.
+ * one that had played to its end, or new frames, start again.
  */
 export function usePlayback(
   frames: Frames | undefined,
@@ -289,9 +303,12 @@ export function usePlayback(
     latest.current = draw;
   });
   const at = useRef({ index: 0, pass: 0 });
+  /** The frames `at` counts in: a file changed on disk brings new ones, from their first. */
+  const of = useRef<Frames>(undefined);
   useEffect(() => {
     if (frames === undefined || !playing) return;
-    if (at.current.pass > frames.loops) at.current = { index: 0, pass: 0 };
+    if (of.current !== frames || at.current.pass > frames.loops) at.current = { index: 0, pass: 0 };
+    of.current = frames;
     let gone = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const step = async () => {

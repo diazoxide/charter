@@ -32,7 +32,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Markdown, { type Components } from "react-markdown";
 import { Group, Panel, Separator, type Layout } from "react-resizable-panels";
-import { FileText, LoaderCircle } from "lucide-react";
+import { FileText, LoaderCircle, Pause, Play } from "lucide-react";
 import { EmptyState } from "../EmptyState";
 import { ExternalLink } from "../ReleaseNotes";
 import { commands, type ChangeMark, type PieceFile, type PlaneId } from "../bindings";
@@ -377,7 +377,13 @@ function ImagePreview({
       <figcaption>
         {now?.trouble ?? (now?.size === undefined ? mime : `${now.size} · ${mime}${still}`)}
         {frames !== undefined && (
-          <button type="button" tabIndex={0} onClick={() => setPaused(!paused)}>
+          <button
+            type="button"
+            tabIndex={0}
+            className="piece-image-play"
+            onClick={() => setPaused(!paused)}
+          >
+            {paused ? <Play /> : <Pause />}
             {paused ? "Play" : "Pause"}
           </button>
         )}
@@ -401,11 +407,20 @@ function BytesPreview({ name, mime, base64 }: { name: string; mime: string; base
  * **An SVG drawn as an image** (#1132): its text encoded back to bytes and decoded as an
  * `image/svg+xml`, so it runs no script and loads nothing it names, as any image does. Never put
  * into the page as markup. One that declares a canvas past what the preview draws is said by its
- * size and never decoded.
+ * size and never decoded, and so is one whose size cannot be measured before decoding.
  */
 function SvgPreview({ name, text }: { name: string; text: string }) {
   const bytes = useMemo(() => new TextEncoder().encode(text), [text]);
   const side = svgSide(text);
+  if (side === "unread")
+    return (
+      <EmptyState
+        mark={FileText}
+        headline={`${name} sets its size in a way the preview cannot measure, so it is not drawn`}
+        body="Its text is under Source."
+        size="panel"
+      />
+    );
   if (side !== undefined && side.width * side.height > MOST_PIXELS)
     return (
       <EmptyState
