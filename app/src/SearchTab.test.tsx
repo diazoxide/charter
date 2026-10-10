@@ -7,6 +7,8 @@ import { SearchTab } from "./SearchTab";
 import type { FilesSearched, PlaneId, SearchedFile } from "./bindings";
 import { searchFromFocus, searchView } from "./contentSearch";
 import { forgetProjectThemes } from "./projectTheme";
+import { ReferenceChats, type ChatsForReferences } from "./references";
+import { settleJump, useJumpAsks, type Pending } from "./fileJump";
 
 /**
  * **The Search tab's render states** (FM-8): what the real-app scenario
@@ -61,6 +63,11 @@ function core(
       if (cmd === "project_icons_drawn")
         return icons.picks?.[String((args as { plane: string }).plane)] ?? null;
       if (cmd === "extension_icon_themes") return icons.themes ?? [];
+      if (cmd === "reference_into_chat") {
+        const { path, lines } = args as { path: string; lines: { first: number } };
+        if (path === "locked.rs") throw "locked.rs is not a file this branch offers";
+        return { kind: "typed", text: `@${path}#L${lines.first}` };
+      }
       return null;
     },
     { shouldMockEvents: true },
@@ -284,5 +291,125 @@ describe("the Search tab", () => {
     );
 
     expect(screen.queryByRole("group", { name: /old\.rs/ })).toBeNull();
+  });
+});
+
+describe("a search hit into a chat, from the keyboard (#1151)", () => {
+  const CHATS: ChatsForReferences["chats"] = [
+    { session: 3, name: "steward 3" },
+    { session: 5, name: "web 5" },
+  ];
+
+  /** The tab, in a window that lends it `chats`, with `files` found for "needle". */
+  async function found(files: SearchedFile[], chats = CHATS) {
+    const asked = core(() => 1);
+    const hand = vi.fn();
+    const view = searchView(searchFromFocus(BRANCH, BRANCH.workspace));
+    render(
+      <ReferenceChats.Provider value={{ plane: PLANE, chats, hand }}>
+        <SearchTab plane={PLANE} view={view} />
+      </ReferenceChats.Provider>,
+    );
+    await userEvent.type(box(), "needle");
+    await vi.waitFor(() => expect(asked.some((one) => one.cmd === "search_files")).toBe(true));
+    await told({ files, refused: [], ended: "done" }, asked);
+    const hits = screen.getByRole("listbox", { name: "Search results" });
+    hits.focus();
+    return { asked, hand, hits };
+  }
+
+  it("says its key on the hits", async () => {
+    const { hits } = await found([hit("src/a.rs", [3])]);
+
+    expect(hits).toHaveAttribute("aria-keyshortcuts", "Shift+Enter");
+  });
+
+  it("opens the chat picker for the hit stepped to with Shift+Enter, and types its line", async () => {
+    const { asked, hits } = await found([hit("src/a.rs", [3, 9])]);
+    await userEvent.keyboard("{ArrowDown}{Shift>}{Enter}{/Shift}");
+
+    const menu = screen.getByRole("menu", { name: "Add src/a.rs:9 to a chat's context" });
+    const items = within(menu).getAllByRole("menuitem");
+    expect(items.map((one) => one.textContent)).toEqual(["steward 3", "web 5"]);
+    expect(items[0]).toHaveFocus();
+    await userEvent.keyboard("{ArrowDown}{Enter}");
+
+    await vi.waitFor(() =>
+      expect(status()).toHaveTextContent("Typed @src/a.rs#L9 into web 5. Nothing was sent."),
+    );
+    expect(asked.filter((one) => one.cmd === "reference_into_chat").map((one) => one.args)).toEqual(
+      [
+        {
+          plane: PLANE,
+          ...BRANCH,
+          path: "src/a.rs",
+          lines: { first: 9, last: 9 },
+          session: 5,
+        },
+      ],
+    );
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(hits).toHaveFocus();
+  });
+
+  it("opens no file on Shift+Enter, which Enter alone does", async () => {
+    const jumps: Pending[] = [];
+    function Window() {
+      useJumpAsks((jump) => {
+        jumps.push(jump);
+      });
+      return null;
+    }
+    render(<Window />);
+    await found([hit("src/a.rs", [3])]);
+    await userEvent.keyboard("{Shift>}{Enter}{/Shift}");
+
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+    expect(jumps).toEqual([]);
+    await userEvent.keyboard("{Escape}{Enter}");
+
+    expect(jumps.map((one) => [one.path, one.line])).toEqual([["src/a.rs", 3]]);
+    for (const jump of jumps) settleJump(jump.at);
+  });
+
+  it("closes the picker on Escape, handing nothing, and gives the keyboard back to the hits", async () => {
+    const { asked, hits } = await found([hit("src/a.rs", [3])]);
+    await userEvent.keyboard("{Shift>}{Enter}{/Shift}");
+    await userEvent.keyboard("{Escape}");
+
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(hits).toHaveFocus();
+    expect(asked.some((one) => one.cmd === "reference_into_chat")).toBe(false);
+    expect(box()).not.toHaveFocus();
+  });
+
+  it("says the core's refusal in the tab's status line", async () => {
+    await found([hit("locked.rs", [2])]);
+    await userEvent.keyboard("{Shift>}{Enter}{/Shift}{Enter}");
+
+    await vi.waitFor(() =>
+      expect(status()).toHaveTextContent("locked.rs is not a file this branch offers"),
+    );
+  });
+
+  it("refuses a hit from another project without a picker or a question to the core", async () => {
+    const { asked, hits } = await found([hit("docs/b.md", [1], OTHER)]);
+    await userEvent.keyboard("{Shift>}{Enter}{/Shift}");
+
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(status()).toHaveTextContent(
+      "docs/b.md:1 is in another project, so this project's chats cannot take it.",
+    );
+    expect(hits).toHaveFocus();
+    expect(asked.some((one) => one.cmd === "reference_into_chat")).toBe(false);
+  });
+
+  it("says no chat is open rather than opening an empty picker", async () => {
+    const { hits } = await found([hit("src/a.rs", [3])], []);
+    await userEvent.keyboard("{Shift>}{Enter}{/Shift}");
+
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(status()).toHaveTextContent("No chat is open in this project to add src/a.rs:3 to.");
+    expect(hits).toHaveFocus();
   });
 });

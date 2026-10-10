@@ -1011,6 +1011,13 @@ chat has the keyboard, `Ctrl+Shift+F` stays its find bar, and everywhere else in
 opens a Search tab. It is a capture listener on the window, held by the project in front, as the
 new-shell key is.
 
+**In the Search tab's hits, `Shift+Enter` hands the hit stepped to to a chat** (#1151): it opens
+the preview's chat picker for that hit and its line, as *Add to a chat's context* does, and
+Escape closes it. It is a key on the listbox, which is never a terminal, so it takes nothing from
+a chat; and it is not a button inside an option, which a listbox cannot hold. Enter alone still
+opens the hit. `Shift+Enter` is the one plain modifier on Enter the listbox had free: the arrows
+step through the hits, so it walks nothing the way it does in a chat's find bar.
+
 **The keys for the chats inside a tab take nothing either** (#1487, `taskKeys.taskKeyOf`).
 
 |                                                               | On a Mac      | Everywhere else                 |

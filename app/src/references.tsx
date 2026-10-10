@@ -12,7 +12,8 @@
  * - **a drag** (`dragReference`) from a file row, a search hit or the preview's selection, onto
  *   a chat's tab or its pane (`droppedReference`);
  * - **"Ask a chat about this"** and **"Add to a chat's context"** in the preview, which pick a
- *   chat (`PickAChat`);
+ *   chat (`PickAChat`), and **Shift+Enter** on a search hit, which picks one the same way
+ *   (`ChatsToPick`, #1151);
  * - **"Start a chat here"** on a file or folder row (`actions.ts`, `startChatHere`).
  */
 import { createContext, useContext, useState, type DragEvent } from "react";
@@ -162,29 +163,57 @@ export function PickAChat({ referenced, how }: { referenced: Referenced; how: "a
         <MessageSquarePlus className="node-icon" aria-hidden="true" />
         {label}
       </button>
-      {open &&
-        (chats.length === 0 ? (
-          <span className="pick-a-chat-none" role="status">
-            No chat is open in this project. Start one from the file's row with Start a chat here.
-          </span>
-        ) : (
-          <span className="pick-a-chat-list" role="menu" aria-label={label}>
-            {chats.map((chat) => (
-              <button
-                key={chat.session}
-                type="button"
-                role="menuitem"
-                tabIndex={0}
-                onClick={() => {
-                  setOpen(false);
-                  lent.hand(referenced, chat.session, how);
-                }}
-              >
-                {chat.name}
-              </button>
-            ))}
-          </span>
-        ))}
+      {open && (
+        <ChatsToPick
+          chats={chats}
+          label={label}
+          onPick={(chat) => {
+            setOpen(false);
+            lent.hand(referenced, chat.session, how);
+          }}
+        />
+      )}
+    </span>
+  );
+}
+
+/** What the pickers say when the project has no chat to hand a reference to. */
+const NO_CHAT_OPEN =
+  "No chat is open in this project. Start one from the file's row with Start a chat here.";
+
+/**
+ * **The chats to pick from**, as a menu named `label`: one item per chat, in the order given,
+ * or the sentence that says none is open. `PickAChat` draws it under its button, and the Search
+ * tab under its hits (#1151).
+ */
+export function ChatsToPick({
+  chats,
+  label,
+  onPick,
+}: {
+  chats: readonly ChatHere[];
+  label: string;
+  onPick: (chat: ChatHere) => void;
+}) {
+  if (chats.length === 0)
+    return (
+      <span className="pick-a-chat-none" role="status">
+        {NO_CHAT_OPEN}
+      </span>
+    );
+  return (
+    <span className="pick-a-chat-list" role="menu" aria-label={label}>
+      {chats.map((chat) => (
+        <button
+          key={chat.session}
+          type="button"
+          role="menuitem"
+          tabIndex={0}
+          onClick={() => onPick(chat)}
+        >
+          {chat.name}
+        </button>
+      ))}
     </span>
   );
 }
