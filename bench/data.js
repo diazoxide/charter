@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791666924211,
+  "lastUpdate": 1791668937989,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -6510,6 +6510,48 @@ window.BENCHMARK_DATA = {
             "value": 105.005258,
             "unit": "ms",
             "extra": "median of 5 runs: 102.357, 103.675, 105.005, 105.092, 105.596 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "a0b92fd73cada7442b1de2e3c1d3bf98e4f0e001",
+          "message": "ci: run the web checks in two parts, and the doctests in rust's first\n\nAfter #1712, vitest's 8 to 10 minutes made `web` the longest job a pull request waits on. It\nruns in two parts with `vitest run --shard=N/2`: part 1 also the type check, lint and format\ncheck, part 2 the licences and the tools' tests. `web-checks` carries the required name\n`web (types, lint, format, test)`. The doctests move to rust's part 1, which finished three\nminutes before part 2 on #1712.\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nAssisted-by: claude-code\nPurlis-Chat: 01M4EJSYV68AZG1SWR231JAEZE\nPurlis-Persona: steward",
+          "timestamp": "2026-10-11T01:34:41+04:00",
+          "tree_id": "5fbec99c91bbe4082a6f6fae3f55f4c9631b393f",
+          "url": "https://github.com/purlis/purlis/commit/a0b92fd73cada7442b1de2e3c1d3bf98e4f0e001"
+        },
+        "date": 1791668936607,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.525529,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.521, 0.521, 0.526, 0.533, 0.546 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.9763045,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.460, 16.831, 16.976, 17.117, 17.413 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 104.41169149999999,
+            "unit": "ms",
+            "extra": "median of 5 runs: 102.872, 103.634, 104.412, 104.500, 104.543 ms"
           }
         ]
       }
