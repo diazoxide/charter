@@ -486,3 +486,79 @@ fn an_answer_is_bound_to_the_chat_that_asked_and_another_chat_s_answer_never_lan
         Err(Refused::AnsweredElsewhere)
     );
 }
+
+/// An ACP agent's `session/request_permission`, as `claude-agent-acp` sends one: its "Allow
+/// always" writes an allow rule into the worktree's harness settings (#783).
+fn an_acp_ask_offering_allow_always() -> Ask {
+    crate::harness::asked::acp_request_permission(&serde_json::json!({
+        "sessionId": "s1",
+        "toolCall": { "toolCallId": "call_1", "title": "Run the tests", "kind": "execute",
+                      "rawInput": { "command": "cargo test" } },
+        "options": [
+            { "optionId": "a1", "name": "Allow once", "kind": "allow_once" },
+            { "optionId": "a2", "name": "Allow always", "kind": "allow_always" },
+            { "optionId": "r1", "name": "Reject", "kind": "reject_once" }
+        ]
+    }))
+}
+
+#[test]
+fn an_allow_that_would_last_from_now_on_is_never_offered_when_an_acp_ask_is_raised() {
+    // V28c in the registry (#1059): every client reads the ask as raised, so an option dropped
+    // here is offered by no client, the window, `purlis inbox` or a paired device alike.
+    let asks = Asks::new();
+    let t0 = Instant::now();
+    let raised = raise(&asks, "chat-1", an_acp_ask_offering_allow_always(), t0);
+
+    let offered: Vec<&str> = raised.ask.options.iter().map(|o| o.id.as_str()).collect();
+    assert_eq!(offered, ["a1", "r1"]);
+    assert_eq!(asks.pending(t0)[0].ask.options, raised.ask.options);
+}
+
+#[test]
+fn a_client_that_sends_the_hidden_allow_always_id_cannot_apply_it_and_hears_why() {
+    // The ACP path: a client that knows the agent's own id for "Allow always" and sends it
+    // anyway is refused with a sentence, and the ask stays open for an answer it offers.
+    let asks = Asks::new();
+    let t0 = Instant::now();
+    let raised = raise(&asks, "chat-1", an_acp_ask_offering_allow_always(), t0);
+
+    let refused = asks
+        .answer("chat-1", &raised.id, "a2", operator("local-ui"), t0)
+        .expect_err("the hidden option never applies");
+    assert_eq!(refused, Refused::LastsFromNowOn);
+    assert!(
+        refused.to_string().contains("worktree"),
+        "it says why: {refused}"
+    );
+    let applied = asks
+        .answer("chat-1", &raised.id, "a1", operator("local-ui"), t0)
+        .expect("allow once still applies");
+    assert_eq!(applied.choice.id, "a1");
+}
+
+#[test]
+fn a_reject_that_lasts_and_an_allow_for_the_session_are_still_offered() {
+    // Only an allow kept past the session is hidden: a lasting reject narrows what a chat may
+    // do, and the Codex app-server's accept for the session is kept for the session.
+    let mut ask = an_ask(Deadline::None);
+    ask.options.push(Choice {
+        id: "acceptForSession".into(),
+        label: "Accept for this session".into(),
+        kind: ChoiceKind::Allow,
+        scope: ChoiceScope::Session,
+    });
+    ask.options.push(Choice {
+        id: "reject_always".into(),
+        label: "Never".into(),
+        kind: ChoiceKind::Reject,
+        scope: ChoiceScope::Always,
+    });
+    let asks = Asks::new();
+    let raised = raise(&asks, "chat-1", ask, Instant::now());
+    let offered: Vec<&str> = raised.ask.options.iter().map(|o| o.id.as_str()).collect();
+    assert_eq!(
+        offered,
+        ["allow", "deny", "acceptForSession", "reject_always"]
+    );
+}
