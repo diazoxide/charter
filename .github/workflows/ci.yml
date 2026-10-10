@@ -49,8 +49,8 @@ env:
 jobs:
   # The Rust suite in two parts on two runners, each building the tests and running half of
   # them (`--partition`): one runner took 14 to 17 minutes, longer than any other job a pull
-  # request waits on (2026-10-10). Part 1 also runs fmt and clippy, part 2 the doctests, so the
-  # two take about as long. Each part builds for itself: a build handed from one job to the next
+  # request waits on (2026-10-10). Part 1 also runs fmt, clippy and the doctests, which part 2's
+  # half of the tests outlasted by three minutes on #1712. Each part builds for itself: a build handed from one job to the next
   # saves runner minutes, not the wait, since no test can start before the build ends.
   # `rust-checks` below carries the required check's name and passes when both parts did.
   rust:
@@ -121,7 +121,7 @@ jobs:
         run: node tools/slowest-tests.mjs target/nextest/ci/junit.xml
       # nextest does not run doctests, so cargo does.
       - name: Run the doctests
-        if: matrix.part == 2
+        if: matrix.part == 1
         run: tools/no-orphans.sh --reap -- cargo test --workspace --locked --doc
   # The required check `rust (fmt, clippy, test)`: green only when both parts of `rust` are.
   # `!cancelled()` so a red part still reports here as red, not as skipped, which a required
@@ -143,8 +143,16 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
 
+  # The web checks in two parts, each running half of vitest's test files (`--shard`): after
+  # `rust` and `scenario` were split (#1712), vitest's 8 to 10 minutes made this the longest job
+  # a pull request waited on. Part 1 also runs the type check, lint and format check, part 2 the
+  # licences and the tools' tests. `web-checks` carries the required check's name.
   web:
-    name: web (types, lint, format, test)
+    name: web (part ${{ matrix.part }} of 2)
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [1, 2]
     runs-on: ubuntu-24.04
     defaults:
       run:
@@ -161,12 +169,28 @@ jobs:
       # under a licence deny.toml allows (FM-3, #1106). It reads the lockfile and nothing else,
       # under a second, so it gates as part of this job rather than as evidence.
       - run: node ../tools/npm-licences.mjs
+        if: matrix.part == 2
       - run: npm run typecheck
+        if: matrix.part == 1
       - run: npm run lint
+        if: matrix.part == 1
       - run: npm run format:check
-      - run: npm test
+        if: matrix.part == 1
+      - run: npm test -- --shard=${{ matrix.part }}/2
       # The tools' own tests (node:test), such as the cold-start gate's decision.
       - run: node --test "../tools/*.test.mjs"
+        if: matrix.part == 2
+  # The required check `web (types, lint, format, test)`, as `rust-checks` is for `rust`.
+  web-checks:
+    name: web (types, lint, format, test)
+    needs: web
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Both parts passed
+        env:
+          RESULT: ${{ needs.web.result }}
+        run: test "$RESULT" = success
 
   # SC-16: the session layer's latency against main's, measured in this job (ADR 0086's CI
   # relative rows L1 and L3, as amended by V62). It runs on every pull request and posts a green
