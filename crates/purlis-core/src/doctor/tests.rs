@@ -1057,6 +1057,117 @@ fn a_workspace_charter_cannot_list_is_named_and_never_read_as_empty() {
     );
 }
 
+// ---- workspace layout: workspaces behind the current layout (#1289) ------------------------
+
+/// A plane `charter workspace reinit` can bring a workspace up to date in, with the workspaces
+/// `current` at the layout and the ones `stale` stamped an older one.
+fn plane_with_workspaces(current: &[&str], stale: &[&str]) -> (tempfile::TempDir, PathBuf) {
+    let (d, root) = plane("schema = 1\n");
+    let now = "2026-05-04T11:32:17Z".parse().unwrap();
+    for ws in current.iter().chain(stale) {
+        crate::wscmd::ensure::ensure(&root, ws, now, "fixture").unwrap();
+    }
+    for ws in stale {
+        let dir = root.join("workspaces").join(ws);
+        let stamp = crate::names::STRUCTURE_STAMP
+            .in_dir(&dir, |p| p.symlink_metadata().is_ok())
+            .name;
+        std::fs::write(stamp, "3\n").unwrap();
+    }
+    (d, root)
+}
+
+fn layout_row(root: &Path) -> Option<Row> {
+    doctor(root)
+        .run()
+        .into_iter()
+        .find(|r| r.name == "workspace layout")
+}
+
+#[test]
+fn workspaces_behind_the_layout_are_named_with_the_drawers_fix() {
+    let (_d, root) = plane_with_workspaces(&["alpha"], &["beta", "gamma"]);
+
+    let r = layout_row(&root).expect("a row for the workspaces behind the layout");
+
+    assert_eq!(r.status, Status::Warn);
+    assert_eq!(
+        r.detail,
+        "2 workspaces are behind the current layout: beta, gamma"
+    );
+    assert_eq!(r.fix, Some(fix::FixId::WorkspaceReinit));
+    assert!(r.hint.contains("purlis ws reinit --all"), "{}", r.hint);
+    // Bare `--fix` runs it: it adds and never removes your content.
+    assert!(doctor(&root).fixes().contains(&fix::FixId::WorkspaceReinit));
+    assert!(!fix::FixId::WorkspaceReinit.by_name_only());
+    // One reading with the Alerts drawer's `reinit` row, so the two say the same thing.
+    let drawer = crate::alerts::read(&crate::alerts::Asking {
+        root: &root,
+        active: None,
+        standing: &root,
+        shared: false,
+    });
+    let reinit = drawer
+        .alerts
+        .iter()
+        .map(crate::alerts::Alert::shown)
+        .find(|a| a.subject == "reinit")
+        .expect("the drawer's reinit row");
+    assert_eq!(reinit.detail, r.detail);
+    assert!(json(&[r]).contains("\"fix\": \"workspace-reinit\""));
+}
+
+#[test]
+fn one_workspace_behind_the_layout_is_said_in_the_singular() {
+    let (_d, root) = plane_with_workspaces(&[], &["beta"]);
+    assert_eq!(
+        layout_row(&root).unwrap().detail,
+        "1 workspace is behind the current layout: beta"
+    );
+}
+
+#[test]
+fn after_the_fix_the_doctor_has_no_layout_row() {
+    let (_d, root) = plane_with_workspaces(&["alpha"], &["beta"]);
+    assert!(layout_row(&root).is_some());
+
+    let fixed = fix::apply(&root, fix::FixId::WorkspaceReinit);
+
+    assert!(fixed.complete(), "{:?}", fixed.lines());
+    assert_eq!(layout_row(&root), None);
+    assert!(!doctor(&root).fixes().contains(&fix::FixId::WorkspaceReinit));
+}
+
+#[test]
+fn no_workspace_behind_the_layout_gives_no_row() {
+    let (_d, root) = plane_with_workspaces(&["alpha", "beta"], &[]);
+    assert_eq!(layout_row(&root), None);
+    let (_e, empty) = plane("schema = 1\n");
+    assert_eq!(layout_row(&empty), None);
+}
+
+/// A workspace the doctor cannot read is not called behind: the rows that look inside it
+/// already say it cannot be checked, and a reinit could not reach it either.
+#[cfg(unix)]
+#[test]
+fn a_workspace_it_cannot_read_is_not_called_behind_the_layout() {
+    use std::os::unix::fs::PermissionsExt;
+    let (_d, root) = plane_with_workspaces(&["alpha"], &[]);
+    let sealed = root.join("workspaces/beta");
+    std::fs::create_dir_all(&sealed).unwrap();
+    std::fs::set_permissions(&sealed, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let readable = std::fs::read_dir(&sealed).is_ok();
+
+    let r = layout_row(&root);
+
+    std::fs::set_permissions(&sealed, std::fs::Permissions::from_mode(0o755)).unwrap();
+    if readable {
+        // Running as a user the mode does not stop (root): nothing to test.
+        return;
+    }
+    assert_eq!(r, None);
+}
+
 // ---- memory indexes -------------------------------------------------------------------------
 
 fn memory(root: &Path, base: &str, index: &str, files: &[&str]) {

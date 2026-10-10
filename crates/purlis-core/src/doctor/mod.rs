@@ -463,6 +463,7 @@ impl Doctor {
             git::identity(self),
         ]
         .into_iter()
+        .chain(plane::behind_the_layout(self))
         .filter_map(|row| row.fix)
         .collect();
         ids.sort();
@@ -497,6 +498,7 @@ impl Doctor {
         rows.extend(plane::renamed_leftovers(self));
         rows.push(clones::workspace_clones(self));
         rows.extend(clones::hidden_agents_md(self));
+        rows.extend(plane::behind_the_layout(self));
         rows.push(deferred::row("workspace layer", deferred::WORKSPACE_LAYER));
         rows.push(changes::changes(self));
         rows.extend(work::work_links(self));
