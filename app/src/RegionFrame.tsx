@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { Group, Panel, Separator, usePanelRef, type Layout } from "react-resizable-panels";
-import { Activity, BellRing, Compass } from "lucide-react";
+import { BellRing, Compass } from "lucide-react";
 import { ActivityBar } from "./ActivityBar";
 import {
   CATALOGUE,
@@ -24,8 +24,9 @@ import { useArrived } from "./lib/arrived";
  * **The window, drawn from the arrangement** (ADR 0038, and `regions.ts` for why the
  * arrangement is data).
  *
- * Four panels and nothing else: a slot on the left, the centre, a slot on the right, a slot
- * along the bottom. The panel list is the same on every render of a window's life, and that is
+ * Three panels and nothing else: a slot on the left, the centre, a slot on the right. (A slot
+ * along the bottom held the State region until #1676 made it the left's Changes view, so the
+ * terminals have the window's whole height.) The panel list is the same on every render of a window's life, and that is
  * the load-bearing part — see `regions.ts` for charter-app#141's throw. What the *data* decides
  * is which slot a region's content goes in, what order it is in, whether it is drawn at all,
  * and how big its slot starts.
@@ -120,20 +121,14 @@ export function RegionFrame({
   return (
     <div className="region-frame">
       {bars("left")}
-      <Group className="regions" orientation="vertical" onLayoutChanged={settled}>
-        <Panel id="region-upper" className="region-upper" minSize="30%">
-          <Group className="region-row" orientation="horizontal" onLayoutChanged={settled}>
-            <Slot side="left" placed={slots.left} started={started.left} drawn={drawn} />
-            <Edge open={shownIn(slots.left).length > 0} />
-            <Panel id="region-centre" className="region-centre" minSize="20%">
-              {centre}
-            </Panel>
-            <Edge open={shownIn(slots.right).length > 0} />
-            <Slot side="right" placed={slots.right} started={started.right} drawn={drawn} />
-          </Group>
+      <Group className="regions" orientation="horizontal" onLayoutChanged={settled}>
+        <Slot side="left" placed={slots.left} started={started.left} drawn={drawn} />
+        <Edge open={shownIn(slots.left).length > 0} />
+        <Panel id="region-centre" className="region-centre" minSize="20%">
+          {centre}
         </Panel>
-        <Edge open={shownIn(slots.bottom).length > 0} />
-        <Slot side="bottom" placed={slots.bottom} started={started.bottom} drawn={drawn} />
+        <Edge open={shownIn(slots.right).length > 0} />
+        <Slot side="right" placed={slots.right} started={started.right} drawn={drawn} />
       </Group>
       {bars("right")}
     </div>
@@ -179,7 +174,7 @@ function RegionViews({ placed, drawn }: { placed: Placement; drawn: SlotContent 
 export const panelOf = (side: Side): string => `region-${side}`;
 
 /**
- * One of the three slots around the centre: resizable, and emptied without going away.
+ * One of the two slots beside the centre: resizable, and emptied without going away.
  *
  * **The panel stays mounted with constraints that never change; the library collapses it.**
  * That is the whole reason this component exists, and neither obvious alternative works.
@@ -305,7 +300,7 @@ function Edge({ open }: { open: boolean }) {
  * worktree — and every one of its rows is also a palette row, because the palette is the
  * primary input. Whether the operator has the explorer on screen is not a thing to do to the
  * plane; it is how this window is laid out, it is remembered beside the window and not on the
- * plane, and a palette full of "Explorer", "Attention", "State" would be three rows of noise in
+ * plane, and a palette full of "Navigation", "Attention" would be rows of noise in
  * front of a hundred real ones at ADR 0026's limits.
  *
  * `aria-pressed` and not a label that flips between "Show" and "Hide": the name of the thing is
@@ -369,7 +364,7 @@ export function RegionToggle({
  * A panel-left / panel-right icon would be the obvious choice and would be wrong the first
  * time an operator moved a region: the layout is data (`regions.ts`), so the explorer can be
  * on the right, and a toggle drawn as "left panel" would then point at the wrong edge of the
- * window. The explorer is a tree of folders, attention is a bell, state is activity.
+ * window. Navigation is a compass, attention is a bell.
  *
  * A `Record` over `RegionId`, so a region added to the catalogue without a mark here is a type
  * error rather than a toggle with a hole in it.
@@ -379,5 +374,4 @@ const REGION_MARKS: Record<RegionId, typeof Compass> = {
   // The explorer's folder tree is the Explorer view's own mark now (`ActivityBar.tsx`).
   navigation: Compass,
   aside: BellRing,
-  bottom: Activity,
 };

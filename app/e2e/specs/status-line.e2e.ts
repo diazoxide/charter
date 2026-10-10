@@ -8,7 +8,7 @@ import { textOfEach } from "../reading.js";
  *
  * The operator asked for the project's directory to come out of the top-right corner and into
  * a one-line bar at the very bottom of the window. Every claim in that sentence is about
- * pixels — *one* line, at the *very* bottom, under the bottom region — and **jsdom lays no
+ * pixels — *one* line, at the *very* bottom, under the regions — and **jsdom lays no
  * panel group out at all**, so `FourRegions.test.tsx` can only assert document order. This is
  * where the geometry is asked, the same split charter-app#149 made for the regions' widths.
  *
@@ -118,9 +118,9 @@ async function untilItSays(want: string | RegExp): Promise<void> {
 }
 
 describe("the status line", () => {
-  it("is the last thing in the window, under the bottom region", async () => {
+  it("is the last thing in the window, under the regions", async () => {
     await untilTheStripIsRead();
-    await $('[data-testid="bottom-bar"]').waitForExist({ timeout: 20_000 });
+    await $('[data-testid="panels"]').waitForExist({ timeout: 20_000 });
 
     const line = await $('[data-testid="status-line"]');
     const top = (await line.getLocation("y")) as number;
@@ -129,9 +129,10 @@ describe("the status line", () => {
     expect(
       Math.abs((await bottomOf('[data-testid="status-line"]')) - (await viewport())),
     ).toBeLessThanOrEqual(1);
-    // And the bottom region ends where it begins, rather than overlapping it or running past
-    // it — which is the failure a document-order assertion cannot see.
-    expect(await bottomOf('[data-panel][id="region-bottom"]')).toBeLessThanOrEqual(top + 1);
+    // And the regions end where it begins, rather than overlapping it or running past it —
+    // which is the failure a document-order assertion cannot see. The terminals' centre is
+    // the lowest thing above it since the bottom region went (#1676).
+    expect(await bottomOf('[data-panel][id="region-centre"]')).toBeLessThanOrEqual(top + 1);
   });
 
   it("is one line tall, and takes that height from the regions rather than floating over them", async () => {
@@ -145,7 +146,7 @@ describe("the status line", () => {
     expect(height).toBeLessThanOrEqual(32);
 
     // The panel group stops above it. A status line laid over the regions would leave the
-    // group's bottom below the line's top, and the bottom region's last row unreadable.
+    // group's bottom below the line's top, and the terminals' last row unreadable.
     const group = (await (await $(".regions")).getSize("height")) as number;
     expect(group + height).toBeLessThanOrEqual(await viewport());
   });
@@ -322,14 +323,11 @@ describe("the status line", () => {
       };
     });
 
-    expect(found.named).toEqual(["Navigation", "Attention", "State"]);
+    // Two since #1676: the State region along the bottom is the left side's Changes view.
+    expect(found.named).toEqual(["Navigation", "Attention"]);
     expect(found.worded).toEqual([]);
-    expect(found.marked).toBe(3);
-    expect(found.told).toEqual([
-      "Put the Navigation region away",
-      "Put the Attention region away",
-      "Put the State region away",
-    ]);
+    expect(found.marked).toBe(2);
+    expect(found.told).toEqual(["Put the Navigation region away", "Put the Attention region away"]);
     expect(found.onTheBar).toBe(0);
   });
 
@@ -339,12 +337,12 @@ describe("the status line", () => {
     await untilTheStripIsRead();
     await $('[data-testid="explorer"]').waitForExist({ timeout: 20_000 });
 
-    const names = ["Navigation", "Attention", "State"];
+    const names = ["Navigation", "Attention"];
     for (const name of names)
       await (await $(`button[aria-pressed="true"][aria-label="${name}"]`)).click();
-    await browser.waitUntil(async () => !(await $('[data-testid="bottom-bar"]').isExisting()), {
+    await browser.waitUntil(async () => !(await $('[data-testid="panels"]').isExisting()), {
       timeout: 20_000,
-      timeoutMsg: "the bottom region did not go away when it was put away",
+      timeoutMsg: "the right-hand region did not go away when it was put away",
     });
 
     expect(await $('[data-testid="status-line"]').isExisting()).toBe(true);
@@ -354,6 +352,6 @@ describe("the status line", () => {
 
     for (const name of names)
       await (await $(`button[aria-pressed="false"][aria-label="${name}"]`)).click();
-    await $('[data-testid="bottom-bar"]').waitForExist({ timeout: 20_000 });
+    await $('[data-testid="panels"]').waitForExist({ timeout: 20_000 });
   });
 });

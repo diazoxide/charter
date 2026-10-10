@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import * as RovingFocusGroup from "@radix-ui/react-roving-focus";
-import { FolderTree, MessagesSquare, type LucideIcon } from "lucide-react";
+import { FolderTree, GitBranch, MessagesSquare, Search, type LucideIcon } from "lucide-react";
 import { useTabStop } from "./roving";
 import { VIEWS, type Side, type ViewId } from "./regions";
 
@@ -131,4 +131,7 @@ export function ActivityCount({
 export const VIEW_MARKS: Record<ViewId, LucideIcon> = {
   chats: MessagesSquare,
   explorer: FolderTree,
+  // #1676: a magnifier for finding in files, and a branch for what git says of the repos.
+  search: Search,
+  changes: GitBranch,
 };

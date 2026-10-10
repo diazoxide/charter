@@ -21,7 +21,9 @@ import { PANIC_LOG } from "./processes.js";
  *
  * **Everything about the arrangement is off its default**, so a window that drew the default
  * first could not pass by coincidence: the explorer is on the right and wider than it starts,
- * the attention region is on the left, and the state bar is put away.
+ * the attention region is on the left, and the state bar is put away. It is a version 1 file,
+ * as every purlis before #1673 wrote it, and it still places the bottom region #1676 removed:
+ * the window reads past that without a word.
  */
 export const THE_LAYOUT = {
   version: 1,

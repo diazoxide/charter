@@ -299,7 +299,7 @@ describe("the explorer", () => {
 
   /**
    * **⌘⇧F searches the content of the files and opens a hit at its line** (FM-8, #1111), against
-   * the real core: `search_files` walks the picked branch in-process and streams its hits, and
+   * the real core, in the left side's Search view (#1676; a Search tab before that): `search_files` walks the picked branch in-process and streams its hits, and
    * Enter on the one stepped to opens the branch's file tab with the preview on that line. The
    * key is sent as the window's own event, with the platform's modifiers, for ⌘P's reason
    * (#176).
@@ -336,11 +336,10 @@ describe("the explorer", () => {
           }),
         );
       });
-      await browser.waitUntil(async () => (await tabInFront()) === "Search", {
-        timeout: 20_000,
-        timeoutMsg: `no Search tab came forward; in front is ${await tabInFront()}`,
-      });
-      const box = await $('[role="searchbox"][aria-label="Search the files"]');
+      // The Search view, on the left, and not a tab.
+      const view = await $('[role="tabpanel"][data-view="search"]');
+      await view.waitForDisplayed({ timeout: 20_000 });
+      const box = await view.$('[role="searchbox"][aria-label="Search the files"]');
       await box.waitForDisplayed({ timeout: 20_000 });
       await expect($('[role="combobox"][aria-label="Where to search"]')).toHaveValue("branch");
       await box.click();
@@ -352,10 +351,6 @@ describe("the explorer", () => {
       await expect(
         $('[role="listbox"][aria-label="Search results"] [role="group"]'),
       ).toHaveAttribute("aria-label", expect.stringContaining("notes.md, found-by-content"));
-      await browser.waitUntil(async () => (await tabInFront()) === "Search · quokka-sentinel", {
-        timeout: 20_000,
-        timeoutMsg: `the tab is called ${await tabInFront()}`,
-      });
 
       // Into the hits from the box, and the one stepped to opens.
       await browser.keys(["ArrowDown"]);
@@ -373,6 +368,8 @@ describe("the explorer", () => {
       await expect(marked).toHaveText("5");
     } finally {
       if (await $('[role="dialog"]').isDisplayed()) await browser.keys(["Escape"]);
+      // Back on the Explorer view, which this describe holds the side on.
+      await showView("Explorer");
       const root = await $('[data-testid="explorer"] button.spot-root');
       await root.click();
       await expect(root).toHaveAttribute("aria-current", "true");

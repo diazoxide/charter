@@ -129,7 +129,7 @@ cannot: that purlis cut it (`claimed`), and whether its worker declared it `done
 `abandoned`. A piece that declared nothing is **silent**, reported as an age and never as a
 failure.
 On screen a piece is shown as its **branch**, and its directory as the branch's **folder**:
-the explorer's rows, the palette's titles, the bottom bar and the refusals the window shows say
+the explorer's rows, the palette's titles, the Changes view and the refusals the window shows say
 "branch" or "folder", never "worktree" (#989). A menu row names a branch by its own name, and
 a folder git has on no branch as a folder. "Piece" and "worktree" stay in the plane format, the
 code, the `[plane] worktrees` setting and `purlis worktree` (ADR 0072).

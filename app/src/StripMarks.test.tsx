@@ -152,7 +152,6 @@ describe("a region toggle", () => {
   it.each([
     ["navigation", "Navigation", "lucide-compass"],
     ["aside", "Attention", "lucide-bell-ring"],
-    ["bottom", "State", "lucide-activity"],
   ] as const)("%s is named %s exactly, and marked by what it is", (id, name, mark) => {
     render(<RegionToggle id={id} shown onToggle={() => {}} />);
 

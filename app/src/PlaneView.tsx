@@ -141,9 +141,9 @@ import {
   pieceFilesView,
   type Place,
 } from "./pieceViews";
-import { isSearch, searchFromFocus, searchTitle, searchView } from "./contentSearch";
-import { opensSearch } from "./searchKey";
-import { BottomBar } from "./BottomBar";
+import { isSearch, searchFromFocus, searchOf, searchView } from "./contentSearch";
+import { ChangesView, uncommitted } from "./ChangesView";
+import { SearchTab } from "./SearchTab";
 import { readRefusedIn, useWorkspaceState, type WorkspaceState } from "./workspaceState";
 import { useTaskBranchActs } from "./taskBranchActs";
 import {
@@ -180,7 +180,14 @@ import { TaskBlocksAnswered, TaskBlocksNotice } from "./TaskBlocksNotice";
 import { TaskPromptNotice } from "./TaskPromptNotice";
 import { usePermissionAsks } from "./permissionAsks";
 import { useDismissals } from "./dismissals";
-import { inSlots, SIDES, useArrangement, type RegionId, type ViewId } from "./regions";
+import {
+  inSlots,
+  openView as viewOpenIn,
+  SIDES,
+  useArrangement,
+  type RegionId,
+  type ViewId,
+} from "./regions";
 import { SIDE_KEYS_SAID, sideKeyOf } from "./sideKeys";
 import { RegionFrame } from "./RegionFrame";
 import { ActivityCount } from "./ActivityBar";
@@ -984,21 +991,42 @@ export const PlaneView = memo(function PlaneView({
     pick,
     show: showSide,
   } = useArrangement(plane);
+  /**
+   * **What the Search view asks** (#1676): the Search tab's own question, held here because the
+   * view is in the side and not in a tab. Nothing until the view is first shown, so a window
+   * that never searches never draws it.
+   */
+  const [sideSearch, setSideSearch] = useState<ViewRef>();
+  /** Where the window is focused, for the Search view to search as narrow as it (below). */
+  const searchFocus = useRef<{ branch?: Place; workspace?: string }>({});
   /** A view shown by its key or its palette row, and the keyboard given to it once it is drawn:
    *  the stop of its first tree drawn, as an editor's ⌘⇧E lands in the explorer (#1673) — past
-   *  the headings of Explorer's sections (#1677) — or its first stop, in a view with no tree. */
+   *  the headings of Explorer's sections (#1677) — or its first stop, in a view with no tree;
+   *  Search's box.
+   *
+   *  **Search searches where the window is** (#1676), as ⌘⇧F's Search tab did: the branch
+   *  nearest the person, else the workspace in front, else the project. What was typed and the
+   *  three switches are kept, as an editor's search view keeps them. */
+  const searchHere = useCallback(
+    () =>
+      setSideSearch((was) => {
+        const kept = was === undefined ? undefined : searchOf(was);
+        const here = searchFromFocus(searchFocus.current.branch, searchFocus.current.workspace);
+        return searchView({
+          ...here,
+          query: kept?.query ?? "",
+          matching: kept?.matching ?? here.matching,
+        });
+      }),
+    [],
+  );
   const showSideView = useCallback(
     (view: ViewId) => {
+      if (view === "search") searchHere();
       showSide(view);
-      requestAnimationFrame(() => {
-        const panel = `[role="tabpanel"][data-view="${view}"]`;
-        (
-          document.querySelector<HTMLElement>(`${panel} [role="tree"] [tabindex="0"]`) ??
-          document.querySelector<HTMLElement>(`${panel} [tabindex="0"]`)
-        )?.focus();
-      });
+      requestAnimationFrame(() => giveViewTheKeyboard(view));
     },
-    [showSide],
+    [searchHere, showSide],
   );
   /** The arrangement as the slots it draws, which is what both the toggles and the frame read. */
   const slots = inSlots(arrangement);
@@ -2070,6 +2098,34 @@ export const PlaneView = memo(function PlaneView({
         : undefined),
     [cockpit, ofWorkspace, spot],
   );
+  useEffect(() => {
+    searchFocus.current = { branch: nearBranch, workspace: ofWorkspace };
+  }, [nearBranch, ofWorkspace]);
+  /** The view open on the left, or nothing while the side is away. */
+  const leftOpen = (() => {
+    const navigation = arrangement.find((one) => one.id === "navigation");
+    return navigation === undefined || navigation.collapsed ? undefined : viewOpenIn(navigation);
+  })();
+  // The Search view's first question when it comes back open from the layout file: as narrow
+  // as the focus. Every other way of opening it asks one (`searchHere`).
+  if (leftOpen === "search" && sideSearch === undefined) {
+    setSideSearch(searchView(searchFromFocus(nearBranch, ofWorkspace)));
+  }
+  /** A press of a view's tab (`regions.picked`). Opening Search searches where the window is,
+   *  as its key does, and gives its box the keyboard, as an editor's does: a search view is
+   *  opened to type into. */
+  const pickSideView = useCallback(
+    (view: ViewId) => {
+      if (view === "search" && leftOpen !== "search") {
+        searchHere();
+        requestAnimationFrame(() => giveViewTheKeyboard(view));
+      }
+      pick(view);
+    },
+    [leftOpen, pick, searchHere],
+  );
+  /** The files git has uncommitted in the focused workspace's clones: the Changes tab's count. */
+  const changedFiles = uncommitted(workspaceState);
 
   /** What the explorer picks, remembered against the workspace it was picked in. */
   const pickSpot = useCallback(
@@ -6509,33 +6565,9 @@ export const PlaneView = memo(function PlaneView({
   }, [by, inFront, press]);
 
   /**
-   * **The key that opens a Search tab** (`searchKey.ts`, FM-8): as narrow as the focus — the
-   * branch the explorer picked, else the workspace in front, else the project — or the Search
-   * tab already open for that, brought forward. Claimed on the window, capture-phase, by the
-   * project in front, as the shell's key is; off a Mac, inside a chat, the chord is the chat's
-   * find bar and is left to it.
-   */
-  useEffect(() => {
-    if (!inFront) return;
-    const key = (e: KeyboardEvent) => {
-      const mac = onAMac();
-      if (!opensSearch(e, mac)) return;
-      const on = e.target;
-      if (!mac && on instanceof Element && on.closest(`[${CHAT_KEYBOARD}]`) !== null) return;
-      e.preventDefault();
-      e.stopPropagation();
-      if (e.repeat) return;
-      const ask = searchFromFocus(nearBranch, ofWorkspace);
-      showView(searchView(ask), searchTitle(ask));
-    };
-    window.addEventListener("keydown", key, true);
-    return () => window.removeEventListener("keydown", key, true);
-  }, [inFront, nearBranch, ofWorkspace, showView]);
-
-  /**
    * **The keys of the left side** (`sideKeys.ts`, #1673): ⌘B puts the navigation region away
-   * or brings it back, ⌘⇧E and ⌘⇧C show Explorer and Chats and give the view the keyboard, as
-   * an editor does. Claimed on the window, capture-phase, by the project in front, as the
+   * or brings it back, ⌘⇧E, ⌘⇧C, ⌘⇧F and ⌃⇧G show Explorer, Chats, Search and Changes and give
+   * the view the keyboard, as an editor does (⌘⇧F opened a Search tab before #1676). Claimed on the window, capture-phase, by the project in front, as the
    * shell's key is; not under a dialog; and off a Mac a chord a terminal has a use for is left
    * to a chat that has the keyboard.
    */
@@ -7628,18 +7660,18 @@ export const PlaneView = memo(function PlaneView({
         />
       </NoticeBand>
 
-      {/* **The four regions** (ADR 0038): by default the explorer on the left, the
-          panes in the middle, what is asking for you on the right, and what the repos are
-          doing along the bottom. Every one of them resizes, and each of the three around the
-          centre can be put away — the centre cannot, because the terminal panes are the
-          product.
+      {/* **The regions** (ADR 0038): by default the navigation region on the left, the
+          panes in the middle, and what is asking for you on the right. What the repos are
+          doing was along the bottom until #1676 made it the left's Changes view, so the panes
+          are the window's whole height. Every region resizes, and each side can be put away —
+          the centre cannot, because the terminal panes are the product.
 
           **By default, and no longer by shape.** Which side each region is on, what order it
           is in and how big it is are the arrangement (`regions.ts`); this is the content that
           goes in whichever slot the arrangement names.
 
-          One workspace answer for all three (`useWorkspaceState`), not one per region: they
-          draw the same workspace, and `workspace_repos` runs `git status` per clone. */}
+          One workspace answer for every region and view (`useWorkspaceState`), not one each:
+          they draw the same workspace, and `workspace_repos` runs `git status` per clone. */}
       <RegionFrame
         arrangement={arrangement}
         onResized={resized}
@@ -7700,11 +7732,38 @@ export const PlaneView = memo(function PlaneView({
               onReadAgain={rereadPanels}
             />
           ),
+          // **Search** (#1676): the Search tab's content, in the side. Drawn from the first time
+          // it is shown, then kept, so what was typed and found survives a switch away.
+          search: sideSearch !== undefined && (
+            <SearchTab
+              plane={plane}
+              view={sideSearch}
+              onAsk={(_, to) => setSideSearch(to)}
+              takesKeyboard={false}
+            />
+          ),
+          // **Changes** (#1676, B-7): what the bottom region drew, the same content.
+          changes: (
+            <ChangesView
+              workspace={ofWorkspace}
+              state={workspaceState}
+              offers={found}
+              onPress={press}
+              columns={facts.columns}
+              cloning={cloning}
+            />
+          ),
         }}
         // The Chats tab's count is the queue's, drawn where the queue is read (#1034): a chat
         // that starts asking redraws the badge and nothing around it. It is on the bar, so it
-        // is there while the side is put away (B-8).
+        // is there while the side is put away (B-8). Changes counts what git has uncommitted.
         badges={{
+          changes: (
+            <ActivityCount
+              count={changedFiles}
+              said={changedFiles === 1 ? "1 uncommitted file" : `${changedFiles} uncommitted files`}
+            />
+          ),
           chats: (
             <QueueRead>
               {(queue) => (
@@ -7718,7 +7777,7 @@ export const PlaneView = memo(function PlaneView({
           ),
         }}
         keys={SIDE_KEYS_SAID}
-        onPick={pick}
+        onPick={pickSideView}
         content={{
           aside: (
             <Panels
@@ -7733,16 +7792,6 @@ export const PlaneView = memo(function PlaneView({
               onAddTodo={edits.addTodo}
               atRoot={focused === OUTSIDE}
               rootPanels={rootPanels?.contributed}
-            />
-          ),
-          bottom: (
-            <BottomBar
-              workspace={ofWorkspace}
-              state={workspaceState}
-              offers={found}
-              onPress={press}
-              columns={facts.columns}
-              cloning={cloning}
             />
           ),
         }}
@@ -7875,10 +7924,10 @@ export const PlaneView = memo(function PlaneView({
         }
       />
 
-      {/* **charter's status line**, under everything including the bottom region. It is not
+      {/* **charter's status line**, under everything, the terminals included. It is not
           in the arrangement and `StatusLine.tsx` argues why at length: a slot is sized as a
           percentage of its group and this is one line of text, a region can be put away and
-          this must not be, and the window is chrome · four regions · chrome — the project
+          this must not be, and the window is chrome · regions · chrome — the project
           strip above is not a region either.
 
           It reads what is already known. `workspaceState` is the one ask the three regions
@@ -8889,6 +8938,21 @@ function closesOnly(does: Offer["does"]): boolean {
 /** A view tab the core put back, as the view it names. */
 function refOf(view: ViewTab): ViewRef {
   return { from: view.from, view: view.view, key: view.key };
+}
+
+/**
+ * Gives a side's view the keyboard, once it is drawn (#1673): the stop of its first tree, as an
+ * editor's ⌘⇧E lands in the explorer, past the headings of Explorer's sections (#1677), or its
+ * first stop in a view with no tree — or Search's box (#1676). A view with nothing to stop on, as
+ * Changes has (it is read, never pressed), leaves the keyboard where it was.
+ */
+function giveViewTheKeyboard(view: ViewId): void {
+  const panel = `[role="tabpanel"][data-view="${view}"]`;
+  (view === "search"
+    ? document.querySelector<HTMLElement>(`${panel} [role="searchbox"]`)
+    : (document.querySelector<HTMLElement>(`${panel} [role="tree"] [tabindex="0"]`) ??
+      document.querySelector<HTMLElement>(`${panel} [tabindex="0"]`))
+  )?.focus();
 }
 
 /**

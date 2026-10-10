@@ -545,8 +545,7 @@ const bench: Bench = {
 };
 
 /** What each region is drawn as: the element its content puts in a slot. */
-const REGION_CONTENT =
-  '[data-testid="explorer"], [data-testid="panels"], [data-testid="bottom-bar"]';
+const REGION_CONTENT = '[data-testid="explorer"], [data-testid="panels"]';
 
 /** Every slot each region's content has been mounted in, in order. */
 const seen: Record<string, string[]> = {};

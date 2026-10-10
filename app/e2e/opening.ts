@@ -176,7 +176,7 @@ export async function closeProject(closer: string): Promise<void> {
  * on Chats, so a spec about the explorer's rows shows the Explorer first and puts Chats back
  * after, leaving the window as the next spec expects it.
  */
-export async function showView(name: "Chats" | "Explorer"): Promise<void> {
+export async function showView(name: "Chats" | "Explorer" | "Search" | "Changes"): Promise<void> {
   const tab = await $(
     `[role="tablist"][aria-label="Navigation"] [role="tab"][aria-label="${name}"]`,
   );

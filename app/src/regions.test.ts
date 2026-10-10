@@ -69,12 +69,12 @@ afterEach(() => {
 });
 
 describe("the arrangement a window has never been told about", () => {
-  it("is ADR 0038's four regions: navigation left, attention right, state along the bottom", () => {
+  it("is the two sides: navigation left, attention right, and nothing along the bottom (#1676)", () => {
     expect(remembered()).toEqual([
       { id: "navigation", side: "left", order: 0, collapsed: false },
       { id: "aside", side: "right", order: 0, collapsed: false },
-      { id: "bottom", side: "bottom", order: 0, collapsed: false },
     ]);
+    expect(SIDES).toEqual(["left", "right"]);
   });
 
   it("names every region in the catalogue, so no region can exist with nowhere to be", () => {
@@ -118,10 +118,10 @@ describe("putting a region away", () => {
     // nothing at all — so without this, looking at another project and back would undo it.
     const { result } = renderHook(() => useArrangement());
 
-    act(() => result.current.toggle("bottom"));
+    act(() => result.current.toggle("aside"));
 
     expect(remembered()).toEqual(result.current.arrangement);
-    expect(placed(remembered(), "bottom")?.collapsed).toBe(true);
+    expect(placed(remembered(), "aside")?.collapsed).toBe(true);
   });
 });
 
@@ -129,21 +129,21 @@ describe("moving a region", () => {
   it("puts it on the side it was moved to, and remembers", () => {
     const { result } = renderHook(() => useArrangement());
 
-    act(() => result.current.move("bottom", "right", 1));
+    act(() => result.current.move("aside", "left", 1));
 
-    expect(placed(result.current.arrangement, "bottom")).toMatchObject({
-      side: "right",
+    expect(placed(result.current.arrangement, "aside")).toMatchObject({
+      side: "left",
       order: 1,
     });
-    expect(placed(remembered(), "bottom")).toMatchObject({ side: "right", order: 1 });
+    expect(placed(remembered(), "aside")).toMatchObject({ side: "left", order: 1 });
   });
 
   it("leaves the side it came from empty rather than holding a place for it", () => {
     const { result } = renderHook(() => useArrangement());
 
-    act(() => result.current.move("bottom", "right", 1));
+    act(() => result.current.move("aside", "left", 1));
 
-    expect(inSlots(result.current.arrangement).bottom).toEqual([]);
+    expect(inSlots(result.current.arrangement).right).toEqual([]);
   });
 });
 
@@ -159,24 +159,24 @@ describe("how big each slot was left", () => {
 
   it("is the slot's, so every region drawn in it takes the width it was drawn at", () => {
     const { result } = renderHook(() => useArrangement());
-    act(() => result.current.move("bottom", "left", 1));
+    act(() => result.current.move("aside", "left", 1));
 
     act(() => result.current.resized({ left: 33 }));
 
     expect(placed(result.current.arrangement, "navigation")?.size).toBe(33);
-    expect(placed(result.current.arrangement, "bottom")?.size).toBe(33);
+    expect(placed(result.current.arrangement, "aside")?.size).toBe(33);
   });
 
   it("is not written to a region that was not drawn", () => {
     // A region that is away was not measured. Giving it the slot's width would be charter
     // deciding how wide it should come back, from a drag it had no part in.
     const { result } = renderHook(() => useArrangement());
-    act(() => result.current.move("bottom", "left", 1));
-    act(() => result.current.toggle("bottom"));
+    act(() => result.current.move("aside", "left", 1));
+    act(() => result.current.toggle("aside"));
 
     act(() => result.current.resized({ left: 33 }));
 
-    expect(placed(result.current.arrangement, "bottom")?.size).toBeUndefined();
+    expect(placed(result.current.arrangement, "aside")?.size).toBeUndefined();
   });
 
   it("ignores a zero, because a collapsed slot measures zero and that is not a width", () => {
@@ -198,8 +198,7 @@ describe("how big each slot was left", () => {
     // that is not on screen, and the width would jump when it came back.
     const slots = inSlots([
       { id: "navigation", side: "left", order: 0, collapsed: true, size: 40 },
-      { id: "bottom", side: "left", order: 1, collapsed: false, size: 12 },
-      { id: "aside", side: "right", order: 0, collapsed: false },
+      { id: "aside", side: "left", order: 1, collapsed: false, size: 12 },
     ]);
 
     expect(slotSize("left", slots.left)).toBe(12);
@@ -225,12 +224,12 @@ describe("a stored arrangement that is not what this build writes", () => {
     put({
       regions: [
         { id: "minimap", side: "left", order: 0, collapsed: false },
-        { id: "bottom", side: "right", order: 2, collapsed: false },
+        { id: "aside", side: "left", order: 2, collapsed: false },
       ],
     });
 
-    expect(remembered().map((one) => one.id)).toEqual(["navigation", "aside", "bottom"]);
-    expect(placed(remembered(), "bottom")).toMatchObject({ side: "right", order: 2 });
+    expect(remembered().map((one) => one.id)).toEqual(["navigation", "aside"]);
+    expect(placed(remembered(), "aside")).toMatchObject({ side: "left", order: 2 });
   });
 
   it("draws a region whose `collapsed` is not an answer", () => {
@@ -277,10 +276,75 @@ describe("a stored arrangement that is not what this build writes", () => {
   });
 
   it("skips an entry that is not an object at all", () => {
-    put({ regions: [null, "navigation", ["aside"], { id: "bottom", side: "left", order: 3 }] });
+    put({ regions: [null, "navigation", ["aside"], { id: "aside", side: "left", order: 3 }] });
 
-    expect(remembered().map((one) => one.id)).toEqual(["navigation", "aside", "bottom"]);
-    expect(placed(remembered(), "bottom")).toMatchObject({ side: "left", order: 3 });
+    expect(remembered().map((one) => one.id)).toEqual(["navigation", "aside"]);
+    expect(placed(remembered(), "aside")).toMatchObject({ side: "left", order: 3 });
+  });
+});
+
+describe("a file that places the bottom region, which #1676 took out of the window", () => {
+  it("is drawn without it, every other region where the file put it", () => {
+    put({
+      version: 2,
+      regions: [
+        { id: "navigation", side: "right", order: 0, collapsed: false, size: 30 },
+        { id: "aside", side: "left", order: 0, collapsed: false },
+        { id: "bottom", side: "bottom", order: 0, collapsed: true },
+      ],
+    });
+
+    expect(remembered()).toEqual([
+      { id: "navigation", side: "right", order: 0, collapsed: false, size: 30 },
+      { id: "aside", side: "left", order: 0, collapsed: false },
+    ]);
+  });
+
+  it("puts a region a file moved to the bottom on its own side, without a word", async () => {
+    // Version 1 let a person move any region along the bottom. That slot is gone, so the
+    // region goes back where it starts; nothing of theirs is lost and nothing is to fix. Its
+    // size was a height there, so it is not taken as a width.
+    const layout: Reading = {
+      path: PATH,
+      found: true,
+      trouble: null,
+      document: {
+        version: 1,
+        regions: [
+          { id: "explorer", side: "left", order: 0, collapsed: false },
+          { id: "aside", side: "bottom", order: 0, collapsed: false, size: 30 },
+        ],
+      },
+    };
+    handed(layout);
+
+    expect(placed(remembered(), "aside")).toEqual({
+      id: "aside",
+      side: "right",
+      order: 0,
+      collapsed: false,
+    });
+    await settleLayout(layout);
+    expect(aboutThisMachine()).toEqual([]);
+  });
+
+  it("is not a trouble to say: its content is the Changes view now", async () => {
+    const layout: Reading = {
+      path: PATH,
+      found: true,
+      trouble: null,
+      document: {
+        version: 1,
+        regions: [
+          { id: "explorer", side: "left", order: 0, collapsed: false },
+          { id: "bottom", side: "bottom", order: 0, collapsed: false },
+        ],
+      },
+    };
+
+    await settleLayout(layout);
+
+    expect(aboutThisMachine()).toEqual([]);
   });
 });
 
@@ -305,7 +369,7 @@ describe("the layout file", () => {
     const { result } = renderHook(() => useArrangement());
 
     act(() => result.current.toggle("navigation"));
-    act(() => result.current.move("bottom", "right", 1));
+    act(() => result.current.move("aside", "left", 1));
 
     await vi.waitFor(() => expect(sent).toHaveLength(2));
     expect(sent.map((one) => one.cmd)).toEqual(["write_layout", "write_layout"]);
@@ -314,8 +378,7 @@ describe("the layout file", () => {
       version: 2,
       regions: [
         { id: "navigation", side: "left", order: 0, collapsed: true },
-        { id: "aside", side: "right", order: 0, collapsed: false },
-        { id: "bottom", side: "right", order: 1, collapsed: false },
+        { id: "aside", side: "left", order: 1, collapsed: false },
       ],
       // The two text sizes live in the same file (charter-app#283), and a change to the
       // arrangement writes them as they stand.
@@ -422,7 +485,7 @@ describe("the arrangement web storage held before the file", () => {
     expect(sent.map((one) => one.cmd)).toEqual(["adopt_layout"]);
     expect(JSON.parse((sent[0].args as { text: string }).text)).toMatchObject({
       version: 2,
-      regions: [{ id: "navigation", collapsed: true }, { id: "aside" }, { id: "bottom" }],
+      regions: [{ id: "navigation", collapsed: true }, { id: "aside" }],
     });
     // Moved, so never read again.
     expect(globalThis.localStorage.getItem(LEGACY_KEY)).toBeNull();
@@ -474,11 +537,10 @@ describe("the arrangement as the slots it draws", () => {
   it("sorts a side by order", () => {
     const slots = inSlots([
       { id: "navigation", side: "left", order: 5, collapsed: false },
-      { id: "bottom", side: "left", order: 1, collapsed: false },
       { id: "aside", side: "left", order: 3, collapsed: false },
     ]);
 
-    expect(slots.left.map((one) => one.id)).toEqual(["bottom", "aside", "navigation"]);
+    expect(slots.left.map((one) => one.id)).toEqual(["aside", "navigation"]);
   });
 
   it("breaks a tie the same way every launch", () => {
@@ -495,10 +557,10 @@ describe("the arrangement as the slots it draws", () => {
   it("counts what is drawn in a slot and not what is placed there", () => {
     const placedThere = [
       { id: "navigation" as const, side: "left" as const, order: 0, collapsed: true },
-      { id: "bottom" as const, side: "left" as const, order: 1, collapsed: false },
+      { id: "aside" as const, side: "left" as const, order: 1, collapsed: false },
     ];
 
-    expect(shownIn(placedThere).map((one) => one.id)).toEqual(["bottom"]);
+    expect(shownIn(placedThere).map((one) => one.id)).toEqual(["aside"]);
   });
 });
 
@@ -530,7 +592,6 @@ describe("a version 1 layout file, as every purlis before #1673 wrote it", () =>
     expect(remembered("/home/me/project")).toEqual([
       { id: "navigation", side: "right", order: 0, collapsed: false, size: 22 },
       { id: "aside", side: "left", order: 0, collapsed: false },
-      { id: "bottom", side: "bottom", order: 0, collapsed: true },
     ]);
   });
 
@@ -584,11 +645,8 @@ describe("a version 1 layout file, as every purlis before #1673 wrote it", () =>
     await vi.waitFor(() => expect(sent).toHaveLength(1));
     const written = lastWritten();
     expect(written.version).toBe(2);
-    expect(written.regions.map((one: { id: string }) => one.id)).toEqual([
-      "navigation",
-      "aside",
-      "bottom",
-    ]);
+    // The bottom region is gone (#1676): what it drew is the Changes view.
+    expect(written.regions.map((one: { id: string }) => one.id)).toEqual(["navigation", "aside"]);
     expect(written.text).toEqual({ window: 15, terminal: 14 });
     expect(written.editor).toBe("zed");
     // The dismissals are the core's to keep (NO-2): a window's write never carries them.

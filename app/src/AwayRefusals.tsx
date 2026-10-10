@@ -28,7 +28,7 @@
 import * as Menu from "@radix-ui/react-dropdown-menu";
 import { useState } from "react";
 import type { AwayRefusal } from "./bindings";
-import { ago } from "./BottomBar";
+import { ago } from "./ChangesView";
 
 /** One refusal, as the window lists it: with the project it happened in. */
 export type AwayItem = AwayRefusal & {

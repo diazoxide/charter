@@ -1668,8 +1668,8 @@ describe("carrying out a row", () => {
       new Set([
         "newChat",
         "newShell",
-        // Search in files (#1137), on the workspace in front.
-        "openView:charter/search/workspace|alpha|||,Search",
+        // Search in files (#1137): the Search view since #1676, as the views' rows are.
+        "showSideView:search",
         "newShell:alpha",
         "newShell:beta",
         "split:row",
@@ -1730,6 +1730,7 @@ describe("carrying out a row", () => {
         "showExtensions",
         "showSideView:chats",
         "showSideView:explorer",
+        "showSideView:changes",
         "toggleRegion:navigation",
         "openSettingsTab",
         "openYourSettings",
@@ -2316,9 +2317,9 @@ describe("the palette at fifty chats", () => {
     // tab, three rows a branch as its browse and focus rows are.
     // 839 since #1152: Focus on repo, one row in each of the ten clones.
     // 842 since #1673: Show the Chats view, Show the Explorer view, and the Navigation region.
-    // 892 since #1662: Network, one row per chat.
+    // 893 since #1676: Show the Changes view (Search's row is Search in files).
     // This window has no todos loaded, so no `todo.` rows.
-    expect(offers).toHaveLength(892);
+    expect(offers).toHaveLength(893);
   });
 
   /**
@@ -3867,8 +3868,8 @@ describe("Brief, for a task (#1494)", () => {
   });
 });
 
-describe("Search in files in the palette (#1137)", () => {
-  it("opens the Search tab as narrow as the focus, with the key said on the row", async () => {
+describe("Search in files in the palette (#1137, the Search view's row since #1676)", () => {
+  it("shows the Search view, searching as narrow as the focus, with the key said on the row", async () => {
     const branch = { workspace: "alpha", repo: "svc", piece: "fix-it" };
     const offers = catalogue(now({ workspaces: ["alpha"], focused: "alpha", plane: "/p", branch }));
     const row = by(offers, SEARCH_ID);
@@ -3877,8 +3878,9 @@ describe("Search in files in the palette (#1137)", () => {
     await run(offers, SEARCH_ID, hands);
 
     expect(row?.title).toBe("Search in files");
-    expect(row?.note).toBe(`Every file of branch fix-it, in a Search tab. ${SEARCH_KEY_SAID}.`);
-    expect(hands.calls).toEqual(["openView:charter/search/branch|alpha|alpha/svc/fix-it||,Search"]);
+    expect(row?.note).toBe(`Every file of branch fix-it, in the Search view. ${SEARCH_KEY_SAID}.`);
+    // The window searches where it is focused when it shows the view (#1676).
+    expect(hands.calls).toEqual(["showSideView:search"]);
   });
 
   it("searches the workspace in front with no branch picked, and the project at its root", () => {
