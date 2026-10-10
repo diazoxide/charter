@@ -322,7 +322,7 @@ fn definition_of(root: &Path, name: &str) -> Result<PathBuf, String> {
     }
     let file = purlis_core::personas::def_path(root, name);
     if !file.exists() {
-        return Err(format!("no persona '{name}' on this plane"));
+        return Err(format!("no persona '{name}' in this project"));
     }
     purlis_core::contain::readable(root, &file).map_err(|refused| refused.to_string())?;
     Ok(file)

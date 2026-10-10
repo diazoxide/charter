@@ -680,9 +680,9 @@ fn scaffold_at(
         Ok(found) if found == root => return Ok(root),
         Ok(found) => {
             return Err(NotMade::Refused(format!(
-                "{} is inside the project {}. A project is a plane of its own, and a plane \
-                 inside another one is a workspace's clone — purlis wrote nothing. Pick a \
-                 directory outside it.",
+                "{} is inside the project {}. A project cannot hold another project: a repo \
+                 inside one is a workspace's clone — purlis wrote nothing. Pick a directory \
+                 outside it.",
                 root.display(),
                 found.display()
             )));

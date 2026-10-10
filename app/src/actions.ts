@@ -204,7 +204,7 @@ export const OUTSIDE = "outside/every/workspace";
 export const OUTSIDE_TITLE = "Plane root";
 
 /** The root tab's tooltip — the operator's words, exactly (SI-1). The tab draws only an icon. */
-export const ROOT_TIP = "Plane — chats here start at the plane root";
+export const ROOT_TIP = "Project — chats here start at the project root";
 
 /** The key that opens a shell tab, as this platform spells it — said on the row, so the palette
  *  is where an operator learns it (`shellKey.ts`). */
