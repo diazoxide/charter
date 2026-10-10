@@ -328,7 +328,7 @@ describe("Edit as TOML", () => {
       ...files.shared,
       text: "[plane\n",
       parsed: false,
-      refusals: ["charter.toml is not valid TOML"],
+      refusals: [{ why: "charter.toml is not valid TOML", key: null }],
     };
     render(<SettingsTab plane={PLANE} level="project" />);
     await screen.findByRole("button", { name: "Harness & profiles" });
@@ -499,7 +499,7 @@ describe("Edit as TOML", () => {
       ...files.shared,
       text: "[plane\n",
       parsed: false,
-      refusals: ["charter.toml is not valid TOML"],
+      refusals: [{ why: "charter.toml is not valid TOML", key: null }],
     };
     render(<SettingsTab plane={PLANE} level="project" />);
 

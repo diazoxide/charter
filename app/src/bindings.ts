@@ -7004,8 +7004,11 @@ export type SettingsFile = {
 	 *  elsewhere since is never written over.
 	 */
 	text: string,
-	/**  What charter refuses in it as it stands, in the core's words. */
-	refusals: string[],
+	/**
+	 *  What charter refuses in it as it stands, in the core's words, each with the key it is
+	 *  about (#1292).
+	 */
+	refusals: SettingsRefusal[],
 	/**  Whether it is TOML. When it is not, `fields` is empty and only Edit as TOML can mend it. */
 	parsed: boolean,
 	/**  Every value in it, in file order. */
@@ -7022,6 +7025,22 @@ export type SettingsFile = {
 export type SettingsMoved = 
 /**  Boxed: both files are far larger than a refusal. */
 { kind: "moved"; settings: ProjectSettings } | { kind: "refused"; reasons: string[] };
+
+/**
+ *  **One thing charter does not take from a settings file as it stands** (#1292): the core's
+ *  sentence, and the key it is about (`purlis_core::settings::Refusal`), so the window links it to
+ *  the setting that mends it without reading the sentence.
+ */
+export type SettingsRefusal = {
+	/**  The reader's sentence, word for word. */
+	why: string,
+	/**
+	 *  The key it is about, one step per table or key (an extension id with dots in it is one
+	 *  step); for a workspace's file, the key under `settings`. `null` when it is about the
+	 *  whole file, or about no key a setting is at.
+	 */
+	key: string[] | null,
+};
 
 /**  What a save answered: the file as it now stands, or every reason nothing was written. */
 export type SettingsSaved = { kind: "saved"; file: SettingsFile } | { kind: "refused"; reasons: string[] };
@@ -7991,8 +8010,11 @@ export type WorkspaceSettings = {
 	 *  written over.
 	 */
 	text: string,
-	/**  What charter does not take from its settings as they stand, in the core's words. */
-	refusals: string[],
+	/**
+	 *  What charter does not take from its settings as they stand, in the core's words, each
+	 *  with its key under `settings` (#1292).
+	 */
+	refusals: SettingsRefusal[],
 	/**  Whether a form can change it: a JSON object, or no file yet. */
 	parsed: boolean,
 	/**  Every value in its settings, by its path under `settings`. */

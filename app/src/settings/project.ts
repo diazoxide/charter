@@ -156,17 +156,18 @@ function setting(
 /**
  * **A picker's choices and the core's word on its value** (ST-1, #1225): what the project has,
  * once the core has listed it, and the sentence among the file's standing refusals that is about
- * this key — the core says a default naming nothing as `[persona] default = "ghost" …`, as it
- * says `[harness] default`'s.
+ * this key — by the key the core hands with it (#1292): a default naming nothing is
+ * `[persona] default`'s, as `[harness] default`'s is.
  */
 function picking(one: FileSetting, file: Shown, entries: Partial<Entries>): FileSetting {
   if (one.names === undefined) return one;
-  const [table, name] = one.key;
-  const about = `[${table?.key ?? ""}] ${name?.key ?? ""} = `;
+  const keys = one.key.map((step) => ("key" in step ? step.key : undefined));
+  const about = (key: readonly string[] | null) =>
+    key !== null && key.length === keys.length && key.every((step, at) => step === keys[at]);
   return {
     ...one,
     choices: entries[one.names],
-    standing: file.refusals.find((why) => why.startsWith(about)),
+    standing: file.refusals.find((refused) => about(refused.key))?.why,
   };
 }
 
