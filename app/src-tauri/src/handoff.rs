@@ -11224,31 +11224,6 @@ mod tests {
     }
 
     #[test]
-    fn a_task_is_not_started_fresh_and_goes_on_owing_its_report() {
-        // **A fresh start is refused for a task** (#1489): it would be a new conversation with
-        // no brief in it, still its asker's task and still owing a report on work it was never
-        // told of. Nothing is started, nothing ends, and nothing is reported for it.
-        let plane = a_plane_with_personas();
-        let host = Pretend::default();
-        let (planes, id, steward) = a_steward_chat(&host, &plane);
-        let held = planes.held(&id).expect("held");
-        let task = a_task_of(&held, &id, steward, "check prod");
-
-        assert_eq!(
-            held.start_chat_fresh(task, STARTING),
-            Err(crate::planes::A_TASK_IS_NOT_STARTED_FRESH.to_owned())
-        );
-
-        assert_eq!(open_chats(&held), vec![steward, task]);
-        assert!(purlis_core::handback::take(held.root(), For::Chat(steward)).is_empty());
-        assert_eq!(
-            held.chats().handed_from(task).map(|from| from.report),
-            Some(Owed::Due)
-        );
-        assert_eq!(held.chats().lineage(steward, None, &|_| true).running, 1);
-    }
-
-    #[test]
     fn a_handoff_started_fresh_is_handed_its_brief_again_and_a_person_s_chat_nothing() {
         // #1609: a fresh start has no conversation, and a handed-off chat's brief was the whole
         // of what it was asked. It is handed again from the dispatch's record, under purlis's
@@ -14528,4 +14503,7 @@ mod tests {
 
     /// Tasks across a restart, and a task whose asking chat has gone (#1513).
     mod across_restart;
+
+    /// A task started fresh is handed its brief again, or not started at all (#1609).
+    mod started_fresh;
 }

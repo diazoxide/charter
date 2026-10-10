@@ -1056,7 +1056,12 @@ impl Chats {
     /// dispatch started it and the brief can be handed, else why not. `None` for a chat no
     /// dispatch started.
     fn told_again(&self, chat: &Chat) -> Option<String> {
-        crate::rebrief::again(&self.project, chat, &self.briefs).map(|again| again.message)
+        self.again_told(chat).map(|again| again.message)
+    }
+
+    /// [`Self::told_again`], with whether it hands the chat its brief.
+    fn again_told(&self, chat: &Chat) -> Option<crate::rebrief::Again> {
+        crate::rebrief::again(&self.project, chat, &self.briefs)
     }
 
     fn start_ready_as(
@@ -1297,7 +1302,7 @@ impl Chats {
     /// Refused for a chat owed nothing: a restart is owed by a grant ([`Self::grant`],
     /// [`Self::owe_restart`]) or asked for by the person ([`Self::ask_restart`]), and by
     /// nothing a chat sends. The old one stays open until the new one has started, as
-    /// [`Self::start_fresh`]'s does; ending it is the caller's next step.
+    /// [`Self::start_fresh_unless`]'s does; ending it is the caller's next step.
     ///
     /// **A person's opt-out is never inherited** (ADR 0067 §7): a chat that ran without the
     /// sandbox restarts in it, and its tab says so ([`SANDBOXED_AGAIN`]).
@@ -3185,7 +3190,16 @@ impl Chats {
     /// started**, so a refused start leaves it running and recorded as it was; while both are
     /// open, [`Self::record`] writes the newer. Ending the old one is the caller's next step
     /// (`Held::start_chat_fresh`), which takes it off the board too.
-    pub fn start_fresh(&self, session: u32, size: Size) -> Result<u32, String> {
+    ///
+    /// **Unless `refused` answers why not**, from what the chat would be told as it starts again
+    /// ([`crate::rebrief::again`]; `None` for a chat no dispatch started): then nothing starts.
+    /// What it is told is read once, so what was judged is what it is handed (#1609).
+    pub(crate) fn start_fresh_unless(
+        &self,
+        session: u32,
+        size: Size,
+        refused: impl FnOnce(Option<&crate::rebrief::Again>) -> Option<String>,
+    ) -> Result<u32, String> {
         let was = lock(&self.open)
             .get(&session)
             .map(|one| one.chat.clone())
@@ -3202,7 +3216,11 @@ impl Chats {
         };
         // **A dispatched chat is handed its brief again** (#1609), as its first message: the
         // brief was the whole of what it was asked, and this run has no conversation to hold it.
-        let told = self.told_again(&again);
+        let told = self.again_told(&again);
+        if let Some(why) = refused(told.as_ref()) {
+            return Err(why);
+        }
+        let told = told.map(|told| told.message);
         let started = self.start_recorded_told(&again, size, Why::Again, told.as_deref(), None)?;
         // **It keeps its place** (#1246): the window puts the new session in the old one's pane,
         // so the record puts it where the old one was in the strip's order. Unplaced, it would
@@ -3214,6 +3232,12 @@ impl Chats {
         }
         self.write_it_down();
         Ok(started)
+    }
+
+    /// [`Self::start_fresh_unless`], refused nothing: for a test of the start itself.
+    #[cfg(test)]
+    pub fn start_fresh(&self, session: u32, size: Size) -> Result<u32, String> {
+        self.start_fresh_unless(session, size, |_| None)
     }
 
     /// Records chat `session` as one this app started inside a sandbox: for a test of what a
