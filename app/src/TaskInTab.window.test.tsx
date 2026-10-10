@@ -1760,9 +1760,8 @@ describe("what a task asks, on its session's tab (#1508)", () => {
     // One question: no task asks it again on its own.
     expect(screen.queryAllByRole("status", { name: /Sandbox block$/ })).toEqual([]);
 
-    await userEvent.click(
-      within(question).getByRole("button", { name: "Allow for these 3 tasks" }),
-    );
+    await userEvent.click(within(question).getByRole("button", { name: "Other scopes…" }));
+    await userEvent.click(screen.getByRole("button", { name: "Allow only for these 3 tasks" }));
 
     // Each task with the block it was shown blocked on, exactly.
     await waitFor(() =>
@@ -1807,9 +1806,8 @@ describe("what a task asks, on its session's tab (#1508)", () => {
     // for both is under the pointer now, and pressing it allows nothing.
     await blockHost(5);
     const question = await screen.findByRole("status", { name: "Sandbox block for 2 tasks" });
-    await userEvent.click(
-      within(question).getByRole("button", { name: "Allow for these 2 tasks" }),
-    );
+    await userEvent.click(within(question).getByRole("button", { name: "Other scopes…" }));
+    await userEvent.click(screen.getByRole("button", { name: "Allow only for these 2 tasks" }));
     expect(question.textContent).toContain("nothing was answered");
     await userEvent.click(within(question).getByRole("button", { name: "Keep blocked" }));
     expect(commandsOf(asked, "allow_sandbox_block_for_tasks")).toEqual([]);
@@ -1857,18 +1855,15 @@ describe("what a task asks, on its session's tab (#1508)", () => {
     expect(question.textContent).toContain(
       "“probe” (a task of “steward 1”) joined this question after it was first shown.",
     );
-    await userEvent.click(
-      within(question).getByRole("button", { name: "Allow for these 3 tasks" }),
-    );
+    await userEvent.click(within(question).getByRole("button", { name: "Other scopes…" }));
+    await userEvent.click(screen.getByRole("button", { name: "Allow only for these 3 tasks" }));
 
     expect(question.textContent).toContain("nothing was answered");
     expect(commandsOf(asked, "allow_sandbox_block_for_tasks")).toEqual([]);
 
     // Read, and answered again: it is the three it now shows.
     settle();
-    await userEvent.click(
-      within(question).getByRole("button", { name: "Allow for these 3 tasks" }),
-    );
+    await userEvent.click(screen.getByRole("button", { name: "Allow only for these 3 tasks" }));
     await waitFor(() =>
       expect(
         commandsOf(asked, "allow_sandbox_block_for_tasks").map((one) =>
@@ -1886,9 +1881,8 @@ describe("what a task asks, on its session's tab (#1508)", () => {
     settle();
     answering.only = [4];
 
-    await userEvent.click(
-      within(question).getByRole("button", { name: "Allow for these 2 tasks" }),
-    );
+    await userEvent.click(within(question).getByRole("button", { name: "Other scopes…" }));
+    await userEvent.click(screen.getByRole("button", { name: "Allow only for these 2 tasks" }));
 
     // sweep was not allowed: its block is still asked, on its own.
     expect(

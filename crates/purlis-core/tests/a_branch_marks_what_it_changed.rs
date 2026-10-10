@@ -632,6 +632,33 @@ fn the_folders_listened_in_are_the_ones_git_knows_and_never_what_it_ignores() {
     assert_eq!(folders, ["", "new", "src", "new/deeper"]);
 }
 
+/// #1152: a branch's folder found again after a checkout in it names the branch checked out now
+/// among its refs, in place of the one it was found on; the folder is the same.
+#[test]
+fn a_folder_found_again_after_a_checkout_names_the_new_branchs_ref() {
+    purlis_core::unsteered!();
+    let f = support::plane_with_clone("thing");
+    write(&f.clone, "README.md", "one\n");
+    support::git(&f.clone, &["add", "-A"]);
+    support::git(&f.clone, &["commit", "-q", "-m", "one"]);
+    let piece = cut(&f, "piece");
+    let names = |root: &files::Root| -> Vec<bool> {
+        ["refs/heads/piece", "refs/heads/topic/one"]
+            .iter()
+            .map(|name| root.refs().iter().any(|file| file.ends_with(name)))
+            .collect()
+    };
+    let before = files::root(&reader(), &f.plane, branch(&f)).unwrap();
+    assert_eq!(names(&before), [true, false]);
+
+    support::git(&piece, &["checkout", "-q", "-b", "topic/one"]);
+    let after = before.again(&reader()).unwrap();
+
+    assert_eq!(after.path(), before.path());
+    assert_eq!(names(&after), [false, true]);
+    assert_eq!(names(&before), [true, false], "the old one is unchanged");
+}
+
 #[test]
 fn a_write_matters_unless_git_ignores_it_or_it_is_gits_own() {
     purlis_core::unsteered!();

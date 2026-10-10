@@ -174,6 +174,18 @@ fn each_decision_has_the_word_the_record_keeps() {
     assert!(!Decision::Refused(Refused::LocalAddress).carries());
 }
 
+/// #1709: everyone in the project's Allow, taken live by a running chat, is kept by the scope
+/// the person chose, `project`, not by `open`, the layer it compiles to from the next start.
+#[test]
+fn everyone_in_the_projects_allow_taken_live_is_kept_as_project() {
+    let by = By::from(super::grant::Level::Project);
+    let decision = Decision::by(by);
+    assert_eq!(decision.word(), "project");
+    assert!(decision.carries());
+    assert_eq!(By::from(super::grant::Level::You), By::You);
+    assert_eq!(By::from(super::grant::Level::Chat), By::Chat);
+}
+
 #[test]
 fn a_host_policy_pins_never_allowed_is_refused_never_asked() {
     let pinned = reach().never(vec![super::hosts::Host::parse("*.paste.example").unwrap()]);

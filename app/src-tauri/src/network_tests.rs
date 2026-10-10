@@ -230,6 +230,69 @@ fn a_looked_up_host_is_shown_and_never_offered_to_allow() {
     assert!(shown.blocked.iter().all(|row| !row.reached));
 }
 
+/// The network record's lines of a connection refused to each of `targets`.
+fn refused_lately(targets: &[&str]) -> Vec<Entry> {
+    targets
+        .iter()
+        .map(|target| Entry::blocked(&HOST, Some(target), chat("first"), None, 1))
+        .collect()
+}
+
+/// #1681: Allow on Blocked lately allows only a host the record has a refused connection to:
+/// a host the record never refused, one only looked up, or one on another port is not allowed
+/// from there, and nothing is audited.
+#[test]
+fn allow_on_blocked_lately_refuses_a_host_that_is_not_a_refused_connection_here() {
+    let dir = tempfile::tempdir().expect("a project");
+    let chats = crate::chats::Chats::new();
+    let seen = std::sync::Mutex::new(Vec::new());
+    let audit = audited_into(&seen);
+    let mut lately = refused_lately(&["a.example:443"]);
+    lately.push(Entry::blocked(
+        &Block {
+            operation: Operation::Lookup,
+            kind: Kind::Host,
+            ours: false,
+        },
+        Some("looked.example"),
+        chat("first"),
+        None,
+        2,
+    ));
+    for host in ["never.example:443", "looked.example", "a.example:8443"] {
+        let refused = allow_blocked(
+            dir.path(),
+            &chats,
+            &lately,
+            host,
+            GrantLevel::You,
+            &audit,
+            3,
+        )
+        .expect_err(host);
+        assert!(
+            refused.contains("not a connection refused here lately"),
+            "{refused}"
+        );
+    }
+    let nothing: Vec<Entry> = Vec::new();
+    assert!(
+        allow_blocked(
+            dir.path(),
+            &chats,
+            &nothing,
+            "a.example:443",
+            GrantLevel::You,
+            &audit,
+            3
+        )
+        .is_err(),
+        "with no record, nothing is allowed from it"
+    );
+    assert!(seen.lock().expect("the audit").is_empty());
+    assert!(sandbox::hosts::personal(dir.path()).is_empty());
+}
+
 fn audited_into(
     seen: &std::sync::Mutex<Vec<(bool, String, String)>>,
 ) -> impl Fn(Option<u32>, &grant::Audited<'_>) -> Result<(), String> + '_ {
@@ -249,9 +312,11 @@ fn allow_on_blocked_lately_is_judged_audited_and_never_for_one_chat() {
     let chats = crate::chats::Chats::new();
     let seen = std::sync::Mutex::new(Vec::new());
     let audit = audited_into(&seen);
+    let lately = refused_lately(&["a.example:443"]);
     let refused = allow_blocked(
         dir.path(),
         &chats,
+        &lately,
         "a.example:443",
         GrantLevel::Chat,
         &audit,
@@ -262,6 +327,7 @@ fn allow_on_blocked_lately_is_judged_audited_and_never_for_one_chat() {
     let refused = allow_blocked(
         dir.path(),
         &chats,
+        &lately,
         "169.254.169.254",
         GrantLevel::You,
         &audit,
@@ -274,6 +340,7 @@ fn allow_on_blocked_lately_is_judged_audited_and_never_for_one_chat() {
         allow_blocked(
             dir.path(),
             &chats,
+            &lately,
             "a.example:443",
             GrantLevel::You,
             &unaudited,
@@ -297,8 +364,17 @@ fn allow_on_blocked_lately_keeps_the_host_for_this_project_on_this_machine_and_r
     let seen = std::sync::Mutex::new(Vec::new());
     let audit = audited_into(&seen);
     let audit = recorded(&audit, Some(&record), &root, &chats);
-    let said =
-        allow_blocked(&root, &chats, "a.example:443", GrantLevel::You, &audit, 5).expect("allowed");
+    let lately = refused_lately(&["a.example:443"]);
+    let said = allow_blocked(
+        &root,
+        &chats,
+        &lately,
+        "A.Example:443",
+        GrantLevel::You,
+        &audit,
+        5,
+    )
+    .expect("allowed");
     assert_eq!(
         said.said,
         "Allowed a.example:443 for me on this machine. A chat that is running reaches it from \
@@ -319,8 +395,8 @@ fn allow_on_blocked_lately_keeps_the_host_for_this_project_on_this_machine_and_r
     assert_eq!(kept.len(), 1, "{kept:?}");
     assert_eq!(kept[0].event, record::Event::Allow);
     assert_eq!(kept[0].target.as_deref(), Some("a.example:443"));
-    assert_eq!(kept[0].scope.as_deref(), Some("you"));
-    assert_eq!(kept[0].who.as_deref(), Some("you"));
+    assert_eq!(kept[0].scope, Some(record::Scope::You));
+    assert_eq!(kept[0].who, Some(record::Who::You));
 }
 
 #[test]
@@ -346,7 +422,7 @@ fn a_removal_is_recorded_after_its_audit_and_not_without_one() {
     recorded(&passing, Some(&record), &root, &chats)(None, &removed).expect("recorded");
     let kept = record.read(&root, now_secs());
     assert_eq!(kept[0].event, record::Event::Remove);
-    assert_eq!(kept[0].scope.as_deref(), Some("project"));
+    assert_eq!(kept[0].scope, Some(record::Scope::Project));
 }
 
 #[test]

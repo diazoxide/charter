@@ -3,8 +3,8 @@
 //! and never in a project, so it is never committed and never sent.
 //!
 //! It also keeps **every connection** purlis's own proxy carried or refused for a chat (#1664):
-//! the host and port, the decision (its `scope`: `open`, `persona`, `you` or `chat` for one let
-//! through, `ask` or `refused` for one refused) and how many connections the line stands for, coalesced by the proxy to a line per host and port a
+//! the host and port, the decision (its `scope`: `open`, `persona`, `you`, `chat` or `project`
+//! for one let through, `ask` or `refused` for one refused) and how many connections the line stands for, coalesced by the proxy to a line per host and port a
 //! minute (`sandbox::egress::Tally`), so a chat cannot turn the record over by connecting.
 //!
 //! It is the block store of #1338, moved out of the project's state folder and widened: where
@@ -78,6 +78,103 @@ pub enum Outcome {
     Held,
 }
 
+/// **What an Allow or a removal was of** (#1681): by the word the grant is audited under.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum What {
+    /// A host, as a grant names it.
+    Host,
+    /// A folder written.
+    Write,
+    /// A vault's secrets.
+    Vault,
+    /// A persona's own hosts.
+    PersonaHosts,
+}
+
+impl What {
+    const ALL: [Self; 4] = [Self::Host, Self::Write, Self::Vault, Self::PersonaHosts];
+
+    /// The word the record and the audit spell it by.
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::Host => "host",
+            Self::Write => "write",
+            Self::Vault => "vault",
+            Self::PersonaHosts => "persona-hosts",
+        }
+    }
+
+    /// The kind `word` names, as a grant's audit spells it.
+    pub fn of_word(word: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|one| one.word() == word)
+    }
+}
+
+/// **A line's scope** (#1681): for an Allow or a removal, the level it was kept at (`chat`,
+/// `you`, `project`); for a connection line, the decision it was carried or refused by
+/// (`open`, `persona`, `you`, `chat`, `project` for everyone in the project's Allow taken live,
+/// or `ask` and `refused`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Scope {
+    Chat,
+    You,
+    Project,
+    Open,
+    Persona,
+    Ask,
+    Refused,
+}
+
+impl Scope {
+    const ALL: [Self; 7] = [
+        Self::Chat,
+        Self::You,
+        Self::Project,
+        Self::Open,
+        Self::Persona,
+        Self::Ask,
+        Self::Refused,
+    ];
+
+    /// The word the record spells it by.
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::Chat => "chat",
+            Self::You => "you",
+            Self::Project => "project",
+            Self::Open => "open",
+            Self::Persona => "persona",
+            Self::Ask => "ask",
+            Self::Refused => "refused",
+        }
+    }
+
+    /// The scope `word` names.
+    pub fn of_word(word: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|one| one.word() == word)
+    }
+}
+
+impl From<crate::sandbox::grant::Level> for Scope {
+    fn from(level: crate::sandbox::grant::Level) -> Self {
+        use crate::sandbox::grant::Level;
+        match level {
+            Level::Chat => Self::Chat,
+            Level::You => Self::You,
+            Level::Project => Self::Project,
+        }
+    }
+}
+
+/// **Who decided** (#1681): `you`, the person at this machine, the only one today.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Who {
+    You,
+}
+
 /// The chat a line is about, as the app knew it when it wrote the line. All three may be
 /// missing: a revoke from Settings comes from no chat.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -110,9 +207,9 @@ pub struct Entry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub block: Option<Block>,
     /// For an Allow or a removal: the kind of thing, by the word the grant is audited under
-    /// (`host`, `write`, `vault`, `persona-hosts`).
+    /// ([`What`]: `host`, `write`, `vault`, `persona-hosts`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub what: Option<String>,
+    pub what: Option<What>,
     /// The host and port (`api.example.com:443`); for an Allow, what it names. For a Block,
     /// only a refused connection's (`connect` + `host`), checked as a grant checks a host
     /// ([`super::named_host`]): the host the Notice offered to allow (#1663).
@@ -129,12 +226,12 @@ pub struct Entry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub persona: Option<String>,
     /// For an Allow or a removal: `chat`, `you` (this project on this machine) or `project`
-    /// (everyone in it).
+    /// (everyone in it). For a connection line, the decision ([`Scope`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub scope: Option<String>,
+    pub scope: Option<Scope>,
     /// Who decided: `you`, the person at this machine. None for a Block, which nobody decided.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub who: Option<String>,
+    pub who: Option<Who>,
     pub outcome: Outcome,
     /// For a connection line: how many connections it stands for.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -195,7 +292,9 @@ impl Entry {
             looked_up: None,
             chat,
             persona: persona.map(str::to_owned),
-            scope: matches!(event, Event::Connect).then(|| by.to_owned()),
+            scope: matches!(event, Event::Connect)
+                .then(|| Scope::of_word(by))
+                .flatten(),
             who: None,
             outcome,
             times: Some(times),
@@ -204,9 +303,9 @@ impl Entry {
 
     /// A person allowed `target` (a `what`) at `scope`, from chat `chat` where it came from one.
     pub fn allowed(
-        what: &str,
+        what: What,
         target: &str,
-        scope: &str,
+        scope: Scope,
         chat: Chat,
         persona: Option<&str>,
         at: u64,
@@ -215,20 +314,20 @@ impl Entry {
             at,
             event: Event::Allow,
             block: None,
-            what: Some(what.to_owned()),
+            what: Some(what),
             target: Some(target.to_owned()),
             looked_up: None,
             chat,
             persona: persona.map(str::to_owned),
-            scope: Some(scope.to_owned()),
-            who: Some(WHO.to_owned()),
+            scope: Some(scope),
+            who: Some(Who::You),
             outcome: Outcome::Allowed,
             times: None,
         }
     }
 
     /// A person removed what allowed `target` (a `what`) at `scope`.
-    pub fn removed(what: &str, target: &str, scope: &str, at: u64) -> Self {
+    pub fn removed(what: What, target: &str, scope: Scope, at: u64) -> Self {
         Self {
             event: Event::Remove,
             outcome: Outcome::Removed,
@@ -252,9 +351,6 @@ pub const ASKED: &str = "asked";
 /// The word [`Entry::connected`] is told a held connection's timeout by (#1666): written as an
 /// [`Event::Timeout`], refused.
 pub const TIMED_OUT: &str = "timeout";
-
-/// Who decides every Allow and removal written today: the person at this machine.
-pub const WHO: &str = "you";
 
 /// The host `named` is, as a grant would name it ([`super::named_host`]), for a refused
 /// connection; nothing for any other block.

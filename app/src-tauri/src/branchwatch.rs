@@ -29,7 +29,9 @@
 //! folder, which the checks above pass over. So for the branch a window's sidebar is focused on
 //! ([`BranchWatch::focus`]), and only that one, the folders holding its refs
 //! (`purlis_core::files::Root::refs`) are watched one by one, and a burst naming one of those
-//! files tells the window as a move in the folder would.
+//! files tells the window as a move in the folder would. A burst naming the cockpit's `HEAD` (a
+//! checkout in its folder) has its refs found again, off the watch's thread, so the branch
+//! checked out now is the one whose ref is watched.
 //!
 //! **Every burst is told by what it named** ([`crate::watchset::bursts`], #1139): a file made
 //! and removed inside one is still a move. A burst that is everything — the platform lost
@@ -60,7 +62,7 @@
 //! once a second, and the app watches at most a quarter of the user's inotify watches.
 
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError, Weak, mpsc};
 use std::time::{Duration, Instant};
 
@@ -165,6 +167,9 @@ struct Inner<W: notify::Watcher> {
     refused: HashMap<PathBuf, Instant>,
     /// Each window's cockpit (FM-5): the one branch whose refs are watched too (#1152).
     cockpits: HashMap<String, WatchedBranch>,
+    /// The cockpits' folders whose refs are being found again after their `HEAD` moved, by
+    /// folder, and whether it moved again meanwhile ([`find_refs_again`]).
+    refinding: HashMap<PathBuf, bool>,
 }
 
 /// How long a clone the reader would not find is left alone before it is asked for again: the
@@ -254,6 +259,7 @@ impl<W: notify::Watcher + Send + 'static> BranchWatch<W> {
                 let_go: HashMap::new(),
                 refused: HashMap::new(),
                 cockpits: HashMap::new(),
+                refinding: HashMap::new(),
             })),
             told,
             reader,
@@ -482,7 +488,7 @@ fn heard<W: notify::Watcher + Send + 'static>(
     told: &Told,
     burst: &crate::watchset::Burst,
 ) {
-    let (roots, refs_moved) = {
+    let (roots, refs_moved, heads_moved) = {
         let mut held = inner.lock().unwrap_or_else(PoisonError::into_inner);
         if burst.lost {
             held.watch_again();
@@ -500,8 +506,18 @@ fn heard<W: notify::Watcher + Send + 'static>(
         } else {
             refs_moved(held.cockpits_listened(), &burst.paths)
         };
-        (roots, refs_moved)
+        // A cockpit whose HEAD moved may have another branch checked out now, whose ref is not
+        // watched yet; one the platform lost track of may have too.
+        let heads_moved: Vec<Root> = held
+            .cockpit_roots()
+            .filter(|root| burst.everything || head_moved(root.refs(), &burst.paths))
+            .cloned()
+            .collect();
+        (roots, refs_moved, heads_moved)
     };
+    for root in heads_moved {
+        find_refs_again(inner, reader, root);
+    }
     // The cockpit's branch moved in git's own folder only: nothing in it is the status's to
     // sort (`Root::matters` passes over git's folder), so it is told as it is.
     for (window, branches) in refs_moved {
@@ -728,6 +744,92 @@ fn refs_moved<'a>(
     told
 }
 
+/// Whether `moved` names the `HEAD` among a cockpit's `refs`: its folder may have another branch
+/// checked out now.
+fn head_moved(refs: &[PathBuf], moved: &HashSet<PathBuf>) -> bool {
+    refs.iter()
+        .any(|file| file.file_name() == Some(std::ffi::OsStr::new("HEAD")) && moved.contains(file))
+}
+
+impl<W: notify::Watcher> Inner<W> {
+    /// Each cockpit's folder, once, as the windows listening to it resolved it.
+    fn cockpit_roots(&self) -> impl Iterator<Item = &Root> {
+        let mut seen: HashSet<&Path> = HashSet::new();
+        self.by_window
+            .iter()
+            .flat_map(|(window, listened)| {
+                let cockpit = self.cockpits.get(window);
+                listened
+                    .iter()
+                    .filter(move |one| Some(&one.branch) == cockpit)
+            })
+            .map(|one| &one.root)
+            .filter(move |root| seen.insert(root.path()))
+    }
+}
+
+/// Finds `root`'s refs again, by the bounded reader on a thread of its own, after its `HEAD`
+/// moved (#1152): a checkout in the cockpit's folder puts another branch there, whose ref is
+/// then watched in place of the old one's. Once per folder at a time; a move heard meanwhile
+/// finds them once more when this one is done. A folder the reader no longer finds keeps what
+/// it had: the window's next set says what it listens to.
+fn find_refs_again<W: notify::Watcher + Send + 'static>(
+    inner: &Arc<Mutex<Inner<W>>>,
+    reader: &Reader,
+    root: Root,
+) {
+    {
+        let mut held = inner.lock().unwrap_or_else(PoisonError::into_inner);
+        match held.refinding.get_mut(root.path()) {
+            Some(again) => {
+                *again = true;
+                return;
+            }
+            None => {
+                held.refinding.insert(root.path().to_path_buf(), false);
+            }
+        }
+    }
+    let handle = Arc::downgrade(inner);
+    let reader = reader.clone();
+    let at = root.path().to_path_buf();
+    let started = std::thread::Builder::new()
+        .name("purlis-cockpit-refs".into())
+        .spawn(move || {
+            loop {
+                // Outside the lock: this is the read that can take until the reader's deadline.
+                let found = past_busy(|| root.again(&reader));
+                let Some(inner) = handle.upgrade() else {
+                    return;
+                };
+                let mut held = inner.lock().unwrap_or_else(PoisonError::into_inner);
+                if let Some(found) = found.filter(|found| found.path() == root.path()) {
+                    let mut changed = false;
+                    for one in held.by_window.values_mut().flatten() {
+                        if one.root.path() == root.path() && one.root.refs() != found.refs() {
+                            one.root = found.clone();
+                            changed = true;
+                        }
+                    }
+                    if changed {
+                        held.follow();
+                    }
+                }
+                if held.refinding.get(root.path()) == Some(&true) {
+                    held.refinding.insert(root.path().to_path_buf(), false);
+                    continue;
+                }
+                held.refinding.remove(root.path());
+                return;
+            }
+        });
+    // No thread: the next move asks again.
+    if started.is_err() {
+        let mut held = inner.lock().unwrap_or_else(PoisonError::into_inner);
+        held.refinding.remove(&at);
+    }
+}
+
 impl<W: notify::Watcher> Inner<W> {
     /// Watches what every window's branches need, and stops watching what none needs.
     fn follow(&mut self) {
@@ -896,19 +998,35 @@ fn resolve(
 /// How often a branch is asked while the reader's gate stays full: enough for every branch a
 /// window may watch to have had its turn, [`purlis_core::files::AT_ONCE`] at a time, and once
 /// more.
-const BUSY_TRIES: usize = BRANCHES.div_ceil(purlis_core::files::AT_ONCE) + 1;
+pub(crate) const BUSY_TRIES: usize = BRANCHES.div_ceil(purlis_core::files::AT_ONCE) + 1;
 
 /// What `ask` answers, asked again while it finds every reader place taken, at most
 /// [`BUSY_TRIES`] times; nothing once it fails otherwise.
-fn past_busy<T>(mut ask: impl FnMut() -> Result<T, purlis_core::files::Refused>) -> Option<T> {
-    for _ in 0..BUSY_TRIES {
+///
+/// The app's one retry for a read the bounded reader's gate may answer busy (#1189): an
+/// automatic read nobody will ask for again, such as a watch finding its folder, uses it rather
+/// than going without.
+pub(crate) fn past_busy<T>(
+    ask: impl FnMut() -> Result<T, purlis_core::files::Refused>,
+) -> Option<T> {
+    asked_past_busy(BUSY_TRIES, ask).ok()
+}
+
+/// What `ask` answers, asked again while it finds every reader place taken, `tries` times in
+/// all (at least once); otherwise its last refusal. [`past_busy`] for a read someone waits on
+/// and should be told about: each busy answer has already waited the reader's deadline.
+pub(crate) fn asked_past_busy<T>(
+    tries: usize,
+    mut ask: impl FnMut() -> Result<T, purlis_core::files::Refused>,
+) -> Result<T, purlis_core::files::Refused> {
+    let mut left = tries.max(1);
+    loop {
+        left -= 1;
         match ask() {
-            Ok(answer) => return Some(answer),
-            Err(why) if purlis_core::files::was_busy(&why) => {}
-            Err(_) => return None,
+            Err(why) if left > 0 && purlis_core::files::was_busy(&why) => {}
+            answered => return answered,
         }
     }
-    None
 }
 
 /// `each` of `asked`, every one on a thread of its own, answered in `asked`'s order; one that
@@ -1508,6 +1626,84 @@ mod tests {
             HashMap::from([("main".to_string(), vec![branch()])])
         );
         assert!(refs_moved(std::iter::empty(), &moved(&["/clone/.git/packed-refs"])).is_empty());
+    }
+
+    /// #1152: a burst naming a cockpit's `HEAD` means its folder may have another branch checked
+    /// out, so its refs are found again; one naming only its branch's ref or `packed-refs` (a
+    /// commit, a pack) does not, and neither does a `HEAD` lock file or another worktree's HEAD.
+    #[test]
+    fn only_a_cockpits_head_moving_finds_its_refs_again() {
+        let refs = [
+            PathBuf::from("/clone/.git/worktrees/piece/HEAD"),
+            PathBuf::from("/clone/.git/packed-refs"),
+            PathBuf::from("/clone/.git/refs/heads/piece"),
+        ];
+        let moved =
+            |paths: &[&str]| -> HashSet<PathBuf> { paths.iter().map(PathBuf::from).collect() };
+        assert!(!head_moved(
+            &refs,
+            &moved(&[
+                "/clone/.git/refs/heads/piece",
+                "/clone/.git/packed-refs",
+                "/clone/.git/worktrees/piece/HEAD.lock",
+                "/clone/.git/worktrees/other/HEAD",
+                "/clone/.git/HEAD",
+            ])
+        ));
+        assert!(head_moved(
+            &refs,
+            &moved(&[
+                "/clone/.git/worktrees/piece/HEAD.lock",
+                "/clone/.git/worktrees/piece/HEAD"
+            ])
+        ));
+        assert!(!head_moved(&[], &moved(&["/clone/.git/HEAD"])));
+    }
+
+    /// #1152, with a real watcher (first run on CI: it needs git): a checkout in the cockpit's
+    /// folder moves its HEAD to another branch, and that branch's ref is watched from then on,
+    /// so a commit on it that writes no file still tells the window. The branch is named into a
+    /// folder of its own (`topic/one`), so its ref sits where nothing was watched before.
+    #[test]
+    fn a_checkout_in_the_cockpit_has_its_new_branchs_commits_heard() {
+        let (_dir, root, piece) = plane();
+        let (watch, told) = watch_with(crate::reader());
+        watch
+            .set_from(
+                "main",
+                watch.ticket(),
+                vec![(branch(), root_of(&root, "piece"), How::Whole)],
+            )
+            .unwrap();
+        watch.focus("main", Some(branch()));
+        // The poller's first look is its baseline; give it one.
+        std::thread::sleep(Duration::from_millis(300));
+
+        git(&piece, &["checkout", "-q", "-b", "topic/one"]);
+        let (window, _) = told.recv_timeout(PATIENCE).expect("the HEAD move was told");
+        assert_eq!(window, "main");
+        let topic = root_of(&root, "piece")
+            .refs()
+            .iter()
+            .find(|file| file.ends_with("refs/heads/topic/one"))
+            .and_then(|file| file.parent())
+            .map(PathBuf::from)
+            .expect("the new branch's ref is among the refs");
+        assert!(
+            until(|| watch.watching().contains(&topic)),
+            "{:?}",
+            watch.watching()
+        );
+        while told.try_recv().is_ok() {}
+        std::thread::sleep(Duration::from_millis(300));
+
+        git(
+            &piece,
+            &["commit", "-q", "--allow-empty", "-m", "no file written"],
+        );
+        let (window, branches) = told.recv_timeout(PATIENCE).expect("the window was told");
+        assert_eq!(window, "main");
+        assert_eq!(branches, [branch()]);
     }
 
     /// #1152, with a real watcher (first run on CI: it needs git): a commit that writes no file

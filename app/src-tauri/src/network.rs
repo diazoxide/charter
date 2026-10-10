@@ -104,7 +104,9 @@ pub(crate) fn record_connections(
 /// **`audit`, then the network record**: every Allow and removal a person makes is audited
 /// first (an audit that cannot be written changes nothing), then written to `record` with the
 /// chat it came from. A record that cannot be written is said in the log and changes nothing:
-/// the Allow stands, and is audited.
+/// the Allow stands, and is audited. The tests' seam, with an audit of their own; the app
+/// audits in the project's event log ([`crate::planes::Held::audit_then_record`]).
+#[cfg(test)]
 pub(crate) fn recorded<'a>(
     audit: Audit<'a>,
     record: Option<&'a Record>,
@@ -113,26 +115,53 @@ pub(crate) fn recorded<'a>(
 ) -> impl Fn(Option<u32>, &grant::Audited<'_>) -> Result<(), String> + 'a {
     move |number, audited| {
         audit(number, audited)?;
-        if let Some(record) = record {
-            let at = now_secs();
-            let entry = if audited.granted {
-                let (chat, persona) = number.map(|n| chat_of(chats, n)).unwrap_or_default();
-                Entry::allowed(
-                    audited.what,
-                    audited.target,
-                    audited.level.word(),
-                    chat,
-                    persona.as_deref(),
-                    at,
-                )
-            } else {
-                Entry::removed(audited.what, audited.target, audited.level.word(), at)
-            };
-            if let Err(why) = record.write(root, &entry) {
-                tracing::warn!("purlis: an Allow was not kept in the network record ({why})");
-            }
-        }
+        keep_audited(record, root, chats, number, audited);
         Ok(())
+    }
+}
+
+impl crate::planes::Held {
+    /// **Audit, then record** (#1681), for this project: each Allow and removal is audited in
+    /// its event log first, then written to `record` with the chat it came from; a record that
+    /// cannot be written changes nothing. What every command that grants or takes back answers
+    /// its audit with.
+    pub(crate) fn audit_then_record<'a>(
+        &'a self,
+        record: Option<&'a Record>,
+    ) -> impl Fn(Option<u32>, &grant::Audited<'_>) -> Result<(), String> + 'a {
+        move |number, audited| {
+            self.hooks().record_grant(self.root(), number, audited)?;
+            keep_audited(record, self.root(), self.chats(), number, audited);
+            Ok(())
+        }
+    }
+}
+
+/// Writes an Allow or removal, audited already, to `record` with the chat it came from.
+fn keep_audited(
+    record: Option<&Record>,
+    root: &Path,
+    chats: &crate::chats::Chats,
+    number: Option<u32>,
+    audited: &grant::Audited<'_>,
+) {
+    let Some(record) = record else { return };
+    let Some(what) = record::What::of_word(audited.what) else {
+        tracing::warn!(
+            "purlis: an Allow of a kind the network record has no word for was not kept in it"
+        );
+        return;
+    };
+    let at = now_secs();
+    let scope = record::Scope::from(audited.level);
+    let entry = if audited.granted {
+        let (chat, persona) = number.map(|n| chat_of(chats, n)).unwrap_or_default();
+        Entry::allowed(what, audited.target, scope, chat, persona.as_deref(), at)
+    } else {
+        Entry::removed(what, audited.target, scope, at)
+    };
+    if let Err(why) = record.write(root, &entry) {
+        tracing::warn!("purlis: an Allow was not kept in the network record ({why})");
     }
 }
 
@@ -160,15 +189,15 @@ pub(crate) fn record_settings_host(
     };
     let Some(host) = host else { return };
     let scope = match which {
-        crate::settings::SettingsWhich::Shared => grant::Level::Project,
-        crate::settings::SettingsWhich::Local => grant::Level::You,
-    }
-    .word();
+        crate::settings::SettingsWhich::Shared => record::Scope::Project,
+        crate::settings::SettingsWhich::Local => record::Scope::You,
+    };
     let at = now_secs();
+    let what = record::What::Host;
     let entry = if allowed {
-        Entry::allowed("host", &host, scope, record::Chat::default(), None, at)
+        Entry::allowed(what, &host, scope, record::Chat::default(), None, at)
     } else {
-        Entry::removed("host", &host, scope, at)
+        Entry::removed(what, &host, scope, at)
     };
     if let Err(why) = record.write(root, &entry) {
         tracing::warn!("purlis: a host change was not kept in the network record ({why})");
@@ -523,9 +552,14 @@ pub fn chat_network(
 /// by the same path a block's Notice keeps it by (`sandboxing::kept_for`), for this project on
 /// this machine or for everyone in it. No chat is named, so none is owed a restart: each takes
 /// it from its next start.
+///
+/// **Only a host `lately` has a refused connection to** (#1681): what the row offered, never
+/// any host the window names. A host the record never refused, one a program only said it
+/// looked up, or the same host on another port is refused, and nothing is audited.
 fn allow_blocked(
     root: &Path,
     chats: &crate::chats::Chats,
+    lately: &[Entry],
     host: &str,
     level: GrantLevel,
     audit: Audit<'_>,
@@ -538,6 +572,20 @@ fn allow_blocked(
         0,
         (crate::sandboxing::GrantWhat::Host, host, level),
     )?;
+    let named = what.target();
+    let refused_here = lately.iter().any(|entry| {
+        entry.event == record::Event::Block
+            && entry.block.is_some_and(|block| {
+                (block.operation, block.kind) == (Operation::Connect, Kind::Host)
+            })
+            && entry.target.as_deref() == Some(named.as_str())
+    });
+    if !refused_here {
+        return Err(format!(
+            "purlis allowed nothing: {named} is not a connection refused here lately, so it \
+             cannot be allowed from Blocked lately."
+        ));
+    }
     let kept = crate::sandboxing::kept_for(root, chats, None, (&what, level), audit, at)?;
     Ok(Allowed {
         // Whether any running chat took it at once (#1666); none is owed a restart from here.
@@ -569,12 +617,14 @@ pub fn allow_blocked_host(
     level: GrantLevel,
 ) -> Result<Allowed, String> {
     let held = planes.held(&plane)?;
-    let root = held.root().to_path_buf();
-    let audit = |number: Option<u32>, audited: &grant::Audited<'_>| {
-        held.hooks().record_grant(&root, number, audited)
-    };
-    let audit = recorded(&audit, planes.network(), &root, held.chats());
-    allow_blocked(&root, held.chats(), &host, level, &audit, now_secs())
+    let root = held.root();
+    let at = now_secs();
+    let lately = planes
+        .network()
+        .map(|record| record.read(root, at))
+        .unwrap_or_default();
+    let audit = held.audit_then_record(planes.network());
+    allow_blocked(root, held.chats(), &lately, &host, level, &audit, at)
 }
 
 #[cfg(test)]

@@ -510,14 +510,11 @@ pub fn allow_persona_hosts(
 ) -> Result<SandboxState, String> {
     let held = planes.held(&plane)?;
     let root = held.root().to_path_buf();
-    let audit = |number, audited: &sandbox::grant::Audited<'_>| {
-        held.hooks().record_grant(&root, number, audited)
-    };
     allow_persona(
         &root,
         &persona,
         &digest,
-        &crate::network::recorded(&audit, planes.network(), &root, held.chats()),
+        &held.audit_then_record(planes.network()),
         now_secs(),
     )?;
     Ok(state_of(&root))
@@ -1055,16 +1052,13 @@ pub fn allow_sandbox_block(
     let block = crate::taskblocks::shown_one(held.chats().blocks(), session, &shown)?;
     let (what, target) = (shown.what, shown.target);
     let root = held.root().to_path_buf();
-    let audit = |number, audited: &sandbox::grant::Audited<'_>| {
-        held.hooks().record_grant(&root, number, audited)
-    };
     let allowed = allow(
         &root,
         &sandbox::Machine::this(),
         held.chats(),
         session,
         (what, &target, level),
-        &crate::network::recorded(&audit, planes.network(), &root, held.chats()),
+        &held.audit_then_record(planes.network()),
         now_secs(),
     )?;
     // Answered: neither this Notice nor a question for several tasks answers it again.
@@ -1463,17 +1457,14 @@ pub async fn revoke_sandbox_grant(
     let network = planes.network().cloned();
     // On a blocking thread, as `sandbox_grants` is: the list it answers asks git (#1543).
     crate::off_the_window("revoking a sandbox grant", move || {
-        let root = held.root().to_path_buf();
-        let audit = |number, audited: &sandbox::grant::Audited<'_>| {
-            held.hooks().record_grant(&root, number, audited)
-        };
+        let root = held.root();
         revoke(
-            &root,
+            root,
             held.chats(),
             &id,
-            &crate::network::recorded(&audit, network.as_ref(), &root, held.chats()),
+            &held.audit_then_record(network.as_ref()),
         )?;
-        Ok(grants_of(&root, held.chats()))
+        Ok(grants_of(root, held.chats()))
     })
     .await
 }

@@ -38,16 +38,19 @@ pub enum By {
     You,
     /// An **Allowed host** kept for this chat alone.
     Chat,
+    /// An **Allowed host** for everyone in the project, taken live by a running chat (#1709):
+    /// carried as an Open host is, and kept in the record by the scope the person chose. From
+    /// the chat's next start it is an Open host ([`By::Open`]), as a committed host is.
+    Project,
 }
 
-/// The scope an Allow kept at `level` is carried at (#1666): everyone in the project's is an
-/// Open host, as a committed host is.
+/// The scope an Allow kept at `level` is carried at (#1666, #1709).
 impl From<super::grant::Level> for By {
     fn from(level: super::grant::Level) -> Self {
         match level {
             super::grant::Level::Chat => Self::Chat,
             super::grant::Level::You => Self::You,
-            super::grant::Level::Project => Self::Open,
+            super::grant::Level::Project => Self::Project,
         }
     }
 }
@@ -70,7 +73,8 @@ pub enum Refused {
 pub enum Decision {
     Open,
     Persona,
-    /// An Allowed host, at the scope it was kept at ([`By::You`] or [`By::Chat`]).
+    /// An Allowed host, at the scope it was kept at ([`By::You`], [`By::Chat`], or
+    /// [`By::Project`] taken live).
     Allowed(By),
     /// Nothing lists it, and a person could allow it.
     Ask,
@@ -90,6 +94,7 @@ impl Decision {
             Self::Persona => "persona",
             Self::Allowed(By::You) => "you",
             Self::Allowed(By::Chat) => "chat",
+            Self::Allowed(By::Project) => "project",
             // Never built: an Open or a Persona listing decides as itself.
             Self::Allowed(By::Open) => "open",
             Self::Allowed(By::Persona) => "persona",
@@ -107,7 +112,7 @@ impl Decision {
         match by {
             By::Open => Self::Open,
             By::Persona => Self::Persona,
-            By::You | By::Chat => Self::Allowed(by),
+            By::You | By::Chat | By::Project => Self::Allowed(by),
         }
     }
 }
@@ -127,7 +132,7 @@ impl Reach {
     /// for this chat), each layer's entries as written.
     pub fn of(mut listed: Vec<(String, By)>) -> Self {
         listed.sort_by_key(|(_, by)| match by {
-            By::Open => 0,
+            By::Open | By::Project => 0,
             By::Persona => 1,
             By::You => 2,
             By::Chat => 3,
@@ -145,6 +150,22 @@ impl Reach {
         Self {
             never: hosts,
             ..self
+        }
+    }
+
+    /// This, also listing each of `more` at its layer, where it is not listed there already,
+    /// in the order the layers decide.
+    #[must_use]
+    pub fn and(self, more: impl IntoIterator<Item = (String, By)>) -> Self {
+        let Self { mut listed, never } = self;
+        for one in more {
+            if !listed.contains(&one) {
+                listed.push(one);
+            }
+        }
+        Self {
+            never,
+            ..Self::of(listed)
         }
     }
 

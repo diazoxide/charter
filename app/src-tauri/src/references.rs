@@ -190,6 +190,21 @@ pub fn start_chat_here(
     )
 }
 
+/// How many times "Start a chat here" asks for its branch's folder while every reader place is
+/// taken: once more. Each busy answer has already waited the reader's deadline, and the person
+/// who pressed it is waiting too.
+const BUSY_TRIES: usize = 2;
+
+/// The folder of the branch `find` finds, asked again once if it met every reader place taken
+/// (#1189); what refused it otherwise, as a sentence.
+fn folder_found(
+    find: impl FnMut() -> Result<purlis_core::files::Root, purlis_core::files::Refused>,
+) -> Result<std::path::PathBuf, String> {
+    crate::branchwatch::asked_past_busy(BUSY_TRIES, find)
+        .and_then(|found| found.folder(""))
+        .map_err(|why| why.to_string())
+}
+
 /// [`start_chat_here`], against a project the registry has already vouched for.
 pub fn here(
     held: &Arc<Held>,
@@ -202,9 +217,7 @@ pub fn here(
     let root = held.root().to_path_buf();
     // The branch's folder is found by the bounded reader's child, so this process starts no git
     // for it (#1189).
-    let folder = purlis_core::files::root(&crate::reader(), &root, at)
-        .and_then(|found| found.folder(""))
-        .map_err(|why| why.to_string())?;
+    let folder = folder_found(|| purlis_core::files::root(&crate::reader(), &root, at))?;
     let made =
         reference::of(&root, at, path, lines, Some(&folder)).map_err(|why| why.to_string())?;
     let (profile, kind) = curation::default_profile(&root, "no chat was started")?;
@@ -268,6 +281,40 @@ fn label_for(path: &str) -> String {
 mod tests {
     use super::*;
     use std::sync::Mutex;
+
+    /// #1189: "Start a chat here" asks again once when its folder found every reader place
+    /// taken, and then says the reader was busy; a read that failed otherwise is said at once.
+    #[test]
+    fn start_a_chat_here_asks_a_busy_reader_once_more_then_says_it_was_busy() {
+        let busy = || {
+            purlis_core::files::Refused::Read(format!(
+                "{}it was busy reading other branches for 30 seconds",
+                purlis_core::files::READ_FAILED
+            ))
+        };
+        let mut asks = 0;
+        let said = folder_found(|| {
+            asks += 1;
+            Err(busy())
+        });
+        assert_eq!(asks, 2);
+        assert_eq!(said, Err(busy().to_string()));
+
+        let mut asks = 0;
+        let said = folder_found(|| {
+            asks += 1;
+            if asks < 2 {
+                Err(busy())
+            } else {
+                Err(purlis_core::files::Refused::Read("gone".into()))
+            }
+        });
+        assert_eq!(asks, 2);
+        assert_eq!(
+            said,
+            Err(purlis_core::files::Refused::Read("gone".into()).to_string())
+        );
+    }
 
     const SIZE: Size = Size {
         columns: 80,
