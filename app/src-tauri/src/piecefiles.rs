@@ -435,7 +435,7 @@ impl From<YourEditor> for Editor {
 /// `$VISUAL`/`$EDITOR` started, on a blocking thread: [`youreditor::start`] waits up to
 /// [`youreditor::AT_ONCE`] to hear whether the editor exited at once (#1044), which the window's
 /// own thread must never wait for.
-async fn started(program: String, args: Vec<std::ffi::OsString>) -> Result<(), String> {
+pub(crate) async fn started(program: String, args: Vec<std::ffi::OsString>) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || youreditor::start(&program, &args))
         .await
         .map_err(|err| format!("starting your editor did not finish: {err}"))?
