@@ -59,7 +59,17 @@ export const SHAPES: Readonly<Record<ShownShape, LucideIcon>> = {
  * was not on screen: a task that started needing you under a session that had folded by
  * itself. It did change, and nothing here saw it, so the list says so.
  */
-export function StateShown({ shown, changed = false }: { shown: Shown; changed?: boolean }) {
+export function StateShown({
+  shown,
+  changed = false,
+  markOnly = false,
+}: {
+  shown: Shown;
+  changed?: boolean;
+  /** Draws the mark alone, as a one-line row says its state (#1675, #1687): the word is still
+   *  the row's to a screen reader, out of sight where it stands (`.hidden-words`). */
+  markOnly?: boolean;
+}) {
   const Shape = SHAPES[shown.shape];
   // A state this row CHANGED to, not the one it was drawn in (`useArrived`).
   const arrived = useArrived(shown.kind) || changed;
@@ -83,7 +93,7 @@ export function StateShown({ shown, changed = false }: { shown: Shown; changed?:
       >
         <Shape />
       </span>
-      <span className="word">{shown.word}</span>
+      <span className={markOnly ? "word hidden-words" : "word"}>{shown.word}</span>
     </span>
   );
 }

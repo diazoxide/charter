@@ -173,7 +173,13 @@ function FinishedRow({
   // What it used, kept when it ended (#1500): on its name's hover, read as the pointer comes
   // on. A task still waiting to start has no record to read.
   const used = useTokensOnHover({ finished: task.id });
-  const hover = [firstLine(task.report), waits === null ? (used.said ?? "") : ""]
+  /** How it ended, whole: the row draws only its mark (#1687). */
+  const ended = [
+    state?.word,
+    more,
+    task.attempts > 1 ? `tried ${task.attempts} times` : undefined,
+  ].filter((one) => one !== undefined);
+  const hover = [ended.join(" · "), firstLine(task.report), waits === null ? (used.said ?? "") : ""]
     .filter((one) => one !== "")
     .join("\n");
   const doing = (what: Promise<string | undefined>) => {
@@ -224,12 +230,28 @@ function FinishedRow({
           >
             {task.name}
           </span>
-          {/* How it ended, as every row says a state: the mark and the word a chat's row
-            wears (#1484). The core's own word follows where it says more than that word
-            does (blocked), so no end is said less exactly here. */}
-          {state !== undefined && <StateShown shown={state} />}
-          {more !== undefined && <span className="outcome">{more}</span>}
-          {task.attempts > 1 && <span className="outcome">tried {task.attempts} times</span>}
+          {/* How it ended, as a chat's row says a state (#1484): **one line, its mark**
+            (#1687, as #1675 made a chat's row), the word the row's to a screen reader and whole
+            in its tooltip. The core's own word follows where it says more than that word does
+            (blocked), so no end is said less exactly here. */}
+          {state !== undefined && (
+            <>
+              {" "}
+              <StateShown shown={state} markOnly />
+            </>
+          )}
+          {more !== undefined && (
+            <>
+              {" "}
+              <span className="outcome hidden-words">{more}</span>
+            </>
+          )}
+          {task.attempts > 1 && (
+            <>
+              {" "}
+              <span className="outcome hidden-words">tried {task.attempts} times</span>
+            </>
+          )}
         </button>
         {openBrief !== undefined && (
           <button

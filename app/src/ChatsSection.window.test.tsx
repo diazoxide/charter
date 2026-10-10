@@ -16,7 +16,7 @@ import type { FinishedTask, Moved, OpenChat } from "./bindings";
 import type { State } from "./chatState";
 import { drawnWith } from "./cascade.testkit";
 import { card, cardOf as cardOfRow, facts, theCard } from "./chatCard.testkit";
-import { CARD_LEAVE_MS } from "./ChatsSection";
+import { CARD_DELAY_MS, CARD_LEAVE_MS, CARD_SKIP_MS } from "./ChatsSection";
 import { forgetThisLaunch } from "./regions";
 import { GLOBAL } from "./windowprefs";
 import type { Shown } from "./shownState";
@@ -1856,6 +1856,50 @@ describe("a chat's row is one line, with a hover card (#1675)", () => {
     await userEvent.keyboard("{Shift}");
     act(() => row(tree, "devops 3").focus());
     expect(facts(await theCard())).toMatchObject({ Workspace: "beta" });
+  });
+
+  it("has one card up at a time: the keyboard's goes when the pointer brings up another (#1687)", async () => {
+    core(threeTasks());
+    render(<App />);
+    const tree = await section();
+    await waitFor(() => expect(shape(tree)).toHaveLength(4));
+
+    // The keyboard rests on one row, and its card comes up.
+    await userEvent.keyboard("{Shift}");
+    act(() => row(tree, "devops 2").focus());
+    expect(await theCard()).toHaveTextContent("devops 2");
+
+    // The pointer rests on another: its card, and that one alone.
+    await userEvent.hover(row(tree, "devops 3"));
+    await waitFor(() => expect(card()).toHaveTextContent("devops 3"));
+    expect(screen.getAllByRole("tooltip")).toHaveLength(1);
+    expect(row(tree, "devops 2").getAttribute("aria-describedby")).toBeNull();
+  });
+
+  it("brings the next row's card up at once while one is up, as an editor's hovers do (#1687)", async () => {
+    core(threeTasks());
+    render(<App />);
+    const tree = await section();
+    await waitFor(() => expect(shape(tree)).toHaveLength(4));
+
+    await userEvent.hover(row(tree, "devops 2"));
+    expect(await theCard()).toHaveTextContent("devops 2");
+
+    // From one row to the next: no second wait.
+    await userEvent.unhover(row(tree, "devops 2"));
+    await userEvent.hover(row(tree, "devops 3"));
+    await new Promise((done) => setTimeout(done, CARD_DELAY_MS / 5));
+    expect(card()).toHaveTextContent("devops 3");
+    expect(screen.getAllByRole("tooltip")).toHaveLength(1);
+
+    // Once every card has been down a while, a row is rested on again before its card comes.
+    await userEvent.unhover(row(tree, "devops 3"));
+    await waitFor(() => expect(card()).toBeNull());
+    await new Promise((done) => setTimeout(done, CARD_SKIP_MS * 2));
+    await userEvent.hover(row(tree, "devops 4"));
+    await new Promise((done) => setTimeout(done, CARD_DELAY_MS / 5));
+    expect(card()).toBeNull();
+    expect(await theCard()).toHaveTextContent("devops 4");
   });
 
   it("shows a folded chat's tasks as a small count, and an open one's as its rows with guides", async () => {
