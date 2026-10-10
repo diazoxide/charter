@@ -684,6 +684,37 @@ mod tests {
         assert_eq!(template("projects/acme/sub/api"), "projects/{}");
     }
 
+    /// #1022: a subgroup named like a word GitLab puts under a repo or group (`issues`,
+    /// `boards`, …) is masked whole in the form purlis sends: encoded as one segment
+    /// ([`crate::forge::quote`]), so no word inside it can end the id.
+    #[test]
+    fn an_encoded_subgroup_named_like_a_sub_resource_is_one_masked_id() {
+        let id = crate::forge::quote("acme/issues/api");
+        assert_eq!(id, "acme%2Fissues%2Fapi");
+        assert_eq!(
+            template(&format!("projects/{id}/merge_requests/3")),
+            "projects/{}/merge_requests/{}"
+        );
+        assert_eq!(
+            template(&format!(
+                "groups/{}/epics/4",
+                crate::forge::quote("acme/boards")
+            )),
+            "groups/{}/epics/{}"
+        );
+    }
+
+    /// The known edge, kept as it is: sent unencoded, which purlis never does, such a subgroup
+    /// ends the id at its sub-resource word, so the parts after that word are judged as path
+    /// words. Every name is still masked; only the template's shape is wrong.
+    #[test]
+    fn an_unencoded_subgroup_named_like_a_sub_resource_ends_the_id_early() {
+        assert_eq!(
+            template("projects/acme/issues/api/merge_requests/3"),
+            "projects/{}/issues/{}/merge_requests/{}"
+        );
+    }
+
     #[test]
     fn a_name_after_any_collection_word_is_masked_however_it_is_spelled() {
         assert_eq!(template("orgs/o/members/search"), "orgs/{}/members/{}");
