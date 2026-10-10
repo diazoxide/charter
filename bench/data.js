@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791616805775,
+  "lastUpdate": 1791618184451,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -5586,6 +5586,48 @@ window.BENCHMARK_DATA = {
             "value": 104.806816,
             "unit": "ms",
             "extra": "median of 5 runs: 103.493, 104.430, 104.807, 104.818, 105.915 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "eyehollow@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "dbrownsimple"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "480071c6d0cb2540d2004d25178d8318565f6612",
+          "message": "Name a working route on Linux, wipe kept tokens, and keep vault list off the keyring\n\nReview round on the #1638 fix:\n- Where the app runs no command for a sandboxed chat yet (Linux), the\n  refusal now says to run it in a terminal outside the chat instead of\n  naming a `secret exec` route the app would refuse.\n- The per-run memo holds each kept token in a zeroizing string, so it is\n  wiped when the command's context goes.\n- `vault list` no longer runs `op` for a 1Password vault whose token is\n  kept in the keyring; its status says where the token is and that\n  `vault verify` reads it, as the guide said (#1180).\n- ADR 0047's amendment, the secrets guide, the skill and the changelog\n  say so, including the Linux behaviour change.\n\nRefs #1638, #1180\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nAssisted-by: claude-code:claude-opus-5-5\nPurlis-Chat: 01M4AREQXXRGBAEWM0SZ0N0WBN\nPurlis-Persona: steward",
+          "timestamp": "2026-10-10T11:20:02+04:00",
+          "tree_id": "454414032cc56313a53d73a741c39170c0a02b7d",
+          "url": "https://github.com/purlis/purlis/commit/480071c6d0cb2540d2004d25178d8318565f6612"
+        },
+        "date": 1791618183797,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.35428800000000005,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.330, 0.347, 0.354, 0.356, 0.389 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.495728999999997,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.337, 16.416, 16.496, 16.530, 16.818 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 102.32423,
+            "unit": "ms",
+            "extra": "median of 5 runs: 102.244, 102.249, 102.324, 102.708, 102.876 ms"
           }
         ]
       }
