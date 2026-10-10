@@ -298,18 +298,25 @@ fn a_folder_another_process_works_in_is_found_by_lsofs_answer() {
 
     assert_eq!(
         lsof_cwds(listing, "200"),
-        vec![(
+        Ok(vec![(
             "process 100".to_owned(),
             PathBuf::from("/Users/op/.config/purlis/local-plane/workspaces")
-        )]
+        )])
     );
+}
+
+#[test]
+fn an_lsof_answer_that_does_not_show_this_process_is_refused() {
+    let listing = "p100\nfcwd\nn/tmp\n";
+
+    assert!(lsof_cwds(listing, "200").is_err());
 }
 
 #[test]
 fn this_process_working_in_a_folder_does_not_make_it_in_use() {
     let dir = tempfile::tempdir().expect("a directory");
 
-    assert_eq!(in_use(dir.path()), None);
+    assert_eq!(in_use_with(dir.path(), &[]), None);
 }
 
 #[test]
@@ -321,7 +328,7 @@ fn a_folder_another_process_works_in_is_in_use() {
     sleep.arg("30").current_dir(at.join("workspaces"));
     let mut other = crate::forklock::spawn(&mut sleep).expect("another process");
 
-    let said = in_use(&at);
+    let said = in_use_with(&at, &[]);
 
     let _ = other.kill();
     let _ = other.wait();
@@ -356,4 +363,182 @@ fn the_doctor_names_only_the_local_project_still_in_the_config_home() {
         still_in_the_config_home(&places.current(), &places.config_root),
         None
     );
+}
+
+/// A launch that died after the rename and before the pointer: the old place is empty, and
+/// the journal names the folder now in the new place.
+fn died_before_the_pointer(machine: &Old) {
+    let (old, new) = (machine.places.old(), machine.places.current());
+    let id = folder_id(&old).expect("an identity");
+    write_journal(&machine.places, id).expect("the journal");
+    std::fs::create_dir_all(new.parent().expect("a parent")).expect("the data home");
+    std::fs::rename(&old, &new).expect("renamed");
+}
+
+#[test]
+fn a_launch_that_died_before_the_pointer_is_finished_by_the_next() {
+    let machine = an_old_local_project();
+    let (old, new) = (machine.places.old(), machine.places.current());
+    died_before_the_pointer(&machine);
+
+    let answer = run(&machine.places, &REAL);
+
+    assert_eq!(
+        answer,
+        Moved::Moved {
+            from: old.clone(),
+            to: new.clone()
+        }
+    );
+    let store = crate::machine::read(&machine.places.config_root).store;
+    assert_eq!(store.recents[0].plane, new);
+    assert!(store.recents[0].pinned, "the pin did not go with it");
+    let worktree = moved(&machine, &machine.worktree);
+    assert!(
+        std::fs::read_to_string(worktree.join(".git"))
+            .expect(".git")
+            .contains(new.to_str().expect("UTF-8")),
+        "the worktree still names the old place"
+    );
+    assert!(
+        std::fs::symlink_metadata(machine.places.journal()).is_err(),
+        "the journal stayed"
+    );
+    assert_eq!(
+        run(&machine.places, &REAL),
+        Moved::Nothing,
+        "a second launch"
+    );
+}
+
+#[test]
+fn a_journal_of_another_folder_moves_no_approval_to_the_new_place() {
+    let machine = an_old_local_project();
+    let (old, new) = (machine.places.old(), machine.places.current());
+    died_before_the_pointer(&machine);
+    // The moved folder went away and another was made in its place.
+    std::fs::rename(&new, old.with_file_name("gone")).expect("away");
+    std::fs::create_dir_all(&new).expect("another folder");
+
+    assert_eq!(run(&machine.places, &REAL), Moved::Nothing);
+
+    let store = crate::machine::read(&machine.places.config_root).store;
+    assert_eq!(
+        store.recents[0].plane, old,
+        "the old place's approval moved"
+    );
+    assert!(
+        std::fs::symlink_metadata(&old).is_err(),
+        "a pointer was made"
+    );
+    assert!(std::fs::symlink_metadata(machine.places.journal()).is_err());
+}
+
+#[test]
+fn a_worktree_link_half_rewritten_by_a_launch_that_died_is_finished() {
+    let machine = an_old_local_project();
+    let (old, new) = (machine.places.old(), machine.places.current());
+    let worktree = moved(&machine, &machine.worktree);
+    let record = new.join("workspaces/shop/shop/.git/worktrees/first-task-1");
+    std::fs::create_dir_all(new.parent().expect("a parent")).expect("the data home");
+    std::fs::rename(&old, &new).expect("renamed");
+    std::os::unix::fs::symlink(&new, &old).expect("the pointer");
+    // The record names the new place; the worktree's own file was never reached.
+    std::fs::write(
+        record.join("gitdir"),
+        format!("{}\n", worktree.join(".git").display()),
+    )
+    .expect("gitdir");
+
+    let answer = run(&machine.places, &REAL);
+
+    assert!(matches!(answer, Moved::Moved { .. }), "{answer:?}");
+    assert_eq!(
+        std::fs::read_to_string(worktree.join(".git")).expect(".git"),
+        format!("gitdir: {}\n", record.display())
+    );
+}
+
+#[test]
+fn a_link_a_chat_planted_in_the_project_is_never_written_through() {
+    let machine = an_old_local_project();
+    let old = machine.places.old();
+    let base = machine
+        .places
+        .config_root
+        .parent()
+        .expect("the base")
+        .to_path_buf();
+    let outside = base.join("outside.txt");
+    std::fs::write(&outside, format!("gitdir: {}/x\n", old.display())).expect("outside");
+    // A worktree record that is a link, and one whose path walks up out of the project.
+    let records = old.join("workspaces/shop/shop/.git/worktrees");
+    std::fs::create_dir_all(records.join("linked")).expect("a record");
+    std::os::unix::fs::symlink(&outside, records.join("linked/gitdir")).expect("a link");
+    std::fs::create_dir_all(records.join("up")).expect("a record");
+    std::fs::write(
+        records.join("up/gitdir"),
+        format!("{}/../../../outside.txt\n", old.display()),
+    )
+    .expect("gitdir");
+
+    run(&machine.places, &REAL);
+
+    assert_eq!(
+        std::fs::read_to_string(&outside).expect("outside"),
+        format!("gitdir: {}/x\n", old.display()),
+        "a file outside the project was written"
+    );
+}
+
+#[test]
+fn a_worktree_outside_the_project_keeps_the_pointer_and_is_never_written() {
+    let machine = an_old_local_project();
+    let (old, new) = (machine.places.old(), machine.places.current());
+    let base = machine
+        .places
+        .config_root
+        .parent()
+        .expect("the base")
+        .to_path_buf();
+    let outside = base.join("elsewhere/wt");
+    std::fs::create_dir_all(&outside).expect("an outside worktree");
+    let record = old.join("workspaces/shop/shop/.git/worktrees/wt");
+    std::fs::create_dir_all(&record).expect("its record");
+    std::fs::write(
+        record.join("gitdir"),
+        format!("{}\n", outside.join(".git").display()),
+    )
+    .expect("gitdir");
+    let back = format!("gitdir: {}\n", record.display());
+    std::fs::write(outside.join(".git"), &back).expect(".git");
+
+    let answer = run(&machine.places, &REAL);
+
+    assert!(
+        matches!(&answer, Moved::PointerKept { why, .. } if why.contains("git worktree repair")),
+        "{answer:?}"
+    );
+    assert_eq!(std::fs::read_link(&old).expect("the pointer"), new);
+    assert_eq!(
+        std::fs::read_to_string(outside.join(".git")).expect(".git"),
+        back
+    );
+}
+
+#[test]
+fn a_data_home_in_the_config_home_is_no_new_place() {
+    let machine = an_old_local_project();
+    let places = Places {
+        config_root: machine.places.config_root.clone(),
+        data_home: crate::machine::dir(&machine.places.config_root).join("data"),
+    };
+
+    let answer = run(&places, &REAL);
+
+    assert!(
+        matches!(&answer, Moved::Left { why, .. } if why.contains("config home")),
+        "{answer:?}"
+    );
+    assert!(places.old().join("workspaces").is_dir());
 }
