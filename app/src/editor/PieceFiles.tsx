@@ -29,7 +29,7 @@
  * branch, the path, the line and which editor; the core checks the path as it checks a read,
  * and builds the URL or the program's arguments itself.
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Markdown, { type Components } from "react-markdown";
 import { Group, Panel, Separator, type Layout } from "react-resizable-panels";
 import { FileText, LoaderCircle } from "lucide-react";
@@ -52,6 +52,20 @@ import { DragHandle, PickAChat, type Referenced } from "../references";
 import { useBranchMoved } from "./branchMoved";
 import { readAt } from "./lastRead";
 import { Said, ToYourEditor } from "./ToYourEditor";
+import {
+  MOST_PIXELS,
+  SVG,
+  animated,
+  bytesOf,
+  isSvg,
+  openFrames,
+  svgSide,
+  useInSight,
+  usePlayback,
+  useSvgDraws,
+  type Frames,
+} from "./imagePreview";
+import { motionReduced } from "../theme/motion";
 
 export { ToYourEditor };
 
@@ -270,28 +284,50 @@ const MARKDOWN: Components = {
 };
 
 /**
- * An image, drawn on a canvas from its bytes.
+ * An image, drawn on a canvas from its bytes (`imagePreview.ts`).
  *
  * **Decoded here, never loaded from a URL**: the window's CSP gives images no source but the
  * app's own (`tauri.conf.json`), and a `data:` or `blob:` source would be one more way for
  * whatever the window shows to fetch. `createImageBitmap` decodes bytes it is handed and loads
- * nothing. An animated image shows its first frame.
+ * nothing.
+ *
+ * **An animated image plays** (#1132) on the same canvas, frame by frame from the same bytes,
+ * where the webview has WebCodecs' `ImageDecoder`, with *Pause* beside it. It plays only while
+ * it can be seen: a tab put behind another, or the window hidden, stops it where it is. Under
+ * reduced motion it shows its first frame and *Play*. Where the webview has no decoder for
+ * frames, its first frame is said to be one.
  */
-function ImagePreview({ name, mime, base64 }: { name: string; mime: string; base64: string }) {
+function ImagePreview({
+  name,
+  mime,
+  bytes,
+}: {
+  name: string;
+  mime: string;
+  bytes: Uint8Array<ArrayBuffer>;
+}) {
   const canvas = useRef<HTMLCanvasElement>(null);
-  const [drawn, setDrawn] = useState<{ of: string; size?: string; trouble?: string }>();
+  const [drawn, setDrawn] = useState<{ of: Uint8Array; size?: string; trouble?: string }>();
+  const moving = useMemo(() => animated(bytes, mime), [bytes, mime]);
+  const [opened, setOpened] = useState<{ of: Uint8Array; frames?: Frames }>();
+  const [paused, setPaused] = useState(motionReduced);
+  const inSight = useInSight(canvas);
   useEffect(() => {
     let gone = false;
     const say = (got: { size?: string; trouble?: string }) => {
-      if (!gone) setDrawn({ of: base64, ...got });
+      if (!gone) setDrawn({ of: bytes, ...got });
     };
     void (async () => {
       try {
-        const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
         const bitmap = await createImageBitmap(new Blob([bytes], { type: mime }));
         const to = canvas.current;
         if (gone || to === null) {
           bitmap.close();
+          return;
+        }
+        if (bitmap.width * bitmap.height > MOST_PIXELS) {
+          bitmap.close();
+          say({ trouble: huge(name, bitmap) });
           return;
         }
         to.width = bitmap.width;
@@ -306,16 +342,80 @@ function ImagePreview({ name, mime, base64 }: { name: string; mime: string; base
     return () => {
       gone = true;
     };
-  }, [base64, mime, name]);
-  const now = drawn?.of === base64 ? drawn : undefined;
+  }, [bytes, mime, name]);
+  useEffect(() => {
+    if (!moving) return;
+    let gone = false;
+    let held: Frames | undefined;
+    void openFrames(bytes, mime).then((frames) => {
+      if (gone) frames?.close();
+      else {
+        held = frames;
+        setOpened({ of: bytes, frames });
+      }
+    });
+    return () => {
+      gone = true;
+      held?.close();
+    };
+  }, [bytes, mime, moving]);
+  const now = drawn?.of === bytes ? drawn : undefined;
+  const open = opened?.of === bytes ? opened : undefined;
+  const frames = now?.size === undefined ? undefined : open?.frames;
+  usePlayback(
+    frames,
+    (image) => canvas.current?.getContext("2d")?.drawImage(image, 0, 0),
+    !paused && inSight,
+  );
+  const still =
+    moving && open !== undefined && open.frames === undefined
+      ? " · its first frame: this window does not play animation"
+      : "";
   return (
     <figure className="piece-image">
       <canvas ref={canvas} role="img" aria-label={name} />
       <figcaption>
-        {now?.trouble ?? (now?.size === undefined ? mime : `${now.size} · ${mime}`)}
+        {now?.trouble ?? (now?.size === undefined ? mime : `${now.size} · ${mime}${still}`)}
+        {frames !== undefined && (
+          <button type="button" tabIndex={0} onClick={() => setPaused(!paused)}>
+            {paused ? "Play" : "Pause"}
+          </button>
+        )}
       </figcaption>
     </figure>
   );
+}
+
+/** What the preview says of an image past what it draws. */
+function huge(name: string, side: { width: number; height: number }): string {
+  return `${name} is ${side.width} × ${side.height} pixels, past what the preview draws (40 megapixels)`;
+}
+
+/** An image the core sent as base64. */
+function BytesPreview({ name, mime, base64 }: { name: string; mime: string; base64: string }) {
+  const bytes = useMemo(() => bytesOf(base64), [base64]);
+  return <ImagePreview name={name} mime={mime} bytes={bytes} />;
+}
+
+/**
+ * **An SVG drawn as an image** (#1132): its text encoded back to bytes and decoded as an
+ * `image/svg+xml`, so it runs no script and loads nothing it names, as any image does. Never put
+ * into the page as markup. One that declares a canvas past what the preview draws is said by its
+ * size and never decoded.
+ */
+function SvgPreview({ name, text }: { name: string; text: string }) {
+  const bytes = useMemo(() => new TextEncoder().encode(text), [text]);
+  const side = svgSide(text);
+  if (side !== undefined && side.width * side.height > MOST_PIXELS)
+    return (
+      <EmptyState
+        mark={FileText}
+        headline={huge(name, side)}
+        body="Its text is under Source."
+        size="panel"
+      />
+    );
+  return <ImagePreview name={name} mime={SVG} bytes={bytes} />;
 }
 
 /** A file as the preview draws it, or the sentence that says why it does not. */
@@ -336,12 +436,17 @@ function Shown({
   source?: boolean;
 }) {
   const name = path.slice(path.lastIndexOf("/") + 1);
+  const svgDraws = useSvgDraws();
   switch (read.kind) {
     case "reading":
       return <EmptyState mark={LoaderCircle} headline={`Reading ${path}…`} size="panel" />;
     case "refused":
       return <EmptyState headline={read.why} size="panel" testid="piece-file-trouble" />;
     case "text":
+      if (svgDraws === undefined && isSvg(path) && !source)
+        return <EmptyState mark={LoaderCircle} headline={`Reading ${path}…`} size="panel" />;
+      if (svgDraws === true && isSvg(path) && !source)
+        return <SvgPreview key={path} name={name} text={read.text} />;
       return isMarkdown(path) && !source ? (
         <article className="piece-markdown release-notes" data-testid="piece-markdown">
           <Markdown skipHtml components={MARKDOWN}>
@@ -352,12 +457,12 @@ function Shown({
         <LightEditor path={path} text={read.text} line={line} onLine={onLine} onLines={onLines} />
       );
     case "image":
-      return <ImagePreview name={name} mime={read.mime} base64={read.base64} />;
+      return <BytesPreview key={path} name={name} mime={read.mime} base64={read.base64} />;
     case "huge-image":
       return (
         <EmptyState
           mark={FileText}
-          headline={`${name} is ${read.width} × ${read.height} pixels, past what the preview draws (40 megapixels)`}
+          headline={huge(name, read)}
           body="Open it in your editor."
           size="panel"
         />
@@ -455,7 +560,10 @@ function ShowWhatChanged({
   );
 }
 
-/** *Source*, beside a markdown file: its text in the light editor rather than rendered. */
+/**
+ * *Source*, beside a markdown file, or an SVG the window draws: its text in the light editor
+ * rather than rendered.
+ */
 function SourceToggle({
   path,
   read,
@@ -467,7 +575,9 @@ function SourceToggle({
   source: boolean;
   onSource: (source: boolean) => void;
 }) {
-  if (read.kind !== "text" || !isMarkdown(path)) return null;
+  const svgDraws = useSvgDraws();
+  if (read.kind !== "text" || !(isMarkdown(path) || (isSvg(path) && svgDraws === true)))
+    return null;
   return (
     <button type="button" tabIndex={0} aria-pressed={source} onClick={() => onSource(!source)}>
       Source

@@ -10,6 +10,9 @@ import { forgetYourEditor, setYourEditor } from "../yourEditor";
 import { SETTINGS_LINK, type SettingsLinkAsk } from "../settings/links";
 import { REVEAL_SAID, type Offer } from "../actions";
 import { forgetLastRead, KEPT, lastRead, readAt } from "./lastRead";
+import { forgetSvgProbe } from "./imagePreview";
+import { forgetShown, windowShown } from "../test-shown";
+import { REDUCE } from "../theme/motion";
 
 const PLANE = "/plane" as unknown as PlaneId;
 const CUT = { workspace: "alpha", repo: "svc", piece: "fix-it" };
@@ -111,6 +114,7 @@ afterEach(() => {
   clearMocks();
   forgetYourEditor();
   forgetLastRead();
+  forgetSvgProbe();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -382,6 +386,74 @@ describe("the preview (FM-2)", () => {
     expect(drawn).toHaveBeenCalled();
   });
 
+  it("draws an SVG as an image decoded from its bytes, with its text a press away (#1132)", async () => {
+    const decoded: Blob[] = [];
+    const drawn = vi.fn();
+    vi.stubGlobal(
+      "createImageBitmap",
+      vi.fn(async (blob: Blob) => {
+        decoded.push(blob);
+        return { width: 24, height: 16, close: () => undefined };
+      }),
+    );
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
+      drawImage: drawn,
+    } as unknown as CanvasRenderingContext2D);
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="16"/>';
+
+    await preview("icon.svg", { kind: "text", text: svg });
+
+    expect(await screen.findByRole("img", { name: "icon.svg" })).toBeInTheDocument();
+    expect(await screen.findByText("24 × 16 · image/svg+xml")).toBeInTheDocument();
+    expect(drawn).toHaveBeenCalled();
+    expect(screen.queryByTestId("light-editor")).toBeNull();
+    // Handed to the decoder as bytes of an image, never put into the page as markup.
+    const file = decoded.at(-1);
+    expect(file?.type).toBe("image/svg+xml");
+    expect(await file?.text()).toBe(svg);
+    expect(document.querySelector("svg[width='24']")).toBeNull();
+
+    await userEvent.click(screen.getByRole("button", { name: "Source" }));
+
+    await waitFor(() => expect(screen.getByTestId("light-editor")).toHaveTextContent("<svg"));
+    expect(screen.queryByRole("img", { name: "icon.svg" })).toBeNull();
+  });
+
+  it("shows an SVG as its text where the window does not decode SVG from bytes", async () => {
+    vi.stubGlobal(
+      "createImageBitmap",
+      vi.fn(async () => {
+        throw new DOMException("The source image could not be decoded.", "InvalidStateError");
+      }),
+    );
+
+    await preview("icon.svg", { kind: "text", text: "<svg/>" });
+
+    await waitFor(() => expect(screen.getByTestId("light-editor")).toHaveTextContent("<svg/>"));
+    expect(screen.queryByRole("img", { name: "icon.svg" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Source" })).toBeNull();
+  });
+
+  it("says an SVG declaring a huge canvas by its size, and decodes none of it", async () => {
+    const decode = vi.fn(async (blob: Blob) => {
+      if ((await blob.text()).includes("40000")) throw new Error("decoded the huge one");
+      return { width: 1, height: 1, close: () => undefined };
+    });
+    vi.stubGlobal("createImageBitmap", decode);
+
+    await preview("map.svg", {
+      kind: "text",
+      text: '<?xml version="1.0"?>\n<svg width="40000px" height="40000" viewBox="0 0 1 1"/>',
+    });
+
+    expect(
+      await screen.findByText(
+        "map.svg is 40000 × 40000 pixels, past what the preview draws (40 megapixels)",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Source" })).toBeInTheDocument();
+  });
+
   it("says an image declaring a huge canvas by its size, and draws none of it", async () => {
     await preview("bomb.png", {
       kind: "huge-image",
@@ -412,6 +484,160 @@ describe("the preview (FM-2)", () => {
       await screen.findByText("big.log is 3 MiB, past what the preview draws (2 MiB)"),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Open in your editor/ })).toBeInTheDocument();
+  });
+});
+
+describe("an animated image in the preview (#1132)", () => {
+  /** A GIF of two 1×1 frames: animated by its bytes. */
+  const SPINNER =
+    "R0lGODlhAwACAIAAAAAAAP///yH5BAAKAAAALAAAAAABAAEAAAICTAEAIfkEAAoAAAAsAAAAAAEAAQAAAgJMAQA7";
+  const READ: PieceFile = { kind: "image", mime: "image/gif", base64: SPINNER };
+
+  /** What the canvas drew, in order: a frame's index, or "still" for the first decode. */
+  let drawn: (number | "still")[] = [];
+
+  function canvasAndStill() {
+    drawn = [];
+    vi.stubGlobal(
+      "createImageBitmap",
+      vi.fn(async () => ({ width: 3, height: 2, close: () => undefined })),
+    );
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
+      drawImage: (image: { frame?: number }) => drawn.push(image.frame ?? "still"),
+    } as unknown as CanvasRenderingContext2D);
+  }
+
+  /** A webview with WebCodecs' `ImageDecoder`: `frames` frames of 20 ms each, looping. */
+  function decoder(frames = 3) {
+    const made: { data: unknown; type: string }[] = [];
+    const closed = vi.fn();
+    class Decoder {
+      static isTypeSupported = async () => true;
+      tracks = {
+        ready: Promise.resolve(),
+        selectedTrack: { animated: true, frameCount: frames, repetitionCount: Infinity },
+      };
+      completed = Promise.resolve();
+      constructor(init: { data: unknown; type: string }) {
+        made.push(init);
+      }
+      async decode({ frameIndex = 0 }: { frameIndex?: number } = {}) {
+        return { image: { frame: frameIndex, duration: 20_000, close: () => undefined } };
+      }
+      close = closed;
+    }
+    vi.stubGlobal("ImageDecoder", Decoder);
+    return { made, closed };
+  }
+
+  /** Whether an element is in sight, as `IntersectionObserver` tells it. */
+  function sight() {
+    const told: ((entries: { isIntersecting: boolean }[]) => void)[] = [];
+    vi.stubGlobal(
+      "IntersectionObserver",
+      class {
+        constructor(callback: (entries: { isIntersecting: boolean }[]) => void) {
+          told.push(callback);
+        }
+        observe() {}
+        disconnect() {}
+      },
+    );
+    return (seen: boolean) => act(() => told.forEach((tell) => tell([{ isIntersecting: seen }])));
+  }
+
+  const reduceMotion = () =>
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      matches: query === REDUCE,
+      media: query,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+    }));
+
+  const quiet = (ms: number) => new Promise((done) => setTimeout(done, ms));
+
+  async function preview(path: string) {
+    core({ [path]: READ });
+    const shown = render(<PieceFilesTab plane={PLANE} cut={CUT} onOpenView={() => undefined} />);
+    await userEvent.click(await row(path));
+    return shown;
+  }
+
+  afterEach(() => forgetShown());
+
+  it("plays frame by frame on the canvas, decoded from its bytes, and loops", async () => {
+    canvasAndStill();
+    const { made } = decoder(3);
+
+    await preview("spin.gif");
+
+    await waitFor(() => expect(drawn.join()).toContain("0,1,2,0"));
+    expect(made[0]?.type).toBe("image/gif");
+    expect(made[0]?.data).toBeInstanceOf(Uint8Array);
+    expect(screen.getByRole("button", { name: "Pause" })).toBeInTheDocument();
+  });
+
+  it("stops while its tab is out of sight or the window hidden, and lets its decoder go when closed", async () => {
+    canvasAndStill();
+    const { closed } = decoder(3);
+    const seen = sight();
+
+    const { unmount } = await preview("spin.gif");
+    await waitFor(() => expect(drawn.length).toBeGreaterThan(3));
+
+    seen(false);
+    let held = drawn.length;
+    await quiet(120);
+    expect(drawn.length).toBe(held);
+
+    seen(true);
+    await waitFor(() => expect(drawn.length).toBeGreaterThan(held + 2));
+
+    act(() => windowShown(false));
+    held = drawn.length;
+    await quiet(120);
+    expect(drawn.length).toBe(held);
+
+    act(() => windowShown(true));
+    await waitFor(() => expect(drawn.length).toBeGreaterThan(held + 2));
+
+    unmount();
+    expect(closed).toHaveBeenCalled();
+  });
+
+  it("shows one frame and Play under reduced motion, and plays only when asked", async () => {
+    canvasAndStill();
+    decoder(3);
+    reduceMotion();
+
+    await preview("spin.gif");
+
+    const play = await screen.findByRole("button", { name: "Play" });
+    await quiet(120);
+    expect(drawn).toEqual(["still"]);
+
+    await userEvent.click(play);
+
+    await waitFor(() => expect(drawn).toEqual(expect.arrayContaining([1, 2])));
+    await userEvent.click(screen.getByRole("button", { name: "Pause" }));
+    const held = drawn.length;
+    await quiet(120);
+    expect(drawn.length).toBe(held);
+  });
+
+  it("shows its first frame and says so where the window has no decoder for frames", async () => {
+    canvasAndStill();
+
+    await preview("spin.gif");
+
+    expect(
+      await screen.findByText(
+        "3 × 2 · image/gif · its first frame: this window does not play animation",
+      ),
+    ).toBeInTheDocument();
+    expect(drawn).toEqual(["still"]);
+    expect(screen.queryByRole("button", { name: "Play" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Pause" })).toBeNull();
   });
 });
 
