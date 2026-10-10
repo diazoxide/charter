@@ -679,6 +679,37 @@ describe("the one list of actions", () => {
     }
   });
 
+  it("offers one row per profile page of the project in front (#1201, D-1201-4)", async () => {
+    // None until the window holds the project's profiles, and none with no project open.
+    expect(
+      catalogue(now({ plane: "/p/one" })).filter((one) => one.id.includes(".profile.")),
+    ).toEqual([]);
+    expect(
+      catalogue(now({ profiles: ["claude"] })).filter((one) => one.id.includes(".profile.")),
+    ).toEqual([]);
+
+    const offers = catalogue(now({ plane: "/p/one", profiles: ["claude", "codex fast"] }));
+    const rows = offers.filter((one) => one.id.includes(".profile."));
+    expect(rows.map((one) => [one.id, one.title])).toEqual([
+      ["settings.group:project.harness.profile.claude", "Project settings: Profile claude"],
+      ["settings.group:project.harness.profile.codex fast", "Project settings: Profile codex fast"],
+    ]);
+    expect(rows[0]?.note).toBe("The project's Settings, at the profile claude.");
+    expect(rows.every((one) => one.available)).toBe(true);
+
+    const asked: SettingsLinkAsk[] = [];
+    const hear = (event: Event) => asked.push((event as CustomEvent<SettingsLinkAsk>).detail);
+    window.addEventListener(SETTINGS_LINK, hear);
+    try {
+      await run(offers, "settings.group:project.harness.profile.claude", doing());
+      expect(asked).toEqual([
+        { plane: "/p/one", link: { group: "project.harness.profile.claude" } },
+      ]);
+    } finally {
+      window.removeEventListener(SETTINGS_LINK, hear);
+    }
+  });
+
   it("says nothing needs you rather than leaving the queue's row out", () => {
     const empty = by(catalogue(now()), "needs.next");
     expect(empty?.available).toBe(false);
