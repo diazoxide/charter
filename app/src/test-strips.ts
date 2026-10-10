@@ -1,5 +1,5 @@
 import { vi } from "vitest";
-import { screen } from "@testing-library/react";
+import { fireEvent, screen, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 
 /**
@@ -101,4 +101,18 @@ export async function showTheExplorer() {
   // A press of the open view puts the side away, so it is pressed only when it is not open.
   if (tab.getAttribute("aria-selected") !== "true") await userEvent.click(tab);
   return screen.findByRole("navigation", { name: "Explorer" });
+}
+
+/**
+ * **Opens a view of the right side and finds its panel** (#1678), as a person presses the view's
+ * icon on the activity bar: the right side opens on Memory, and a test about another panel
+ * starts where a person would. `view` is the tab's name (`Sessions`); the panel is found by its
+ * test id (`panel-sessions`) inside the view.
+ */
+export async function showThePanel(view: string, testid = `panel-${view.toLowerCase()}`) {
+  const bar = await screen.findByRole("tablist", { name: "Attention" });
+  const tab = await within(bar).findByRole("tab", { name: view });
+  // A press of the open view puts the side away, so it is pressed only when it is not open.
+  if (tab.getAttribute("aria-selected") !== "true") fireEvent.click(tab);
+  return within(await screen.findByRole("tabpanel", { name: view })).findByTestId(testid);
 }

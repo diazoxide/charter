@@ -82,7 +82,8 @@ describe("the window's keyboard reach", () => {
         // The left side's open view (#1673): its other view is hidden, and not a stop.
         ["navigation", ".region-view:not([hidden])"],
         ["panes", ".panes"],
-        ["attention", '[data-testid="panels"]'],
+        // The right side's open view (#1678): its others are hidden, and not stops.
+        ["attention", '.region-views[data-region="aside"] .region-view:not([hidden])'],
         ["status line", ".status-line"],
       ];
       const stops = [...document.querySelectorAll<HTMLElement>("[tabindex]")].filter(

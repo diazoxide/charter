@@ -24,7 +24,7 @@ async function untilAProjectIsDrawn(): Promise<void> {
     timeout: 30_000,
     timeoutMsg: "the explorer was never drawn",
   });
-  await $('[data-testid="panels"]').waitForExist({ timeout: 30_000 });
+  await $('.region-views[data-region="aside"]').waitForExist({ timeout: 30_000 });
 }
 
 describe("the layout file", () => {
@@ -45,7 +45,8 @@ describe("the layout file", () => {
     expect(seen).not.toBeNull();
     expect(seen as Seen).toEqual({
       explorer: ["region-right"],
-      panels: ["region-left"],
+      // The attention region's views (#1678).
+      aside: ["region-left"],
       // `bottom` is put away, so its content was never mounted at all.
     });
   });

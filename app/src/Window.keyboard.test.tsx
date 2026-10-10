@@ -339,12 +339,14 @@ describe("the window's tab order", () => {
       "button End this pane's chat",
       "textarea Terminal 2",
       "separator",
-      // Attention, on the right: its panels are empty and the needs-you queue went to the title
-      // bar (charter-app#249), so its one stop is the Vaults heading's `+` — New vault…, which
-      // needs a plane and not a vault (SI-3).
-      "button New vault…",
+      // Attention, on the right, opens on its Memory view (#1678), which this workspace's
+      // answer leaves empty: no stop. The needs-you queue is the title bar's (charter-app#249),
+      // and the Vaults view, with its `+`, is hidden while Memory is open.
       // The handle above the bottom region, which has no controls of its own.
       "separator",
+      // The right side's activity bar (#1678): ONE stop, the open view's tab. It is the window's
+      // rightmost column, beside the bottom region too, so it comes after it.
+      "tab Memory",
       // The status line: the region toggles at its left, then Alerts and the doctor.
       "button Navigation",
       "button Attention",

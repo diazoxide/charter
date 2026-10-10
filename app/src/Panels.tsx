@@ -14,6 +14,7 @@ import {
   Send,
   TriangleAlert,
   UserRound,
+  type LucideIcon,
 } from "lucide-react";
 import { Menued } from "./Menus";
 import { PanelList } from "./PanelList";
@@ -30,9 +31,20 @@ import {
   type Offer,
 } from "./actions";
 import type { WorkspaceState } from "./workspaceState";
+import { isPanelView, panelKeyOf, panelView, type OwnViewId, type ViewId } from "./sideViews";
+import type { PanelTab } from "./ActivityBar";
 
 /**
- * The right region: **what is asking for you** (ADR 0038).
+ * One view of the right region: **what is asking for you** (ADR 0038).
+ *
+ * # One view at a time (#1678, ADR 0038 as amended 2026-10-10)
+ *
+ * The region was a stack of every panel. It is an activity bar's views now, one shown at a time:
+ * Todos, Memory, Personas, Sessions and Vaults, then each approved extension's panel as a view of
+ * its own, so a stranger's panel never crowds purlis's. `RegionFrame` draws the bar and keeps
+ * every view mounted; this draws what one view holds — the one panel it is named for, with the
+ * same heading, list and menus the stack gave it. {@link attentionPanels} says which extensions'
+ * panels there are, which is what puts their tabs on the bar.
  *
  * **Alerts are not here any more, and that is a correction to ADR 0038, not an omission.** It
  * put them on this side, and this side is one project's: it follows the project in front and
@@ -58,6 +70,7 @@ import type { WorkspaceState } from "./workspaceState";
  * the queue is every project's. `NeedsYou.NeedsYouMenu` is where it is.
  */
 export function Panels({
+  view,
   workspace,
   state,
   offers,
@@ -71,6 +84,8 @@ export function Panels({
   atRoot = false,
   rootPanels,
 }: {
+  /** The view this draws: one of the right side's own, or an extension's panel (#1678). */
+  view: ViewId;
   /** The focused workspace, whose todos these are. */
   workspace: string | undefined;
   state: WorkspaceState;
@@ -115,80 +130,101 @@ export function Panels({
   rootPanels?: readonly PanelView[];
 }) {
   const { panels, trouble } = state;
+  // Each view is still the "for you" side's (ADR 0038), and says whose: the tab names the view,
+  // and this names the region and the workspace it is drawing, as the one region did.
+  const named = workspace === undefined ? "Attention" : `Attention · ${workspace}`;
 
-  /**
-   * charter's own panels, and every approved extension's, in one list in one order.
-   *
-   * **Merged here because they come from two commands** — one per workspace focus, one per
-   * window (`Panels.tsx`'s `useContributedPanels` says why) — and each is sorted on its own in
-   * the core. A contributed panel is therefore not appended after charter's: it is sorted among
-   * them, which is what makes `order` a number rather than a flag. The tie-break is the core's
-   * (`purlis_core::panel::Panel::sort` — charter's own first, then by id), and a stable sort
-   * preserves it here.
-   */
-  const all = [...(panels?.contributed ?? []), ...contributed].sort((a, b) => a.order - b.order);
+  if (view === "vaults") {
+    // A vault is the plane's, so the view is drawn with no workspace focused too.
+    return (
+      <aside className="panels" data-view={view} aria-label={named}>
+        {vaults !== undefined && <Vaults said={vaults} offers={offers} onPress={onPress} />}
+      </aside>
+    );
+  }
 
+  /** The panel this view shows, by its key: purlis's own by name, an extension's by its own. */
+  const key = isPanelView(view) ? panelKeyOf(view) : OWN_PANELS[view];
+  const all = [...(panels?.contributed ?? []), ...contributed];
+  const draw = (panel: PanelView, at: string) => (
+    <Contributed
+      key={panel.key}
+      panel={panel}
+      workspace={at}
+      onAddTodo={onAddTodo}
+      offers={offers}
+      onPress={onPress}
+      shownRow={shownRow}
+      onShowRow={onShowRow}
+      views={views.filter((one) => panel.about !== null && one.about === panel.about)}
+    />
+  );
+
+  if (workspace === undefined) {
+    // The plane root is not a workspace: the view says so, and draws the root's own panel where
+    // it has one by this view's key — its Sessions (SI-8d).
+    const own = atRoot ? (rootPanels ?? []).find((panel) => panel.key === key) : undefined;
+    return (
+      <aside className="panels" data-view={view} aria-label={named}>
+        <p className="empty">
+          {atRoot
+            ? "The project root is not a workspace: it has no todos or memory of its own. Chats here look after the project and its workspaces; focus a workspace to see its panels."
+            : "No workspace focused."}
+        </p>
+        {own !== undefined && draw(own, "")}
+      </aside>
+    );
+  }
+
+  const panel = all.find((one) => one.key === key);
   return (
-    <aside
-      className="panels"
-      aria-label={workspace === undefined ? "Attention" : `Attention · ${workspace}`}
-      data-testid="panels"
-    >
-      {workspace === undefined ? (
-        <>
-          <p className="empty">
-            {atRoot
-              ? "The project root is not a workspace: it has no todos or memory of its own. Chats here look after the project and its workspaces; focus a workspace to see its panels."
-              : "No workspace focused."}
-          </p>
-          {atRoot &&
-            (rootPanels ?? []).map((panel) => (
-              <Contributed
-                key={panel.key}
-                panel={panel}
-                workspace=""
-                offers={offers}
-                onPress={onPress}
-                shownRow={shownRow}
-                onShowRow={onShowRow}
-                views={[]}
-              />
-            ))}
-        </>
-      ) : (
-        <>
-          {trouble && (
-            <p className="trouble" role="alert">
-              {trouble}
-            </p>
-          )}
-
-          {panels === undefined ? (
-            <p className="pending">
-              <LoaderCircle className="node-icon spinning" />
-              Reading the project…
-            </p>
-          ) : (
-            all.map((panel) => (
-              <Contributed
-                key={panel.key}
-                panel={panel}
-                workspace={workspace}
-                onAddTodo={onAddTodo}
-                offers={offers}
-                onPress={onPress}
-                shownRow={shownRow}
-                onShowRow={onShowRow}
-                views={views.filter((view) => panel.about !== null && view.about === panel.about)}
-              />
-            ))
-          )}
-        </>
+    <aside className="panels" data-view={view} aria-label={named}>
+      {trouble && (
+        <p className="trouble" role="alert">
+          {trouble}
+        </p>
       )}
-
-      {vaults !== undefined && <Vaults said={vaults} offers={offers} onPress={onPress} />}
+      {panels === undefined ? (
+        <p className="pending">
+          <LoaderCircle className="node-icon spinning" />
+          Reading the project…
+        </p>
+      ) : (
+        panel !== undefined && draw(panel, workspace)
+      )}
     </aside>
   );
+}
+
+/** Which of purlis's own panels each of the right side's views shows, by the panel's key. */
+const OWN_PANELS: Partial<Record<OwnViewId, string>> = {
+  todos: "charter/todos",
+  memory: "charter/memory",
+  personas: "charter/personas",
+  sessions: "charter/sessions",
+};
+
+/**
+ * **The extensions' panels, each a view of the right side** (#1678): every approved extension's
+ * panel the window has, in the order their `order` hints sort them, with the name and mark each
+ * declared. After purlis's own views on the bar, and never among them, so an extension that is
+ * approved never moves an icon a person's hand already knows — VS Code's rule for a contributed
+ * view container. A panel of purlis's own is not one of these: each has its view already.
+ */
+export function attentionPanels(
+  state: WorkspaceState,
+  contributed: readonly PanelView[],
+): PanelTab[] {
+  const own = new Set(Object.values(OWN_PANELS));
+  const seen = new Set<string>();
+  return [...(state.panels?.contributed ?? []), ...contributed]
+    .filter((panel) => !own.has(panel.key) && !seen.has(panel.key) && seen.add(panel.key))
+    .sort((a, b) => a.order - b.order)
+    .map((panel) => ({
+      view: panelView(panel.key),
+      name: panel.title,
+      mark: MARKS[panel.mark] ?? Circle,
+    }));
 }
 
 /**
@@ -227,7 +263,7 @@ export function useContributedPanels(): PanelView[] {
 }
 
 /** Every mark in `purlis_core::panel::Mark`, as the glyph a heading draws. */
-const MARKS: Record<string, React.ComponentType<{ className?: string }>> = {
+const MARKS: Record<string, LucideIcon> = {
   todo: CircleDashed,
   persona: UserRound,
   repo: FolderGit2,

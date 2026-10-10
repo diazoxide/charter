@@ -13,7 +13,7 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
 import type { ExtensionCommand, VaultContents, ViewTab } from "./bindings";
 import { BUILT_IN, DEFAULT_THEME, drawIn, inForce } from "./theme/theme";
-import { findStripNamed, stripNamed } from "./test-strips";
+import { findStripNamed, stripNamed, showThePanel } from "./test-strips";
 
 /**
  * **A tab that holds something other than a chat**, against the whole window (ADR 0043,
@@ -230,7 +230,7 @@ const tabNames = () =>
 
 /** Opens the persona's tab from its row on the personas panel. */
 async function openFromTheRow() {
-  const panel = await screen.findByTestId("panel-personas");
+  const panel = await showThePanel("Personas");
   await userEvent.click(within(panel).getByRole("button", { name: /steward/ }));
   return screen.findByText("It remembers 1 thing.");
 }
@@ -525,7 +525,7 @@ describe("view tabs at a relaunch", () => {
 describe("a vault's own tab (charter-app#235)", () => {
   /** Opens `ops` from its row in the Vaults panel, and waits for its table. */
   async function openOps() {
-    const panel = await screen.findByTestId("panel-vaults");
+    const panel = await showThePanel("Vaults");
     await userEvent.click(await within(panel).findByRole("button", { name: /ops/ }));
     return screen.findByRole("table", { name: "Secrets in ops" });
   }
@@ -622,7 +622,7 @@ describe("a vault's own tab (charter-app#235)", () => {
     core();
     render(<App />);
     const terminal = await screen.findByTestId("pane");
-    await within(await screen.findByTestId("panel-vaults")).findByText("ops");
+    await within(await showThePanel("Vaults")).findByText("ops");
     terminal.focus();
 
     await userEvent.keyboard("{F2}");
@@ -640,14 +640,14 @@ describe("a project's own extensions (charter-app#253)", () => {
   it("offers an extension's view only while the project in front has that extension on", async () => {
     core({ offered: [STATISTICS], extensionsOn: ["persona-statistics"] });
     render(<App />);
-    const panel = await screen.findByTestId("panel-personas");
+    const panel = await showThePanel("Personas");
     expect(await within(panel).findByRole("button", { name: /Statistics/ })).toBeInTheDocument();
   });
 
   it("offers nothing from an extension the project turned off", async () => {
     const { asked } = core({ offered: [STATISTICS], extensionsOn: [] });
     render(<App />);
-    const panel = await screen.findByTestId("panel-personas");
+    const panel = await showThePanel("Personas");
     await waitFor(() =>
       expect(asked.some((one) => one.cmd === "extensions_on" && one.args.plane === PLANE)).toBe(
         true,
@@ -675,7 +675,7 @@ describe("a project's own theme (charter-app#273)", () => {
     const { asked } = core({ projectTheme: null });
     render(<App />);
     await waitFor(() => expect(asked.some((one) => one.cmd === "project_theme_drawn")).toBe(true));
-    await screen.findByTestId("panel-personas");
+    await showThePanel("Personas");
     expect(inForce()).toBe(DEFAULT_THEME);
   });
 });

@@ -4,7 +4,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks } from "@tauri-apps/api/mocks";
-import { Panels } from "./Panels";
+import { attentionPanels, Panels } from "./Panels";
+import { CATALOGUE, type ViewId } from "./regions";
 import { catalogue, catalogued, type Catalogued, type Offer } from "./actions";
 import { noTabs } from "./tabs";
 import type {
@@ -178,21 +179,38 @@ function draw(
     onAddTodo?: (workspace: string, text: string) => Promise<string | undefined>;
   } = {},
 ) {
+  /**
+   * Every view of the right side, one under another, as the bar would show them one at a time
+   * (`RegionFrame` keeps them all mounted): purlis's own, then the extensions' panels. What the
+   * bar does with them is `FourRegions.test.tsx`'s; this is what each view holds.
+   */
   function Window() {
     const [shownRow, setShownRow] = useState<string>();
+    const st = on.state ?? state();
+    const contributed = on.contributed ?? [];
+    const every: ViewId[] = [
+      ...(CATALOGUE.aside.views ?? []),
+      ...attentionPanels(st, contributed).map((one) => one.view),
+    ];
     return (
-      <Panels
-        workspace={"workspace" in on ? on.workspace : "alpha"}
-        state={on.state ?? state()}
-        offers={on.offers ?? new Map()}
-        onPress={on.onPress ?? (() => {})}
-        contributed={on.contributed ?? []}
-        views={on.views ?? []}
-        shownRow={shownRow}
-        onShowRow={setShownRow}
-        vaults={on.vaults === undefined ? undefined : { vaults: on.vaults, reload: () => {} }}
-        onAddTodo={on.onAddTodo}
-      />
+      <div data-testid="panels">
+        {every.map((view) => (
+          <Panels
+            key={view}
+            view={view}
+            workspace={"workspace" in on ? on.workspace : "alpha"}
+            state={st}
+            offers={on.offers ?? new Map()}
+            onPress={on.onPress ?? (() => {})}
+            contributed={contributed}
+            views={on.views ?? []}
+            shownRow={shownRow}
+            onShowRow={setShownRow}
+            vaults={on.vaults === undefined ? undefined : { vaults: on.vaults, reload: () => {} }}
+            onAddTodo={on.onAddTodo}
+          />
+        ))}
+      </div>
     );
   }
   render(<Window />);
@@ -206,10 +224,22 @@ describe("the right-hand region", () => {
     expect(screen.getByTestId("panels").querySelector(".needs-you")).toBeNull();
   });
 
-  it("is named for what it is, and not a second answer to which workspace this is", () => {
+  it("draws in each view the one panel it is named for, and nothing of another view's (#1678)", () => {
     draw();
 
-    expect(screen.getByTestId("panels")).toHaveAttribute("aria-label", "Attention · alpha");
+    const view = (name: string) => {
+      const found = document.querySelector<HTMLElement>(`.panels[data-view="${name}"]`);
+      if (found === null) throw new Error(`no ${name} view`);
+      return within(found);
+    };
+    expect(view("todos").getByTestId("panel-todos")).toBeInTheDocument();
+    expect(view("todos").queryByTestId("panel-personas")).toBeNull();
+    expect(view("personas").getByTestId("panel-personas")).toBeInTheDocument();
+    expect(view("personas").queryByTestId("panel-todos")).toBeNull();
+    // Each still names the region and the workspace it draws, as the one region did.
+    expect(document.querySelector('.panels[data-view="memory"]')?.getAttribute("aria-label")).toBe(
+      "Attention · alpha",
+    );
   });
 
   it("holds no alerts section, because alerts cross projects and this region is one project's", () => {
@@ -238,7 +268,8 @@ describe("the right-hand region", () => {
   it("draws no workspace answers when none is focused", () => {
     draw({ workspace: undefined });
 
-    expect(screen.getByText("No workspace focused.")).toBeInTheDocument();
+    // Each view that needs a workspace says so, since it is the one on screen when it is open.
+    expect(screen.getAllByText("No workspace focused.")).toHaveLength(4);
     expect(screen.queryByTestId("panel-todos")).toBeNull();
   });
 
@@ -252,14 +283,16 @@ describe("the right-hand region", () => {
   it("says when the core refused the workspace outright", () => {
     draw({ state: state({ panels: undefined, trouble: "no workspace 'alpha'" }) });
 
-    expect(screen.getByRole("alert")).toHaveTextContent("no workspace 'alpha'");
+    const alerts = screen.getAllByRole("alert");
+    expect(alerts.length).toBeGreaterThan(0);
+    for (const alert of alerts) expect(alert).toHaveTextContent("no workspace 'alpha'");
   });
 
   it("says the plane is still being read rather than saying there is nothing to do", () => {
     // An unanswered ask and an empty answer are the two states this must never merge.
     draw({ state: state({ panels: undefined }) });
 
-    expect(screen.getByText(/Reading the project/)).toBeInTheDocument();
+    expect(screen.getAllByText(/Reading the project/).length).toBeGreaterThan(0);
     expect(screen.queryByText("Nothing to do")).toBeNull();
   });
 });
@@ -269,14 +302,20 @@ describe("the right-hand region", () => {
 // ---------------------------------------------------------------------------------------
 
 describe("a panel", () => {
-  it("draws whatever is contributed, in the order the contributors asked for", () => {
-    // charter's todos at 10, an extension's at 15, charter's personas at 20. A contributed
-    // panel is not appended after charter's — it is sorted among them, which is what `order`
-    // being a number rather than a flag is for.
-    draw({ contributed: [contributedPanel()] });
+  it("draws whatever is contributed, each extension's panel a view after purlis's own (#1678)", () => {
+    // charter's todos at 10, an extension's at 15, charter's personas at 20. Each is a view of
+    // its own now, and an extension's view goes after purlis's on the bar whatever its `order`,
+    // so approving one never moves an icon a person already knows; `order` sorts the
+    // extensions' views among themselves.
+    draw({
+      contributed: [
+        contributedPanel(),
+        contributedPanel({ key: "ext/acme/early", title: "Early", order: 5 }),
+      ],
+    });
 
     const headings = screen.getAllByRole("heading", { level: 2 }).map((h) => h.textContent);
-    expect(headings).toEqual(["Todos", "Reviews · acme", "Personas"]);
+    expect(headings).toEqual(["Todos", "Personas", "Early · acme", "Reviews · acme"]);
   });
 
   it("says whose it is, which is what ADR 0041 item 5 asks the window for", () => {
@@ -298,7 +337,7 @@ describe("a panel", () => {
       vaults: [{ name: "ops", provider: "keyring", count: 1, health: { ok: true, detail: "" } }],
     });
 
-    const sections = screen.getByTestId("panels").querySelectorAll(":scope > section");
+    const sections = screen.getByTestId("panels").querySelectorAll(".panels > section");
     expect(sections).toHaveLength(4);
     for (const section of sections) {
       expect(within(section as HTMLElement).getByRole("heading", { level: 2 })).toHaveClass(

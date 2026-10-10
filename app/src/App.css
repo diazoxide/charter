@@ -2591,6 +2591,13 @@ button.show-more:focus-visible {
   min-height: 0;
 }
 
+/* A right-hand view (#1678): one panel, scrolling inside its view. */
+.region-view > .panels {
+  flex: 1 1 0;
+  height: auto;
+  min-height: 0;
+}
+
 /* `react-resizable-panels` draws a panel as a box with the class on an inner div, and that
    inner div is what has to fill the box. */
 .region-upper,

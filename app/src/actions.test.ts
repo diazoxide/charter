@@ -1728,7 +1728,13 @@ describe("carrying out a row", () => {
         "showExtensions",
         "showSideView:chats",
         "showSideView:explorer",
+        "showSideView:todos",
+        "showSideView:memory",
+        "showSideView:personas",
+        "showSideView:sessions",
+        "showSideView:vaults",
         "toggleRegion:navigation",
+        "toggleRegion:aside",
         "openSettingsTab",
         "openYourSettings",
         "installCli",
@@ -2107,16 +2113,16 @@ describe("the palette at fifty chats", () => {
       // stand in front of it. Inside each half the catalogue's own order stands.
       "Merge this chat's branch into its clone",
       "Remove the folder of this chat's branch",
-      // The left side's rows (#1673): about this window, and `Explorer` has `re` in it.
+      // The sides' rows (#1673, #1678): about this window, and `Explorer` has `re` in it.
       "Show the Explorer view",
       "Put the Navigation region away",
+      "Put the Attention region away",
       // Then the rows about things that are not in front, in the catalogue's order.
       // `ignore` has `re` in it, and it is charter's word, so the two queued chats' Ignore
       // rows (charter-app#248) are verbs here too, and still behind every row about what is
       // in front. Then a rename per chat (charter-app#254), before the pieces, as the tab
       // rows always have.
       "Ignore chat 103 until it asks again",
-      "Ignore chat 107 until it asks again",
     ]);
     // Not a cap and not a filter: every name that matched is still listed, below.
     expect(rows.some((row) => row.title === "Switch to tab release.3")).toBe(true);
@@ -2312,8 +2318,9 @@ describe("the palette at fifty chats", () => {
     // tab, three rows a branch as its browse and focus rows are.
     // 839 since #1152: Focus on repo, one row in each of the ten clones.
     // 842 since #1673: Show the Chats view, Show the Explorer view, and the Navigation region.
+    // 848 since #1678: the right side's five views, and the Attention region.
     // This window has no todos loaded, so no `todo.` rows.
-    expect(offers).toHaveLength(842);
+    expect(offers).toHaveLength(848);
   });
 
   /**
@@ -3915,5 +3922,36 @@ describe("a harness's card with no chat open (#1134)", () => {
 
   it("offers none where the project's harnesses are not known", () => {
     expect(ids(catalogue(now())).some((id) => id.startsWith("harness.card:"))).toBe(false);
+  });
+});
+
+describe("the right side's rows (#1678)", () => {
+  it("shows each of its views, and says the side's key on the region's row", () => {
+    const offers = catalogue(now());
+    const titles = offers.map((offer) => offer.title);
+
+    for (const name of ["Todos", "Memory", "Personas", "Sessions", "Vaults"])
+      expect(titles).toContain(`Show the ${name} view`);
+    const region = offers.find((offer) => offer.id === "view.toggle:aside");
+    expect(region?.title).toBe("Put the Attention region away");
+    expect(region?.note).toMatch(/⌥⌘B|Ctrl\+Alt\+B/);
+  });
+
+  it("brings the region back when it is away", () => {
+    const region = catalogue(now({ away: ["aside"] })).find(
+      (offer) => offer.id === "view.toggle:aside",
+    );
+
+    expect(region?.title).toBe("Bring the Attention region back");
+  });
+
+  it("shows an extension's panel by its own name, as a view of its own", () => {
+    const offers = catalogue(
+      now({ sidePanels: [{ view: "panel:ext/stats/burn", name: "Burn rate" }] }),
+    );
+    const row = offers.find((offer) => offer.id === "view.show:panel:ext/stats/burn");
+
+    expect(row?.title).toBe("Show the Burn rate view");
+    expect(row?.does).toEqual({ verb: "showSideView", view: "panel:ext/stats/burn" });
   });
 });

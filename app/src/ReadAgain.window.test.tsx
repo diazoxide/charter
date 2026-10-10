@@ -88,7 +88,7 @@ afterEach(() => {
 async function hideTheExplorer() {
   await screen.findByRole("tabpanel", { name: "Chats" });
   await userEvent.click(screen.getByRole("button", { name: "Navigation", pressed: true }));
-  await waitFor(() => expect(screen.queryByRole("tabpanel")).toBeNull());
+  await waitFor(() => expect(screen.queryByRole("tabpanel", { name: "Chats" })).toBeNull());
 }
 
 /** The bottom region's line saying the refusal. */

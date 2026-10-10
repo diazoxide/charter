@@ -132,11 +132,17 @@ function core(
         paths: a.workspace === "alpha" ? { svc: `${ALPHA}/svc` } : {},
         absent: [],
         refused: [],
-        todos: [],
+        todos: todos.map(({ slug, title }) => ({ slug, title, stamp: "2026-10-10" })),
         todos_refused: null,
         personas: ["steward"],
         persona: "steward",
+        contributed: [
+          ownPanel("todos", "Todos", 10, todos),
+          ownPanel("memory", "Memory", 15, [{ slug: "m1", title: "The deploy key rotates" }]),
+        ],
       };
+    if (cmd === "extension_panels") return extensionPanels;
+    if (cmd === "extensions_on") return ["stats"];
     if (cmd === "workspace_repos")
       return { workspace: a.workspace, repos: [], cache_refused: null };
     if (cmd === "worktree_list")
@@ -157,6 +163,45 @@ function core(
   return { asked };
 }
 
+/** One of purlis's own panels, as `workspace_panels` contributes it. */
+function ownPanel(
+  id: string,
+  title: string,
+  order: number,
+  rows: { slug: string; title: string }[],
+) {
+  return {
+    key: `charter/${id}`,
+    title,
+    order,
+    mark: "todo",
+    from: null,
+    about: null,
+    blocks: [
+      {
+        kind: "list",
+        rows: rows.map(({ slug, title: text }) => ({
+          key: slug,
+          text,
+          note: null,
+          mark: "todo",
+          tone: "plain",
+          detail: null,
+          runs: null,
+          actions: [],
+        })),
+        empty: { headline: "Nothing here", body: null, offer: null },
+      },
+    ],
+  };
+}
+
+/** The focused workspace's open todos. A test sets it before `core()`. */
+let todos: { slug: string; title: string }[] = [];
+
+/** The panels approved extensions contribute. A test sets it before `core()`. */
+let extensionPanels: unknown[] = [];
+
 /** While set, `start_chat` answers only once it settles: a start still in flight. */
 let startHeld: Promise<void> | undefined;
 
@@ -165,6 +210,8 @@ let alerts: unknown = [];
 
 beforeEach(() => {
   startHeld = undefined;
+  todos = [];
+  extensionPanels = [];
   globalThis.localStorage.clear();
   // Every test is a launch: what an earlier one toggled is not this one's arrangement.
   forgetThisLaunch();
@@ -202,7 +249,7 @@ describe("the four regions", () => {
     // The left side opens on its Chats view (#1673, B-2), with the Explorer one press away.
     expect(await screen.findByRole("tabpanel", { name: "Chats" })).toBeInTheDocument();
     expect(await showTheExplorer()).toBeInTheDocument();
-    expect(await screen.findByTestId("panels")).toBeInTheDocument();
+    expect(await screen.findByRole("tabpanel", { name: "Memory" })).toBeInTheDocument();
     expect(await screen.findByLabelText("Repository state")).toBeInTheDocument();
     expect(stripNamed("Tabs")).toBeInTheDocument();
   });
@@ -424,7 +471,9 @@ describe("the four regions", () => {
 
     const hand = await screen.findByRole("button", { name: "1 chat needs you" });
     expect(screen.getByTestId("title-bar")).toContainElement(hand);
-    expect(within(await screen.findByTestId("panels")).queryByLabelText("Needs you")).toBeNull();
+    expect(
+      within(await screen.findByRole("tabpanel", { name: "Memory" })).queryByLabelText("Needs you"),
+    ).toBeNull();
   });
 
   it("puts a region away and brings it back", async () => {
@@ -453,7 +502,7 @@ describe("the four regions", () => {
     await userEvent.click(screen.getByRole("button", { name: "Attention", pressed: true }));
 
     expect(screen.queryByTestId("bottom-bar")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("panels")).not.toBeInTheDocument();
+    expect(screen.queryByRole("tabpanel", { name: "Memory" })).not.toBeInTheDocument();
   });
 
   it("gives every region in the arrangement its own way back, on the status line", async () => {
@@ -535,7 +584,7 @@ describe("the left side's activity bar", () => {
 
     await userEvent.click(tab("Chats"));
 
-    expect(screen.queryByRole("tabpanel")).toBeNull();
+    expect(screen.queryByRole("tabpanel", { name: "Chats" })).toBeNull();
     expect(bar()).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Navigation", pressed: false })).toBeInTheDocument();
 
@@ -556,7 +605,7 @@ describe("the left side's activity bar", () => {
 
     await userEvent.click(tab("Chats"));
 
-    expect(screen.queryByRole("tabpanel")).toBeNull();
+    expect(screen.queryByRole("tabpanel", { name: "Chats" })).toBeNull();
     expect(tab("Chats")).toHaveAccessibleDescription("1 chat needs you");
   });
 
@@ -574,7 +623,7 @@ describe("the left side's activity bar", () => {
     await screen.findByRole("tabpanel", { name: "Chats" });
 
     chord("b");
-    await waitFor(() => expect(screen.queryByRole("tabpanel")).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("tabpanel", { name: "Chats" })).toBeNull());
     chord("b");
     expect(await screen.findByRole("tabpanel", { name: "Chats" })).toBeInTheDocument();
 
@@ -601,6 +650,152 @@ describe("the left side's activity bar", () => {
     render(<App />);
 
     expect(await screen.findByRole("navigation", { name: "Explorer" })).toBeInTheDocument();
+  });
+});
+
+/**
+ * **The right side's activity bar, in the window** (#1678, ADR 0038 as amended 2026-10-10): the
+ * "for you" side's views, one at a time, and what a person presses and sees.
+ */
+describe("the right side's activity bar", () => {
+  const bar = () => screen.getByRole("tablist", { name: "Attention" });
+  const tab = (name: string) => within(bar()).getByRole("tab", { name });
+  /** ⌥⌘B on a Mac, Ctrl+Alt+B elsewhere. */
+  const toggleKey = () =>
+    fireEvent.keyDown(document.body, {
+      key: "b",
+      code: "KeyB",
+      altKey: true,
+      ...(onAMac() ? { metaKey: true } : { ctrlKey: true }),
+    });
+
+  it("opens on Memory, and switches to Todos, Personas, Sessions and Vaults one at a time", async () => {
+    core();
+    render(<App />);
+
+    const memory = await screen.findByRole("tabpanel", { name: "Memory" });
+    expect(await within(memory).findByText("The deploy key rotates")).toBeInTheDocument();
+    expect(tab("Memory")).toHaveAttribute("aria-selected", "true");
+    expect(
+      within(bar())
+        .getAllByRole("tab")
+        .map((one) => one.getAttribute("aria-label")),
+    ).toEqual(["Todos", "Memory", "Personas", "Sessions", "Vaults"]);
+
+    await userEvent.click(tab("Todos"));
+
+    const shown = await screen.findByRole("tabpanel", { name: "Todos" });
+    expect(within(shown).getByTestId("panel-todos")).toBeInTheDocument();
+    expect(screen.queryByRole("tabpanel", { name: "Memory" })).toBeNull();
+    // The left side is not touched by the right's bar.
+    expect(screen.getByRole("tabpanel", { name: "Chats" })).toBeInTheDocument();
+  });
+
+  it("puts the side away on a press of the open view, keeps the bar, and brings it back", async () => {
+    core();
+    render(<App />);
+    await screen.findByRole("tabpanel", { name: "Memory" });
+    const memory = screen.getByTestId("panel-memory");
+
+    await userEvent.click(tab("Memory"));
+
+    expect(screen.queryByRole("tabpanel", { name: "Memory" })).toBeNull();
+    expect(bar()).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Attention", pressed: false })).toBeInTheDocument();
+
+    await userEvent.click(tab("Memory"));
+
+    expect(await screen.findByRole("tabpanel", { name: "Memory" })).toBeInTheDocument();
+    // Hidden while it was away, never unmounted.
+    expect(screen.getByTestId("panel-memory")).toBe(memory);
+  });
+
+  it("counts the open todos on the Todos tab, while the side is away too", async () => {
+    todos = [
+      { slug: "a", title: "Review the rollout plan" },
+      { slug: "b", title: "Rotate the deploy key" },
+    ];
+    core();
+    render(<App />);
+    await screen.findByRole("tabpanel", { name: "Memory" });
+    await waitFor(() => expect(tab("Todos")).toHaveAccessibleDescription("2 open todos"));
+    expect(tab("Todos").querySelector(".activity-count")).toHaveTextContent("2");
+    // Plain, not the needs-you colours: a todo is yours to do, not a chat asking.
+    expect(tab("Todos").querySelector(".activity-count")).not.toHaveAttribute("data-tone");
+
+    await userEvent.click(tab("Memory"));
+
+    expect(screen.queryByRole("tabpanel", { name: "Memory" })).toBeNull();
+    expect(tab("Todos")).toHaveAccessibleDescription("2 open todos");
+  });
+
+  it("draws no count when nothing is left to do", async () => {
+    core();
+    render(<App />);
+    await screen.findByRole("tabpanel", { name: "Memory" });
+
+    expect(tab("Todos").querySelector(".activity-count")).toBeNull();
+  });
+
+  it("answers ⌥⌘B: the side away, and back on the view it had", async () => {
+    core();
+    render(<App />);
+    await screen.findByRole("tabpanel", { name: "Memory" });
+    await userEvent.click(tab("Sessions"));
+
+    toggleKey();
+    await waitFor(() => expect(screen.queryByRole("tabpanel", { name: "Sessions" })).toBeNull());
+    // The left side stays.
+    expect(screen.getByRole("tabpanel", { name: "Chats" })).toBeInTheDocument();
+
+    toggleKey();
+    expect(await screen.findByRole("tabpanel", { name: "Sessions" })).toBeInTheDocument();
+  });
+
+  it("gives an approved extension's panel a view of its own, after purlis's", async () => {
+    extensionPanels = [
+      {
+        key: "ext/stats/burn",
+        title: "Burn rate",
+        order: 12,
+        mark: "dot",
+        from: "stats",
+        about: null,
+        blocks: [{ kind: "note", text: "Forty tokens a minute", tone: "plain" }],
+      },
+    ];
+    core();
+    render(<App />);
+    await screen.findByRole("tabpanel", { name: "Memory" });
+
+    const burn = await within(bar()).findByRole("tab", { name: "Burn rate" });
+    expect(within(bar()).getAllByRole("tab").at(-1)).toBe(burn);
+    // Not stacked into Memory: the extension never crowds purlis's views.
+    expect(
+      within(screen.getByRole("tabpanel", { name: "Memory" })).queryByText("Forty tokens a minute"),
+    ).toBeNull();
+
+    await userEvent.click(burn);
+
+    expect(
+      within(await screen.findByRole("tabpanel", { name: "Burn rate" })).getByText(
+        "Forty tokens a minute",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("comes back on the view it was left on when the project is opened again", async () => {
+    core();
+    const { unmount } = render(<App />);
+    await screen.findByRole("tabpanel", { name: "Memory" });
+    await userEvent.click(tab("Personas"));
+    await screen.findByRole("tabpanel", { name: "Personas" });
+    unmount();
+
+    core();
+    render(<App />);
+
+    expect(await screen.findByRole("tabpanel", { name: "Personas" })).toBeInTheDocument();
   });
 });
 
@@ -669,11 +864,11 @@ describe("the window the stored arrangement asks for", () => {
     ]);
     core();
     render(<App />);
-    await screen.findByTestId("panels");
+    await screen.findByRole("tabpanel", { name: "Memory" });
 
     // Its views are hidden, and still mounted (#1673): collapsing never unmounts a view.
     expect(screen.queryByRole("navigation", { name: "Explorer" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("tabpanel")).not.toBeInTheDocument();
+    expect(screen.queryByRole("tabpanel", { name: /Chats|Explorer/ })).not.toBeInTheDocument();
     expect(screen.getByTestId("explorer")).toBeInTheDocument();
     expect(screen.getByTestId("region-left")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Navigation", pressed: false })).toBeInTheDocument();

@@ -670,7 +670,7 @@ describe("the plane root's tab (SI-1)", () => {
 
     await userEvent.click(rootTab());
 
-    const panels = await screen.findByTestId("panels");
+    const panels = await screen.findByRole("tabpanel", { name: "Memory" });
     await waitFor(() =>
       expect(within(panels).getByText(/The project root is not a workspace/)).toBeTruthy(),
     );

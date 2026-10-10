@@ -5,9 +5,11 @@ import { sideKeyOf, sideKeysSaid } from "./sideKeys";
 function press(
   key: string,
   held: { meta?: boolean; ctrl?: boolean; shift?: boolean; alt?: boolean },
+  code?: string,
 ) {
   return new KeyboardEvent("keydown", {
     key,
+    code,
     metaKey: held.meta ?? false,
     ctrlKey: held.ctrl ?? false,
     shiftKey: held.shift ?? false,
@@ -43,7 +45,7 @@ describe("the keys of the left side (#1673, B-10)", () => {
 
   it("are not the keys with another modifier held", () => {
     expect(sideKeyOf(press("b", { meta: true, shift: true }), true)).toBeUndefined();
-    expect(sideKeyOf(press("b", { meta: true, alt: true }), true)).toBeUndefined();
+    expect(sideKeyOf(press("b", { meta: true, alt: true, shift: true }), true)).toBeUndefined();
     expect(sideKeyOf(press("E", { meta: true }), true)).toBeUndefined();
     expect(sideKeyOf(press("E", { meta: true, shift: true, alt: true }), true)).toBeUndefined();
   });
@@ -54,11 +56,44 @@ describe("the keys of the left side (#1673, B-10)", () => {
   });
 
   it("are spelled for the platform", () => {
-    expect(sideKeysSaid(true)).toEqual({ navigation: "⌘B", chats: "⌘⇧C", explorer: "⌘⇧E" });
+    expect(sideKeysSaid(true)).toEqual({
+      navigation: "⌘B",
+      aside: "⌥⌘B",
+      chats: "⌘⇧C",
+      explorer: "⌘⇧E",
+    });
     expect(sideKeysSaid(false)).toEqual({
       navigation: "Ctrl+B",
+      aside: "Ctrl+Alt+B",
       chats: "Ctrl+Shift+C",
       explorer: "Ctrl+Shift+E",
     });
+  });
+});
+
+describe("the key of the right side (#1678, B-10)", () => {
+  it("is ⌥⌘B on a Mac, read by its place when Option makes the key type ∫", () => {
+    expect(sideKeyOf(press("b", { meta: true, alt: true }, "KeyB"), true)).toEqual({
+      toggle: "aside",
+    });
+    expect(sideKeyOf(press("∫", { meta: true, alt: true }, "KeyB"), true)).toEqual({
+      toggle: "aside",
+    });
+  });
+
+  it("is never another letter's key on a Mac layout that puts that letter there", () => {
+    expect(sideKeyOf(press("x", { meta: true, alt: true }, "KeyB"), true)).toBeUndefined();
+  });
+
+  it("is Ctrl+Alt+B everywhere else, and a chat keeps it, since a terminal sends it", () => {
+    expect(sideKeyOf(press("b", { ctrl: true, alt: true }, "KeyB"), false)).toEqual({
+      toggle: "aside",
+      chatKeeps: true,
+    });
+  });
+
+  it("is not taken off a Mac from a layout whose AltGr+B types a character", () => {
+    // Ctrl+Alt is AltGr on Windows: a key that types something with it is that character's.
+    expect(sideKeyOf(press("{", { ctrl: true, alt: true }, "KeyB"), false)).toBeUndefined();
   });
 });

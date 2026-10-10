@@ -230,16 +230,21 @@ side, which is what that rejection waited for.
   views later (#1671); the bottom bar's content becomes the Changes view then.
 - **The right side stays the "for you" side**: Todos, Memory, Personas, Sessions, Vaults and the
   extensions' panels, each a view there (#1678). What it holds does not change, only that it
-  shows one at a time.
+  shows one at a time. Memory is open by default. An extension's panel is a view of its own,
+  after purlis's on the bar, so approving one never moves an icon the person already knows; the
+  region still says nothing an extension declares decides where it goes (ADR 0043).
 - **Each thing lives in one view.** The explorer no longer draws a chat where it works: the
   Chats view is the one place a chat is listed. The explorer's own axis is still the place, and
   the paragraph above that says it draws each chat where it works is replaced by this one.
 - **Pressing the open view's icon puts the side away**, and pressing any icon brings it back on
   that view. The bar stays at the edge while the side is away, with its badges: the Chats icon
-  counts the chats that need the person, in the needs-you colours. Putting a side away hides its
+  counts the chats that need the person, in the needs-you colours, and the Todos icon the
+  focused workspace's open todos, in the plain count's. Putting a side away hides its
   views and never unmounts them, so a view keeps its folds, scroll and filter.
-- **Keys and the palette.** ⌘B puts the left side away and brings it back, ⌘⇧E shows Explorer
-  and ⌘⇧C shows Chats (Ctrl on other platforms); every view is a row in the palette.
+- **Keys and the palette.** ⌘B puts the left side away and brings it back and ⌥⌘B the right
+  (each names its region, as VS Code's ⌘B follows its primary side bar), ⌘⇧E shows Explorer and
+  ⌘⇧C shows Chats (Ctrl, and Ctrl+Alt+B, on other platforms); every view is a row in the
+  palette.
 - **Remembered per project, on this machine**, in the layout file (version 2): which view each
   side shows, its width and whether it is away. The needs-you queue stays in the title bar,
   where nothing competes with it.
