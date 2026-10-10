@@ -7,6 +7,16 @@ use crate::forge::backend::{Asker, Fixed};
 use crate::forge::recorded::Recorded;
 use crate::forge::{Forge, Kind};
 
+/// The GraphQL documents GitLab is sent, word for word as recorded: a recording names the
+/// document's text, never the constant that builds it, so a change to what is sent fails here
+/// instead of passing by construction. `SET_ITERATION` is an Enterprise Edition document
+/// (`issueSetIteration`, iterations being Premium), which no Community Edition schema can check
+/// (ADR 0070, FW-2b amendment); `CHILDREN` and `SET_PARENT` stay constants until #1031 vendors
+/// the CE schema they would be checked against.
+const RECORDED_CHILDREN: &str = "query($id:WorkItemID!,$after:String){workItem(id:$id){widgets{__typename ... on WorkItemWidgetHierarchy{children(first:100,after:$after){pageInfo{hasNextPage endCursor} nodes{id iid title state webUrl workItemType{name}}}}}}}";
+const RECORDED_SET_PARENT: &str = "mutation($id:WorkItemID!,$parent:WorkItemID){workItemUpdate(input:{id:$id,hierarchyWidget:{parentId:$parent}}){errors}}";
+const RECORDED_SET_ITERATION: &str = "mutation($path:ID!,$iid:String!,$iteration:IterationID){issueSetIteration(input:{projectPath:$path,iid:$iid,iterationId:$iteration}){errors issue{iteration{id}}}}";
+
 /// GitLab over these recorded exchanges, and the recording to check afterwards.
 fn over(exchanges: Value) -> (GitLab, Arc<Recorded>) {
     let text = json!({"source": "GitLab 19.4 REST API docs (issues.md, issue_links.md, \
@@ -190,7 +200,7 @@ fn blocking_links_are_read_and_written_by_iid_and_removed_by_link_id() {
 fn child_items_are_read_and_a_parent_is_set_and_cleared_through_work_items() {
     let (gitlab, recorded) = over(json!([
         gql(
-            CHILDREN,
+            RECORDED_CHILDREN,
             json!([{"text": ["id", "gid://gitlab/WorkItem/84001"]}]),
             json!({"data": {"workItem": {"widgets": [
                 {"__typename": "WorkItemWidgetDescription"},
@@ -202,7 +212,7 @@ fn child_items_are_read_and_a_parent_is_set_and_cleared_through_work_items() {
                                "workItemType": {"name": "Task"}}]}}]}}})
         ),
         gql(
-            CHILDREN,
+            RECORDED_CHILDREN,
             json!([{"text": ["id", "gid://gitlab/WorkItem/84001"]},
                    {"text": ["after", "c1"]}]),
             json!({"data": {"workItem": {"widgets": [
@@ -214,13 +224,13 @@ fn child_items_are_read_and_a_parent_is_set_and_cleared_through_work_items() {
                                "workItemType": {"name": "Issue"}}]}}]}}})
         ),
         gql(
-            SET_PARENT,
+            RECORDED_SET_PARENT,
             json!([{"text": ["id", "gid://gitlab/WorkItem/84002"]},
                    {"text": ["parent", "gid://gitlab/WorkItem/84001"]}]),
             json!({"data": {"workItemUpdate": {"errors": []}}})
         ),
         gql(
-            SET_PARENT,
+            RECORDED_SET_PARENT,
             json!([{"text": ["id", "gid://gitlab/WorkItem/84002"]},
                    {"typed": ["parent", "null"]}]),
             json!({"data": {"workItemUpdate": {"errors": []}}})
@@ -252,7 +262,7 @@ fn child_items_are_read_and_a_parent_is_set_and_cleared_through_work_items() {
 #[test]
 fn a_mutation_gitlab_refuses_in_its_payload_is_an_error_in_its_words() {
     let (gitlab, recorded) = over(json!([gql(
-        SET_PARENT,
+        RECORDED_SET_PARENT,
         json!([{"text": ["id", "gid://gitlab/WorkItem/84002"]},
                {"text": ["parent", "gid://gitlab/WorkItem/84001"]}]),
         json!({"data": {"workItemUpdate": {"errors": ["No matching work item found"]}}})
@@ -275,7 +285,7 @@ fn a_mutation_gitlab_refuses_in_its_payload_is_an_error_in_its_words() {
 fn a_payload_refusal_reaches_the_window_as_one_line_and_capped() {
     let long = "x".repeat(5_000);
     let (gitlab, recorded) = over(json!([gql(
-        SET_PARENT,
+        RECORDED_SET_PARENT,
         json!([{"text": ["id", "gid://gitlab/WorkItem/84002"]},
                {"text": ["parent", "gid://gitlab/WorkItem/84001"]}]),
         json!({"data": {"workItemUpdate": {"errors": ["first\nline\u{202e}reversed", long]}}})
@@ -395,7 +405,7 @@ fn a_groups_iterations_are_read_and_an_issue_is_set_to_one() {
                     "web_url": "https://gitlab.com/groups/acme/-/iterations/53"}])
         ),
         gql(
-            SET_ITERATION,
+            RECORDED_SET_ITERATION,
             json!([{"text": ["path", "acme/api"]}, {"text": ["iid", "7"]},
                    {"text": ["iteration", "gid://gitlab/Iteration/53"]}]),
             json!({"data": {"issueSetIteration": {"errors": [],
