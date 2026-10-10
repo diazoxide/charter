@@ -10,6 +10,8 @@ import {
 } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
+import { emit } from "@tauri-apps/api/event";
+import { ASKS_NOTIFIED } from "./askNotices";
 import App from "./App";
 import { forgetThisLaunch } from "./regions";
 import { GLOBAL } from "./windowprefs";
@@ -87,7 +89,7 @@ function core(
   // Branches cut from the window (GL-1), listed after the ones `cut` names.
   const madeHere: string[] = [];
   let next = 0;
-  mockIPC((cmd, args) => {
+  const answering: Parameters<typeof mockIPC>[0] = (cmd, args) => {
     const a = (args ?? {}) as Record<string, unknown>;
     asked.push({ cmd, args: a });
     if (cmd === "plane_at_launch") return { plane: PLANE, from: PLANE, why: null };
@@ -168,7 +170,8 @@ function core(
     if (cmd === "alerts_everywhere") return alerts;
     if (cmd === "asks_waiting") return { plane: PLANE, asks: waitingAsks };
     return null;
-  });
+  };
+  mockIPC(answering, { shouldMockEvents: mockEvents });
   return { asked };
 }
 
@@ -220,6 +223,9 @@ let alerts: unknown = [];
 /** What git says of alpha's clones. A test sets it before `core()`. */
 let repos: unknown[] = [];
 
+/** Whether the core's events are mocked, so a test can send one (#1694). Set before `core()`. */
+let mockEvents = false;
+
 /** What the asks registry derives for the project (#1690). A test sets it before `core()`. */
 let waitingAsks: unknown[] = [];
 
@@ -269,6 +275,7 @@ beforeEach(() => {
   alerts = [{ plane: PLANE, alerts: [], stopped: null }];
   repos = [];
   waitingAsks = [];
+  mockEvents = false;
 });
 afterEach(() => {
   cleanup();
@@ -981,6 +988,42 @@ describe("the right side's activity bar", () => {
     const inbox = await screen.findByRole("tabpanel", { name: "Inbox" });
     expect(within(inbox).getByRole("region", { name: "steward 3" })).toBeInTheDocument();
     expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("tells the core while the Inbox is open, so no notification is sent about it (#1694)", async () => {
+    waitingAsks = [asking(3, "Run cargo test")];
+    const { asked } = core();
+    render(<App />);
+    await screen.findByRole("tabpanel", { name: "Memory" });
+    const told = () => asked.filter((one) => one.cmd === "inbox_shown").map((one) => one.args.open);
+    expect(told()).not.toContain(true);
+
+    await userEvent.click(tab("Inbox"));
+
+    await waitFor(() => expect(told().at(-1)).toBe(true));
+    expect(asked.find((one) => one.cmd === "inbox_shown")?.args.plane).toBe(PLANE);
+
+    await userEvent.click(tab("Memory"));
+
+    await waitFor(() => expect(told().at(-1)).toBe(false));
+  });
+
+  it("lands a clicked notification on the Inbox at its chat's group (#1694)", async () => {
+    mockEvents = true;
+    waitingAsks = [asking(3, "Run cargo test"), asking(4, "Run npm test")];
+    core();
+    render(<App />);
+    await screen.findByRole("tabpanel", { name: "Memory" });
+    await waitFor(() => expect(tab("Inbox")).toHaveAccessibleDescription("2 things wait on you"));
+    // Sent while the window was behind another app; the click brings it to the front.
+    const behind = vi.spyOn(document, "hasFocus").mockReturnValue(false);
+    await emit(ASKS_NOTIFIED, { plane: PLANE, session: 4 });
+    behind.mockRestore();
+    fireEvent.focus(window);
+
+    const inbox = await screen.findByRole("tabpanel", { name: "Inbox" });
+    const group = within(inbox).getByRole("region", { name: "steward 4" });
+    await waitFor(() => expect(within(group).getByRole("listitem")).toHaveFocus());
   });
 
   it("draws no count when nothing is left to do", async () => {

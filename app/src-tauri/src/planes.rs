@@ -3137,7 +3137,7 @@ impl Holding {
 /// What each window is holding, and which of its projects it has in front.
 ///
 /// **This is the map #111 named as missing, and the reason it was missing is the reason it is
-/// needed.** `already_looking_at` asks a chat's OWN plane whether that chat is in front,
+/// needed.** `asknotify::looking` asks a chat's OWN plane whether that chat is in front,
 /// because every plane numbers its chats from one — and with two planes open that is only
 /// half the question. Plane A's chat 3 can be in front *of plane A* while the window is
 /// showing plane B, and the notification the operator actually needed is the one that gets

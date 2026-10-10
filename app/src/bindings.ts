@@ -765,6 +765,11 @@ export const commands = {
 	 */
 	settleInboxUpdates: (plane: PlaneId, keys: string[] | null, how: UpdateSettled) => typedError<InboxUpdate[], string>(__TAURI_INVOKE("settle_inbox_updates", { plane, keys, how })),
 	/**
+	 *  The window says whether it has `plane`'s Inbox open (#1694): while it is, and the window
+	 *  is focused with the project in front, no notification is sent about that project's asks.
+	 */
+	inboxShown: (plane: PlaneId, open: boolean) => __TAURI_INVOKE<void>("inbox_shown", { plane, open }),
+	/**
 	 *  Sends what a pane typed to the session's program. Anything but the terminal's own answer
 	 *  drops a curation prompt still waiting to be typed into it (`Held::operator_input`).
 	 */

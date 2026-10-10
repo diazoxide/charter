@@ -324,3 +324,9 @@ while nobody was there or the chats whose Smart close stopped: since #1693 each 
 the Inbox, answered there, and the away summary's part for the refused dispatches opens the
 Inbox. #1695 retires what is left of the list. ⌘⇧I (Ctrl+Shift+I elsewhere) shows the
 Inbox, and so does its palette row.
+
+**Only an ask raises a system notification** (I-7, built in #1694): an update never does. One
+chat's asks a few seconds apart share one notification, titled by its chain and saying the kind of
+ask, never its words. None is sent while the window holding the project is focused with that
+project in front and its Inbox open, or with the chat itself on screen. A click on one brings the
+window forward, and the Inbox opens at that chat's group.
