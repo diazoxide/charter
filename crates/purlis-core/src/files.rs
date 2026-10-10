@@ -241,7 +241,13 @@ pub struct Folder {
 /// a link out of the branch or to an ignored file, something that is not a file (a FIFO, a
 /// socket), anything inside another repository nested in this one, and an ignored file.
 pub fn tree(plane: &Path, branch: Branch<'_>, folder: &str) -> Result<Folder, Refused> {
-    let (base, relative) = folder_at(plane, branch, folder)?;
+    tree_in(&base_of(plane, branch)?, branch, folder)
+}
+
+/// [`tree`] in a branch whose folder is already resolved to `base`.
+fn tree_in(base: &Path, branch: Branch<'_>, folder: &str) -> Result<Folder, Refused> {
+    let relative = folder_in(base, folder)?;
+    let base = base.to_path_buf();
     let dir = base.join(&relative);
     let unreadable = |e: std::io::Error| Refused::Unreadable {
         what: if folder.is_empty() {
@@ -611,7 +617,12 @@ fn listing(base: &Path, relative: &Path) -> std::io::Result<Vec<Listed>> {
 /// One folder of the branch, resolved, as [`tree`] reads it: what a watch on it is put on, so
 /// the tree hears an agent add or remove a file in it. Refused exactly as [`tree`] refuses it.
 pub fn folder(plane: &Path, branch: Branch<'_>, folder: &str) -> Result<PathBuf, Refused> {
-    folder_at(plane, branch, folder).map(|(base, relative)| base.join(relative))
+    folder_of_in(&base_of(plane, branch)?, folder)
+}
+
+/// [`folder`] in a branch whose folder is already resolved to `base`.
+fn folder_of_in(base: &Path, folder: &str) -> Result<PathBuf, Refused> {
+    folder_in(base, folder).map(|relative| base.join(relative))
 }
 
 /// [`folder`] for several folders of ONE branch, finding the branch once: one git call for the
@@ -648,29 +659,22 @@ pub fn folders(plane: &Path, branch: Branch<'_>, named: &[&str]) -> Vec<Result<P
         .collect()
 }
 
-/// The branch's resolved folder and `folder`'s path relative to it (`""` is the branch's own),
-/// once every check has passed: a plain relative path, inside the branch, not git's, a folder,
-/// and reached through no link.
-fn folder_at(
-    plane: &Path,
-    branch: Branch<'_>,
-    folder: &str,
-) -> Result<(PathBuf, PathBuf), Refused> {
-    let base = base_of(plane, branch)?;
-    let relative = folder_in(&base, folder)?;
-    Ok((base, relative))
+/// The branch's folder, found in this process and resolved.
+fn base_of(plane: &Path, branch: Branch<'_>) -> Result<PathBuf, Refused> {
+    resolved(&folder_of(plane, branch)?, branch)
 }
 
-/// The branch's folder, resolved.
-fn base_of(plane: &Path, branch: Branch<'_>) -> Result<PathBuf, Refused> {
-    let root = folder_of(plane, branch)?;
-    std::fs::canonicalize(&root).map_err(|e| Refused::Unreadable {
+/// A branch's folder, found, as the disk spells it.
+fn resolved(folder: &Path, branch: Branch<'_>) -> Result<PathBuf, Refused> {
+    std::fs::canonicalize(folder).map_err(|e| Refused::Unreadable {
         what: branch.called().to_string(),
         why: e.to_string(),
     })
 }
 
-/// `folder`'s path inside the resolved `base`, checked as [`folder_at`] says.
+/// `folder`'s path relative to the resolved `base` (`""` is the branch's own), once every check
+/// has passed: a plain relative path, inside the branch, not git's, a folder, and reached
+/// through no link.
 fn folder_in(base: &Path, folder: &str) -> Result<PathBuf, Refused> {
     let relative = if folder.is_empty() {
         PathBuf::new()
@@ -1003,9 +1007,14 @@ fn natural(a: &str, b: &str) -> std::cmp::Ordering {
 /// (through a link) to somewhere outside the branch. A link to another offered file of the same
 /// branch opens, as `CLAUDE.md` linked to `AGENTS.md` does in many repos.
 pub fn open(plane: &Path, branch: Branch<'_>, path: &str) -> Result<Opened, Refused> {
-    let (base, resolved) = locate(plane, branch, path)?;
+    open_in(&base_of(plane, branch)?, branch, path)
+}
+
+/// [`open`] in a branch whose folder is already resolved to `base`.
+fn open_in(base: &Path, branch: Branch<'_>, path: &str) -> Result<Opened, Refused> {
+    let resolved = locate(base, branch, path)?;
     // The resolved path has no link on it, so the open refuses one planted since.
-    let mut file = crate::contain::open_no_link(&base, &resolved).map_err(|e| {
+    let mut file = crate::contain::open_no_link(base, &resolved).map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             Refused::NotThere(path.to_string())
         } else {
@@ -1109,7 +1118,11 @@ pub struct Placed {
 /// is empty, absolute, walks up, or is or is inside a `.git`. An ignored file or folder is
 /// placed like any other: the tree draws it when asked, and nothing here reads its bytes.
 pub fn place(plane: &Path, branch: Branch<'_>, path: &str) -> Result<Placed, Refused> {
-    let base = base_of(plane, branch)?;
+    place_in(&base_of(plane, branch)?, path)
+}
+
+/// [`place`] in a branch whose folder is already resolved to `base`.
+fn place_in(base: &Path, path: &str) -> Result<Placed, Refused> {
     let relative = slashed(inside(path)?);
     // Git's own folder is refused by its name before the disk is asked (see `folder_in`).
     if relative.is_empty() || gits(Path::new(&relative)) {
@@ -1129,7 +1142,7 @@ pub fn place(plane: &Path, branch: Branch<'_>, path: &str) -> Result<Placed, Ref
             });
         }
     }
-    if names_git(&absolute, &base) {
+    if names_git(&absolute, base) {
         return Err(Refused::NotInPiece(path.to_string()));
     }
     let folder = absolute.is_dir();
@@ -1150,9 +1163,13 @@ pub fn place(plane: &Path, branch: Branch<'_>, path: &str) -> Result<Placed, Ref
 /// path). Answered as the disk spells it, with an empty `relative`: a path relative to the
 /// branch's folder means nothing for the folder itself.
 pub fn place_branch_folder(plane: &Path, branch: Branch<'_>) -> Result<Placed, Refused> {
-    let named = folder_of(plane, branch)?;
+    place_named_folder(&folder_of(plane, branch)?, branch)
+}
+
+/// [`place_branch_folder`] for the folder `named` as the workspace or git names it.
+fn place_named_folder(named: &Path, branch: Branch<'_>) -> Result<Placed, Refused> {
     let said = || branch.called().to_string();
-    match std::fs::symlink_metadata(&named) {
+    match std::fs::symlink_metadata(named) {
         Ok(meta) if meta.file_type().is_symlink() => return Err(Refused::FolderIsALink(said())),
         Ok(meta) if !meta.is_dir() => return Err(Refused::NotAFolder(said())),
         Ok(_) => {}
@@ -1166,7 +1183,7 @@ pub fn place_branch_folder(plane: &Path, branch: Branch<'_>) -> Result<Placed, R
             });
         }
     }
-    let absolute = std::fs::canonicalize(&named).map_err(|e| Refused::Unreadable {
+    let absolute = std::fs::canonicalize(named).map_err(|e| Refused::Unreadable {
         what: said(),
         why: e.to_string(),
     })?;
@@ -1246,7 +1263,19 @@ pub fn in_your_editor(
     editor: Editor,
     var: &dyn Fn(&str) -> Option<String>,
 ) -> Result<Launch, Refused> {
-    let (_, resolved) = locate(plane, branch, path)?;
+    in_your_editor_in(&base_of(plane, branch)?, branch, path, line, editor, var)
+}
+
+/// [`in_your_editor`] in a branch whose folder is already resolved to `base`.
+fn in_your_editor_in(
+    base: &Path,
+    branch: Branch<'_>,
+    path: &str,
+    line: u32,
+    editor: Editor,
+    var: &dyn Fn(&str) -> Option<String>,
+) -> Result<Launch, Refused> {
+    let resolved = locate(base, branch, path)?;
     // A submodule is offered by its path and is a folder; a FIFO is no file to edit.
     if !resolved.is_file() {
         return Err(Refused::NotAFile(path.to_string()));
@@ -1254,25 +1283,20 @@ pub fn in_your_editor(
     Ok(youreditor::launch(editor, &resolved, line, var)?)
 }
 
-/// The branch's resolved folder and the resolved file `path` names in it, once every check has
-/// passed: a plain relative path, offered by the list, inside the branch, not git's, and
-/// through a link only to another offered file.
-fn locate(plane: &Path, branch: Branch<'_>, path: &str) -> Result<(PathBuf, PathBuf), Refused> {
-    let folder = folder_of(plane, branch)?;
+/// The resolved file `path` names in the branch whose folder is resolved to `base`, once every
+/// check has passed: a plain relative path, offered by the list, inside the branch, not git's,
+/// and through a link only to another offered file.
+fn locate(base: &Path, branch: Branch<'_>, path: &str) -> Result<PathBuf, Refused> {
     let relative = inside(path)?;
     // **Only what the list offers opens** (ADR 0084 §2, ADR 0052): a file git tracks, or one
     // it does not track and does not ignore. An ignored `.env`, or a secret materialised into
     // the branch, is not something a review shows, and `piece_file` hands the window no
     // value the vault keeps out of it. One more git call per open.
-    let offered = files_in(&folder, branch)?;
+    let offered = files_in(base, branch)?;
     let offers = |relative: &Path| offered.binary_search(&slashed(relative)).is_ok();
     if !offers(relative) {
         return Err(Refused::NotOffered(path.to_string()));
     }
-    let base = std::fs::canonicalize(&folder).map_err(|e| Refused::Unreadable {
-        what: branch.called().to_string(),
-        why: e.to_string(),
-    })?;
     let resolved = match std::fs::canonicalize(base.join(relative)) {
         Ok(resolved) => resolved,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -1285,14 +1309,103 @@ fn locate(plane: &Path, branch: Branch<'_>, path: &str) -> Result<(PathBuf, Path
             });
         }
     };
-    if resolved == base || !resolved.starts_with(&base) || names_git(&resolved, &base) {
+    if resolved == base || !resolved.starts_with(base) || names_git(&resolved, base) {
         return Err(Refused::NotInPiece(path.to_string()));
     }
     // A link opens only a file the list offers too: one to an ignored file is refused.
-    if !resolved.strip_prefix(&base).is_ok_and(offers) {
+    if !resolved.strip_prefix(base).is_ok_and(offers) {
         return Err(Refused::NotOffered(path.to_string()));
     }
-    Ok((base, resolved))
+    Ok(resolved)
+}
+
+/// **The file commands, on a branch whose folder the bounded reader found** (#1189, D-1189-7).
+///
+/// [`root`] asks the reader's child for the branch's folder ([`Ask::Root`]), found and checked
+/// as the status read finds it, so the process asking starts no git to find it. Each command
+/// below then confines its path and reads against that folder in this process, refused exactly
+/// as its free-standing namesake refuses: the app's commands read a branch this way, and the
+/// command line and the tests keep the free-standing ones, which find the folder here.
+impl Root {
+    /// The folder as the disk spells it now: the reader's answer, resolved again here.
+    fn base(&self) -> Result<PathBuf, Refused> {
+        resolved(self.path(), self.branch())
+    }
+
+    /// [`tree`], on this branch.
+    pub fn tree(&self, folder: &str) -> Result<Folder, Refused> {
+        tree_in(&self.base()?, self.branch(), folder)
+    }
+
+    /// [`open`], on this branch.
+    pub fn open(&self, path: &str) -> Result<Opened, Refused> {
+        open_in(&self.base()?, self.branch(), path)
+    }
+
+    /// [`folder`], on this branch.
+    pub fn folder(&self, folder: &str) -> Result<PathBuf, Refused> {
+        folder_of_in(&self.base()?, folder)
+    }
+
+    /// [`place`], on this branch.
+    pub fn place(&self, path: &str) -> Result<Placed, Refused> {
+        place_in(&self.base()?, path)
+    }
+
+    /// [`named`], on this branch.
+    pub fn named(&self, path: &str) -> Result<String, Refused> {
+        named_in(&self.base()?, path)
+    }
+
+    /// [`in_your_editor`], on this branch.
+    pub fn in_your_editor(
+        &self,
+        path: &str,
+        line: u32,
+        editor: Editor,
+        var: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<Launch, Refused> {
+        in_your_editor_in(&self.base()?, self.branch(), path, line, editor, var)
+    }
+
+    /// [`place_branch_folder`], on this branch: the folder by the name the workspace gives it,
+    /// refused when that name is a link, and refused as gone when it is no longer the folder the
+    /// reader found.
+    pub fn place_branch_folder(&self) -> Result<Placed, Refused> {
+        let branch = self.branch();
+        let Branch { ws, repo, piece } = branch;
+        let named = match piece {
+            Some(piece) => worktree::path_for(self.plane(), ws, repo, piece)?,
+            None => self.plane().join("workspaces").join(ws).join(repo),
+        };
+        let placed = place_named_folder(&named, branch)?;
+        if placed.absolute != self.base()? {
+            return Err(Refused::NotThere(branch.called().to_string()));
+        }
+        Ok(placed)
+    }
+}
+
+/// [`named`], the branch's folder found by `reader`'s child ([`root`]): Copy relative path in the
+/// app (#1189). The path is refused by its spelling before the reader is asked, as [`named`]
+/// refuses it before it finds the folder.
+pub fn named_by(
+    reader: &Reader,
+    plane: &Path,
+    branch: Branch<'_>,
+    path: &str,
+) -> Result<String, Refused> {
+    spelled_inside(path)?;
+    root(reader, plane, branch)?.named(path)
+}
+
+/// The branch's folder, found by `reader`'s child when there is one ([`root`]), else in this
+/// process ([`folder_of`]): how ⌘P and ⌘⇧F find each branch of their scope (#1189).
+fn found(reader: Option<&Reader>, plane: &Path, branch: Branch<'_>) -> Result<PathBuf, Refused> {
+    match reader {
+        Some(reader) => root(reader, plane, branch).map(|root| root.path().to_path_buf()),
+        None => folder_of(plane, branch),
+    }
 }
 
 /// The branch's folder: a piece found the way the Explorer finds it, among the pieces git has;
@@ -1375,6 +1488,114 @@ fn slashed(relative: &Path) -> String {
 mod tests {
     use super::natural;
     use std::cmp::Ordering;
+
+    /// #1189: a reader whose child answers every ask with `answer` (the child's JSON), so a test
+    /// sees which folder a command reads, and that nothing but the reader found it.
+    #[cfg(unix)]
+    pub(super) fn reader_answering(answer: &str) -> (tempfile::TempDir, super::Reader) {
+        let dir = tempfile::tempdir().unwrap();
+        let said = dir.path().join("answer");
+        std::fs::write(&said, format!("\u{1e}charter-read\u{1e}{answer}\n")).unwrap();
+        let script = format!("cat >/dev/null; cat '{}'", said.display());
+        let reader = super::Reader::new(
+            "/bin/sh".into(),
+            ["-c", &script, super::READ_ARG].map(std::ffi::OsString::from),
+        );
+        (dir, reader)
+    }
+
+    /// A project holding the repo `alpha/thing` as a plain folder, with `a.txt` and `src/`.
+    #[cfg(unix)]
+    fn project() -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let plane = std::fs::canonicalize(dir.path()).unwrap();
+        let folder = plane.join("workspaces/alpha/thing");
+        std::fs::create_dir_all(folder.join("src")).unwrap();
+        std::fs::write(folder.join("a.txt"), "a\n").unwrap();
+        (dir, plane, folder)
+    }
+
+    #[cfg(unix)]
+    fn found_at(folder: &std::path::Path) -> String {
+        serde_json::json!({ "Ok": { "Root": { "base": folder, "refs": [] } } }).to_string()
+    }
+
+    const REPO: super::Branch<'static> = super::Branch {
+        ws: "alpha",
+        repo: "thing",
+        piece: None,
+    };
+
+    /// #1189: a branch the reader refuses is refused in the reader's own sentence.
+    #[cfg(unix)]
+    #[test]
+    fn a_branch_the_reader_refuses_is_refused_in_its_sentence() {
+        let (_dir, plane, _folder) = project();
+        let said = "thing in workspace 'alpha' has no branch folder called 'piece'";
+        let (_answer, reader) = reader_answering(&serde_json::json!({ "Err": said }).to_string());
+
+        let refused = super::root(&reader, &plane, REPO).unwrap_err();
+
+        assert_eq!(refused.to_string(), said);
+    }
+
+    /// #1189: the file commands confine and read against the folder the reader found.
+    #[cfg(unix)]
+    #[test]
+    fn the_file_commands_read_the_folder_the_reader_found() {
+        let (_dir, plane, folder) = project();
+        let (_answer, reader) = reader_answering(&found_at(&folder));
+
+        let root = super::root(&reader, &plane, REPO).unwrap();
+
+        assert_eq!(root.named("a.txt").unwrap(), "a.txt");
+        assert_eq!(root.place("src").unwrap().absolute, folder.join("src"));
+        assert_eq!(root.folder("src").unwrap(), folder.join("src"));
+        assert_eq!(root.place_branch_folder().unwrap().absolute, folder);
+        assert_eq!(
+            root.named("../a.txt").unwrap_err().to_string(),
+            "'../a.txt' is not a path inside the branch's folder"
+        );
+        assert_eq!(
+            root.folder("a.txt").unwrap_err().to_string(),
+            "'a.txt' is not a folder"
+        );
+    }
+
+    /// #1189: the branch's own folder is placed by the name the workspace gives it: a link
+    /// there is refused even when the reader found the folder it leads to.
+    #[cfg(unix)]
+    #[test]
+    fn a_branch_folder_named_by_a_link_is_refused_whatever_the_reader_found() {
+        let (_dir, plane, folder) = project();
+        let real = folder.with_file_name("real");
+        std::fs::rename(&folder, &real).unwrap();
+        std::os::unix::fs::symlink(&real, &folder).unwrap();
+        let (_answer, reader) = reader_answering(&found_at(&real));
+
+        let root = super::root(&reader, &plane, REPO).unwrap();
+
+        assert_eq!(
+            root.place_branch_folder().unwrap_err().to_string(),
+            "the folder of 'thing' is a link, and purlis places no folder a link leads to"
+        );
+    }
+
+    /// #1189: a folder the reader found that is not the one the workspace names is not placed.
+    #[cfg(unix)]
+    #[test]
+    fn a_branch_folder_that_is_not_the_one_the_reader_found_is_not_placed() {
+        let (_dir, plane, folder) = project();
+        let elsewhere = folder.join("src");
+        let (_answer, reader) = reader_answering(&found_at(&elsewhere));
+
+        let root = super::root(&reader, &plane, REPO).unwrap();
+
+        assert_eq!(
+            root.place_branch_folder().unwrap_err().to_string(),
+            "'thing' is not in the branch's folder any more"
+        );
+    }
 
     /// The race a check-then-list leaves open, closed: a folder that is a link by the time it
     /// is listed is refused by the open, not followed. (The swap itself is not timed here; the
