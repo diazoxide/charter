@@ -3403,12 +3403,12 @@ export function backId(session: number): string {
 }
 
 /**
- * **Whether a task's Start fresh runs** (#1609): the window half of lifting #1489's refusal,
- * which rides one train with the core half. Off until the core's `Held::start_chat_fresh` hands
- * a task its brief again (`rebrief::again`) instead of refusing it: while the core refuses every
- * task, a row offered as able to run would only ever be refused. The core half turns this on.
+ * **Whether a task's Start fresh runs** (#1609): the window half of lifting #1489's refusal.
+ * On since the core's `Held::start_chat_fresh` hands a task its brief again (`rebrief::again`)
+ * where the digest this launch kept confirms it, and refuses it otherwise, which the row's
+ * question says as any refused act is.
  */
-export const TASKS_START_FRESH = false;
+export const TASKS_START_FRESH = true;
 
 /** What a task's Start fresh does that its title cannot fit (#1609). */
 export const TASK_FRESH_NOTE =
