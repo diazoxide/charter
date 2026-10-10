@@ -68,23 +68,35 @@ function unescaped(body: string): string {
  * opens a string.
  */
 function rustLiterals(source: string): { literals: Literal[]; masked: string } {
+  const known = scanned.get(source);
+  if (known !== undefined) return known;
   const literals: Literal[] = [];
   const masked = source.split("");
   const blank = (from: number, to: number) => {
     for (let at = from; at < to; at += 1) if (masked[at] !== "\n") masked[at] = " ";
   };
-  const lineAt = (at: number) => source.slice(0, at).split("\n").length;
+  // Literals are met in order, so the line is counted on from the last one, not from the top.
+  let counted = 0;
+  let line = 1;
+  const lineAt = (at: number) => {
+    for (; counted < at; counted += 1) if (source[counted] === "\n") line += 1;
+    return line;
+  };
+  // Sticky (`y`) patterns match at `lastIndex`, so no copy of the rest is made per character.
+  const match = (pattern: RegExp, at: number) => {
+    pattern.lastIndex = at;
+    return pattern.exec(source);
+  };
   let at = 0;
   while (at < source.length) {
-    const rest = source.slice(at);
-    if (rest.startsWith("//")) {
+    if (source.startsWith("//", at)) {
       const end = source.indexOf("\n", at);
       const to = end < 0 ? source.length : end;
       blank(at, to);
       at = to;
       continue;
     }
-    if (rest.startsWith("/*")) {
+    if (source.startsWith("/*", at)) {
       let depth = 0;
       let to = at;
       while (to < source.length) {
@@ -101,7 +113,7 @@ function rustLiterals(source: string): { literals: Literal[]; masked: string } {
       at = to;
       continue;
     }
-    const raw = /^b?r(#*)"/.exec(rest);
+    const raw = match(/b?r(#*)"/y, at);
     if (raw && !/[A-Za-z0-9_]/.test(source[at - 1] ?? "")) {
       const close = `"${raw[1]}`;
       const end = source.indexOf(close, at + raw[0].length);
@@ -115,23 +127,28 @@ function rustLiterals(source: string): { literals: Literal[]; masked: string } {
       at = to;
       continue;
     }
-    const plain = /^b?"((?:[^"\\]|\\[\s\S])*)"/.exec(rest);
-    if (plain && (rest[0] === '"' || !/[A-Za-z0-9_]/.test(source[at - 1] ?? ""))) {
+    const plain = match(/b?"((?:[^"\\]|\\[\s\S])*)"/y, at);
+    if (plain && (source[at] === '"' || !/[A-Za-z0-9_]/.test(source[at - 1] ?? ""))) {
       literals.push({ text: unescaped(plain[1]), start: at, line: lineAt(at) });
       blank(at, at + plain[0].length);
       at += plain[0].length;
       continue;
     }
-    const char = /^b?'(?:[^'\\\n]|\\(?:u\{[0-9a-fA-F]+\}|x[0-9a-fA-F]{2}|.))'/.exec(rest);
-    if (char && (rest[0] === "'" || !/[A-Za-z0-9_]/.test(source[at - 1] ?? ""))) {
+    const char = match(/b?'(?:[^'\\\n]|\\(?:u\{[0-9a-fA-F]+\}|x[0-9a-fA-F]{2}|.))'/y, at);
+    if (char && (source[at] === "'" || !/[A-Za-z0-9_]/.test(source[at - 1] ?? ""))) {
       blank(at, at + char[0].length);
       at += char[0].length;
       continue;
     }
     at += 1;
   }
-  return { literals, masked: masked.join("") };
+  const found = { literals, masked: masked.join("") };
+  scanned.set(source, found);
+  return found;
 }
+
+/** Each source scanned once: the command places read every file of the app, in several cases. */
+const scanned = new Map<string, { literals: Literal[]; masked: string }>();
 
 /** Where each match of `opener` (ending on its `{` or `(`) opens, to where it closes. */
 function spans(masked: string, opener: RegExp): [number, number][] {
