@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791662322526,
+  "lastUpdate": 1791664119637,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -6384,6 +6384,48 @@ window.BENCHMARK_DATA = {
             "value": 101.8031455,
             "unit": "ms",
             "extra": "median of 5 runs: 101.544, 101.697, 101.803, 102.254, 103.217 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "eyehollow@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "dbrownsimple"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "80f32e773310e7637407c069d0cd7331d5ffafe2",
+          "message": "Hand the opencode permission hook its session by purlis's name alone\n\nThe shim's new permission hook also set the session variable's old name,\none spelling more than opencode.rs is allowed. Only a purlis that reads\nthe new name runs this hook, so the old one is dropped (issue 1691).\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nAssisted-by: claude-code\nPurlis-Chat: 01M4AREQXXRGBAEWM0SZ0N0WBN\nPurlis-Persona: steward",
+          "timestamp": "2026-10-11T00:14:10+04:00",
+          "tree_id": "b46dfd156c26773a2890495edf7e7a207f1f737d",
+          "url": "https://github.com/purlis/purlis/commit/80f32e773310e7637407c069d0cd7331d5ffafe2"
+        },
+        "date": 1791664118307,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.4826865,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.453, 0.470, 0.483, 0.484, 0.485 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.3159285,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.190, 16.256, 16.316, 16.454, 16.646 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 101.506145,
+            "unit": "ms",
+            "extra": "median of 5 runs: 100.996, 101.191, 101.506, 102.808, 103.137 ms"
           }
         ]
       }
