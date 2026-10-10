@@ -1924,6 +1924,26 @@ describe("a chat's row is one line, with a hover card (#1675)", () => {
     expect(await theCard()).toHaveTextContent("devops 4");
   });
 
+  it("still waits for the keyboard while a card is up: only the pointer skips the rest (#1687)", async () => {
+    core(threeTasks());
+    render(<App />);
+    const tree = await section();
+    await waitFor(() => expect(shape(tree)).toHaveLength(4));
+
+    await userEvent.hover(row(tree, "devops 2"));
+    expect(await theCard()).toHaveTextContent("devops 2");
+
+    // The keyboard comes to another row while that card is up: no card at once for it.
+    await userEvent.keyboard("{Shift}");
+    act(() => row(tree, "devops 3").focus());
+    await new Promise((done) => setTimeout(done, CARD_DELAY_MS / 5));
+    expect(card()?.textContent ?? "").not.toContain("devops 3");
+
+    // It still comes, after the whole rest, and alone.
+    await waitFor(() => expect(card()).toHaveTextContent("devops 3"));
+    expect(screen.getAllByRole("tooltip")).toHaveLength(1);
+  });
+
   it("shows a folded chat's tasks as a small count, and an open one's as its rows with guides", async () => {
     const { move } = core(threeTasks());
     render(<App />);

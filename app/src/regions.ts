@@ -271,9 +271,19 @@ const RETIRED_SIDE = "bottom";
  * **The preferences the file keeps beside the arrangement and the text sizes** (`layoutPref.ts`,
  * #1686), in the order the file has them: each is written under its key where it is not its
  * default, listened to and forgotten from this one list. A new one is one more row here, and
- * its field in {@link Document}.
+ * its field in {@link Document}: the build checks that each row's key is a field there, and
+ * that no field is left without its row ({@link Unlisted}).
  */
-const LAYOUT_PREFS = [YOUR_EDITOR, CHATS_LIST, EXPLORER_SECTIONS] as const;
+const LAYOUT_PREFS = [YOUR_EDITOR, CHATS_LIST, EXPLORER_SECTIONS] as const satisfies readonly {
+  readonly key: PrefField;
+}[];
+
+/** The fields of {@link Document} that are preferences of {@link LAYOUT_PREFS}. */
+type PrefField = Exclude<keyof Document, "version" | "regions" | "projects" | "text">;
+
+/** A preference field of the document no row of {@link LAYOUT_PREFS} writes: none, or
+ *  {@link asDocument} does not type-check, so a preference is never silently left unwritten. */
+type Unlisted = Exclude<PrefField, (typeof LAYOUT_PREFS)[number]["key"]>;
 
 /** The document, as it is written to the file. `text` is the two text sizes (`textSize.ts`,
  *  charter-app#283), kept here because they are the same kind of preference — how one operator
@@ -543,6 +553,7 @@ function sayWhatTheLayoutCost(path: string, started: ReturnType<typeof startingL
 const where = (path: string) => path || "the layout file";
 
 const asDocument = (regions: Arrangement): Document => {
+  const listed: [Unlisted] extends [never] ? typeof LAYOUT_PREFS : never = LAYOUT_PREFS;
   const projects = projectsSent();
   return {
     version: VERSION,
@@ -550,7 +561,7 @@ const asDocument = (regions: Arrangement): Document => {
     ...(projects !== undefined ? { projects } : {}),
     text: textSizes(),
     ...Object.fromEntries(
-      LAYOUT_PREFS.flatMap((pref) => {
+      listed.flatMap((pref) => {
         const written = pref.written();
         return written === undefined ? [] : [[pref.key, written]];
       }),

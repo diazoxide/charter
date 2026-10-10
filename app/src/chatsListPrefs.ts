@@ -70,7 +70,7 @@ export function isDefaultChatsList(prefs: ChatsListPrefs): boolean {
 }
 
 /** The store (`layoutPref.ts`), under `chats`. */
-export const CHATS_LIST = layoutPref<ChatsListPrefs>({
+export const CHATS_LIST = layoutPref<ChatsListPrefs, "chats">({
   key: "chats",
   fallback: DEFAULT_CHATS_LIST,
   load: (raw) => {

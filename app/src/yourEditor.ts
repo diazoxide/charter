@@ -65,7 +65,7 @@ export function loadEditor(raw: unknown): { editor: YourEditor | undefined; said
 }
 
 /** The store (`layoutPref.ts`), under `editor`. */
-export const YOUR_EDITOR = layoutPref<YourEditor | undefined>({
+export const YOUR_EDITOR = layoutPref<YourEditor | undefined, "editor">({
   key: "editor",
   fallback: undefined,
   load: (raw) => {

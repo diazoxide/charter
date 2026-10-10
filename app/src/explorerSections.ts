@@ -72,7 +72,7 @@ const sameSections = (one: ReadonlySet<SectionId>, other: ReadonlySet<SectionId>
 
 /** The machine's sections folded (`layoutPref.ts`), under `explorer`: the last fold in any
  *  project. */
-export const EXPLORER_SECTIONS = layoutPref<ReadonlySet<SectionId>>({
+export const EXPLORER_SECTIONS = layoutPref<ReadonlySet<SectionId>, "explorer">({
   key: "explorer",
   fallback: NONE,
   load: (raw) => {

@@ -16,9 +16,9 @@ import { atCreation, sayAboutThisMachine } from "./windowprefs";
  * `regions.ts` takes each one's {@link LayoutPref.written} into the document, listens to it and
  * forgets it, from one list: a new preference is one more row there.
  */
-export type LayoutPref<T> = {
+export type LayoutPref<T, K extends string = string> = {
   /** Its key in the layout document, which is also the alert's subject. */
-  readonly key: string;
+  readonly key: K;
   /** What it is now. */
   value(): T;
   /** Changes it; tells every listener, which writes the file, when it changed. */
@@ -37,8 +37,8 @@ export type LayoutPref<T> = {
   forget(): void;
 };
 
-export type LayoutPrefSpec<T> = {
-  key: string;
+export type LayoutPrefSpec<T, K extends string = string> = {
+  key: K;
   /** What it is where the file says nothing of it, or purlis refused the file. */
   fallback: T;
   /** It as a layout document holds it, and what had to be put right to read it. */
@@ -56,7 +56,9 @@ export type LayoutPrefSpec<T> = {
   forgotten?: () => void;
 };
 
-export function layoutPref<T>(spec: LayoutPrefSpec<T>): LayoutPref<T> {
+export function layoutPref<T, K extends string = string>(
+  spec: LayoutPrefSpec<T, K>,
+): LayoutPref<T, K> {
   /** What this launch changed it to, if anything. */
   let changed: { value: T } | undefined;
   /** What the launch started from, read once. */

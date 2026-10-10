@@ -17,7 +17,7 @@ import { describe, expect, it } from "vitest";
  * controls, `<input>`, `<select>` and `<textarea>`: outside the set, a file draws one only
  * where it is named below, with how many and why.
  *
- * Two kinds of entry, both exact about the file and both an upper bound on the count:
+ * Two kinds of entry, both exact about the file and about the count:
  * - **Not a form row** (`STANDS`): a box that is the surface itself rather than a row of a form,
  *   such as a list's filter, the palette's query, a tab renamed in place, a reply box, a raw file
  *   editor, or a secret's value box, which the set's `Field` cannot hold because a secret is
@@ -25,9 +25,10 @@ import { describe, expect, it } from "vitest";
  * - **Debt** (`DEBT`): a form control that should be a `Field` or a `Choice`, named so that
  *   moving it is a visible change, and so that a new one cannot arrive unnoticed.
  *
- * An upper bound and not an exact count, because a train can pay a debt off before this lands
- * beside it (DS-8's first pass moved Close a chat's radios onto the set). Lower an entry, or drop
- * it, when its file is paid off.
+ * An exact count and not an upper bound, so an entry cannot outlive what it names: a file that
+ * draws fewer than its entry says, or none, fails here until the entry is lowered or dropped. A
+ * train that pays a debt off (DS-8's first pass moved Close a chat's radios onto the set) lowers
+ * its entry in the same change, which is the visible change this guard is for.
  */
 
 const SRC = join(process.cwd(), "src");
@@ -110,16 +111,41 @@ export function nativeControls(source: string): number {
   return [...code.matchAll(/<(input|select|textarea)(?=[\s/>])/g)].length;
 }
 
+/** Each file whose native form controls differ from what {@link STANDS} and {@link DEBT} name
+ *  for it, either way, given what each view draws: a file over its entry, and an entry over its
+ *  file, which is stale. */
+function offTheList(drawn: ReadonlyMap<string, number>): string[] {
+  const files = new Set([...drawn.keys(), ...Object.keys(STANDS), ...Object.keys(DEBT)]);
+  return [...files].flatMap((file) => {
+    const count = drawn.get(file) ?? 0;
+    const named = (STANDS[file]?.count ?? 0) + (DEBT[file]?.count ?? 0);
+    return count !== named ? [`${file}: ${count} native form controls, ${named} named`] : [];
+  });
+}
+
 describe("the views take their form controls from the set (#626, D-626-5)", () => {
-  it("draw a native input, select or textarea only where it is named, and no more of them", () => {
-    const over = views().flatMap((path) => {
-      const file = relative(SRC, path);
-      if (file === THE_SET) return [];
-      const drawn = nativeControls(readFileSync(path, "utf8"));
-      const allowed = (STANDS[file]?.count ?? 0) + (DEBT[file]?.count ?? 0);
-      return drawn > allowed ? [`${file}: ${drawn} native form controls, ${allowed} named`] : [];
-    });
-    expect(over).toEqual([]);
+  it("draw a native input, select or textarea only where it is named, and as many as named", () => {
+    const drawn = new Map(
+      views()
+        .map((path) => [relative(SRC, path), nativeControls(readFileSync(path, "utf8"))] as const)
+        .filter(([file]) => file !== THE_SET),
+    );
+    expect(offTheList(drawn)).toEqual([]);
+  });
+
+  it("fails an entry its file no longer bears out, so none goes stale (#626)", () => {
+    // A file paid off, still named: it draws none of what its entry says.
+    expect(offTheList(new Map([["SandboxBlockNotice.tsx", 0]]))).toContain(
+      "SandboxBlockNotice.tsx: 0 native form controls, 1 named",
+    );
+    // A named file the views no longer have at all.
+    expect(offTheList(new Map()).some((line) => line.startsWith("SandboxBlockNotice.tsx: 0"))).toBe(
+      true,
+    );
+    // And one drawn where nothing names it.
+    expect(offTheList(new Map([["Fresh.tsx", 1]]))).toContain(
+      "Fresh.tsx: 1 native form controls, 0 named",
+    );
   });
 
   it("name only files that exist, each with a reason", () => {
