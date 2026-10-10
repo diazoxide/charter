@@ -9,15 +9,24 @@
 //! **The rule.** In shipped source (`crates/*/src`, `app/src-tauri/src`, `app/src`, without
 //! test files or a trailing `#[cfg(test)]` module) and in the docs purlis ships for agents and
 //! people to read (`crates/purlis-core/docs`, #1383), a line that uses deferral wording must
-//! have a tracking reference — an issue (`#123`) or an ADR (`ADR 0050`) — on it or within
-//! [`WINDOW`] lines of it. The issue is the plan; the ADR is the decision that it waits on
-//! something charter does not control.
+//! have a tracking reference — an issue (`#123`) or an ADR (`ADR 0050`) — in its own paragraph
+//! ([`paragraph`]) and within [`WINDOW`] lines of it. The issue is the plan; the ADR is the
+//! decision that it waits on something charter does not control.
+//!
+//! **The same paragraph, not only a nearby line** (#1629, D-1629-1): a link to ADR 0027 two lines
+//! above "Cutting a piece from the app is not in this version yet" used to pass it, though the
+//! link was another paragraph's. A paragraph ends at a blank line (a bare `///` or `//` too), and
+//! a heading or a table row starts one of its own, so each row of a table names its own ticket.
 //!
 //! **What counts as deferral wording** is [`DEFERRAL`]: the phrases this repository uses for
 //! "planned, not here" — "not in this version", "not ported", "not supported yet", "not here
 //! yet", "not built yet", "no backend … yet" — and [`DOES_NOT`], "does not <verb> … yet"
 //! ("does not follow that yet", "does not draw yet"), unless the verb is one of [`MOMENTS`]:
-//! "does not exist yet" is about time. A
+//! "does not exist yet" is about time. Three more shapes count whatever their verb (#1629,
+//! D-1629-2): "not <verb> in (or by) this version" ([`DEFERRAL`]), "this version … not … yet"
+//! ([`THIS_VERSION`]: the version is the subject, so "this version does not have that yet" is a
+//! deferral though `have` is a moment) and "not checked … yet" ([`NOT_CHECKED`], the doctor's
+//! deferred rows). A
 //! thing left out on purpose is not deferred and is not worded so: it says "left out" or "by
 //! design", with the reason. A plain "not yet" is not matched, and neither is "cannot … yet":
 //! almost every one in this tree is about time ("written and not yet acknowledged", "the plane
@@ -40,7 +49,7 @@ const WINDOW: usize = 4;
 
 /// The wording of a deferral, case-insensitive.
 const DEFERRAL: &str = concat!(
-    r"(?i)not in this version|\bnot (yet )?ported\b|\bported yet\b|\bunported\b",
+    r"(?i)not in this version|\bnot [a-z]+ (?:in|by) this version\b|\bnot (yet )?ported\b|\bported yet\b|\bunported\b",
     r"|\bhas not ported\b|\bwas not ported\b|not supported yet",
     r"|\bnot here yet\b|\bnot built yet\b|\bno [a-z ]*backend[^.;]*\byet\b",
 );
@@ -50,6 +59,15 @@ const DEFERRAL: &str = concat!(
 /// not check … yet". The verb is the first group; [`MOMENTS`] are let through. A comma or a
 /// colon ends the clause, so "does not read, so the grant covers nothing yet" is two.
 const DOES_NOT: &str = r"(?i)\bdoes not ([a-z]+)\b[^.;,:]*\byet\b";
+
+/// "this version … not … yet" within one sentence, case-insensitive (#1629): a sentence about
+/// what this version does is a deferral whatever its verb, "in this version it says the layer is
+/// not checked there yet" and "commands this version does not have yet" alike.
+const THIS_VERSION: &str = r"(?i)\bthis version\b[^.;]*\bnot\b[^.;]*\byet\b";
+
+/// "not checked … yet" within one clause, case-insensitive (#1629): the doctor's rows for what it
+/// does not check in this version, "says of both that they are not checked yet".
+const NOT_CHECKED: &str = r"(?i)\bnot checked\b[^.;,:]*\byet\b";
 
 /// Verbs after "does not" that say what has not happened YET, not what purlis does not do:
 /// "a folder that does not exist yet", "commits the remote does not have yet", "files git
@@ -68,13 +86,68 @@ const EXEMPT: &[(&str, &str, &str)] = &[
     ),
 ];
 
-/// Whether `text` is worded as a deferral.
-fn is_deferral(deferral: &Regex, does_not: &Regex, text: &str) -> bool {
-    deferral.is_match(text)
-        || does_not.captures_iter(text).any(|found| {
-            let verb = found[1].to_lowercase();
-            !MOMENTS.contains(&verb.as_str())
-        })
+/// The wording of a deferral, every pattern compiled once.
+struct Wording {
+    deferral: Regex,
+    does_not: Regex,
+    this_version: Regex,
+    not_checked: Regex,
+}
+
+impl Wording {
+    fn new() -> Self {
+        Self {
+            deferral: Regex::new(DEFERRAL).expect("the deferral pattern"),
+            does_not: Regex::new(DOES_NOT).expect("the does-not pattern"),
+            this_version: Regex::new(THIS_VERSION).expect("the this-version pattern"),
+            not_checked: Regex::new(NOT_CHECKED).expect("the not-checked pattern"),
+        }
+    }
+
+    /// Whether `text` is worded as a deferral.
+    fn is_deferral(&self, text: &str) -> bool {
+        self.deferral.is_match(text)
+            || self.this_version.is_match(text)
+            || self.not_checked.is_match(text)
+            || self.does_not.captures_iter(text).any(|found| {
+                let verb = found[1].to_lowercase();
+                !MOMENTS.contains(&verb.as_str())
+            })
+    }
+}
+
+/// Whether a line, as [`prose`], is a paragraph on its own: a heading or a table row, so a table
+/// row's ticket is never its neighbour's. A list item is not: a list goes on the sentence that
+/// leads into it, and that sentence's reference is the list's.
+fn a_line_of_its_own(prose: &str) -> bool {
+    // A heading is `#`s and a space: `#670` at the start of a wrapped line is a reference.
+    let heading = prose.starts_with('#')
+        && prose
+            .trim_start_matches('#')
+            .chars()
+            .next()
+            .is_none_or(char::is_whitespace);
+    heading || prose.starts_with('|')
+}
+
+/// The lines of the paragraph line `n` is in, as a range of `prosed`, at most [`WINDOW`] lines
+/// on either side of it (D-1629-1). A paragraph ends at an empty line (a bare `///` or `//`
+/// too), and a line that is [`a_line_of_its_own`] is a paragraph of one.
+fn paragraph(prosed: &[String], n: usize) -> std::ops::Range<usize> {
+    if a_line_of_its_own(&prosed[n]) {
+        return n..n + 1;
+    }
+    let joins = |line: &String| !line.is_empty() && !a_line_of_its_own(line);
+    let mut from = n;
+    while from > n.saturating_sub(WINDOW) && joins(&prosed[from - 1]) {
+        from -= 1;
+    }
+    let last = (n + WINDOW).min(prosed.len().saturating_sub(1));
+    let mut to = n;
+    while to < last && joins(&prosed[to + 1]) {
+        to += 1;
+    }
+    from..to + 1
 }
 
 /// A tracking reference: an issue or an ADR.
@@ -179,9 +252,8 @@ fn every_deferral_in_shipped_source_names_its_ticket() {
         files.len() - before
     );
 
-    let deferral = Regex::new(DEFERRAL).expect("the deferral pattern");
-    let does_not = Regex::new(DOES_NOT).expect("the does-not pattern");
-    let worded = |text: &str| is_deferral(&deferral, &does_not, text);
+    let wording = Wording::new();
+    let worded = |text: &str| wording.is_deferral(text);
     let reference = Regex::new(REFERENCE).expect("the reference pattern");
     let mut unfiled = Vec::new();
     let mut seen = 0;
@@ -208,9 +280,10 @@ fn every_deferral_in_shipped_source_names_its_ticket() {
                 continue;
             }
             seen += 1;
-            let from = n.saturating_sub(WINDOW);
-            let to = (n + WINDOW + 1).min(lines.len());
-            if !lines[from..to].iter().any(|l| reference.is_match(l)) {
+            if !lines[paragraph(&prosed, n)]
+                .iter()
+                .any(|l| reference.is_match(l))
+            {
                 unfiled.push(format!("{at}:{}: {}", n + 1, line.trim()));
             }
         }
@@ -223,7 +296,7 @@ fn every_deferral_in_shipped_source_names_its_ticket() {
     );
     assert!(
         unfiled.is_empty(),
-        "deferral wording with no issue or ADR within {WINDOW} lines — file the work and cite \
+        "deferral wording with no issue or ADR in its paragraph within {WINDOW} lines — file the work and cite \
          it, or, if it is left out on purpose, say so without deferral wording:\n{}",
         unfiled.join("\n")
     );
@@ -232,8 +305,7 @@ fn every_deferral_in_shipped_source_names_its_ticket() {
 #[test]
 fn the_deferral_pattern_matches_a_promise_and_not_a_moment() {
     purlis_core::unsteered!();
-    let deferral = Regex::new(DEFERRAL).expect("the deferral pattern");
-    let does_not = Regex::new(DOES_NOT).expect("the does-not pattern");
+    let wording = Wording::new();
     for promise in [
         "seeding it from past sessions is not in this version yet.",
         "this version of purlis does not check vaults and the credentials they hold yet",
@@ -245,8 +317,14 @@ fn the_deferral_pattern_matches_a_promise_and_not_a_moment() {
         "this purlis clones into a workspace that exists, and does not create one yet",
         "The Rust charter does not scaffold one yet",
         "a value this version does not do yet",
+        // The four #1629 found by hand.
+        "A relocated worktree root is not followed in this version yet",
+        "and in this version it says the layer is not checked there yet",
+        "and says of both that they are not checked yet",
+        "it forwards commands this version does not have yet",
+        "Optional, and not followed by this version: see below.",
     ] {
-        assert!(is_deferral(&deferral, &does_not, promise), "{promise}");
+        assert!(wording.is_deferral(promise), "{promise}");
     }
     for moment in [
         "Bytes written and not yet acknowledged",
@@ -258,16 +336,15 @@ fn the_deferral_pattern_matches_a_promise_and_not_a_moment() {
         "the header an index this store does not have to exist yet",
         "files it added that git does not track yet",
     ] {
-        assert!(!is_deferral(&deferral, &does_not, moment), "{moment}");
+        assert!(!wording.is_deferral(moment), "{moment}");
     }
 }
 
 #[test]
 fn a_deferral_wrapped_across_two_lines_reads_as_one() {
     purlis_core::unsteered!();
-    let deferral = Regex::new(DEFERRAL).expect("the deferral pattern");
-    let does_not = Regex::new(DOES_NOT).expect("the does-not pattern");
-    let deferral = |text: &str| is_deferral(&deferral, &does_not, text);
+    let wording = Wording::new();
+    let deferral = |text: &str| wording.is_deferral(text);
     let first = prose(r#"const V: &str = "this version of purlis does not check vaults and the \"#);
     let second = prose(r#"                                 credentials they hold yet";"#);
     assert!(!deferral(&first) && !deferral(&second));
@@ -277,4 +354,51 @@ fn a_deferral_wrapped_across_two_lines_reads_as_one() {
         prose("    /// ported…)*."),
     ];
     assert!(deferral(&doc.join(" ")), "{doc:?}");
+}
+
+/// #1629, D-1629-1: a reference counts only in the deferral's own paragraph. The link that sat
+/// two lines above `workspaces.md`'s "Cutting a piece …" no longer passes it.
+#[test]
+fn a_reference_in_another_paragraph_does_not_name_the_deferral() {
+    purlis_core::unsteered!();
+    let prosed = |text: &str| text.lines().map(prose).collect::<Vec<_>>();
+
+    let apart = prosed(
+        "See ADR 0027 for the layout.\n\nCutting a piece from the app is not in\nthis version yet.",
+    );
+    assert_eq!(paragraph(&apart, 2), 2..4);
+
+    let headed = prosed("## Not in this version yet\nsee #12");
+    assert_eq!(
+        paragraph(&headed, 1),
+        1..2,
+        "a heading is a block of its own"
+    );
+
+    let rows = prosed("| one | not in this version yet |\n| two | waits on #12 |");
+    assert_eq!(
+        paragraph(&rows, 0),
+        0..1,
+        "a table row is its own paragraph"
+    );
+
+    let list = prosed("Two exits (ADR 0067):\n- one\n- not in this version yet");
+    assert_eq!(
+        paragraph(&list, 2),
+        0..3,
+        "a list goes on the sentence leading into it"
+    );
+
+    let comment = prosed("/// Waits on #12.\n///\n/// not in this version yet");
+    assert_eq!(
+        paragraph(&comment, 2),
+        2..3,
+        "a bare `///` ends a paragraph"
+    );
+
+    let together = prosed("/// is not followed in this version yet\n/// #1381 keeps it.");
+    assert_eq!(paragraph(&together, 0), 0..2);
+
+    let long: Vec<String> = (0..20).map(|n| format!("line {n}")).collect();
+    assert_eq!(paragraph(&long, 10), 6..15, "never past the window");
 }
