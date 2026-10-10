@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791643946369,
+  "lastUpdate": 1791644843301,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -6006,6 +6006,48 @@ window.BENCHMARK_DATA = {
             "value": 103.929711,
             "unit": "ms",
             "extra": "median of 5 runs: 102.928, 103.512, 103.930, 105.539, 106.180 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "eyehollow@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "dbrownsimple"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "f0dc1d257b14a678ae983275f7eabaafc08f03b2",
+          "message": "Work out the Activity mark's contrast outside the page in its scenario spec\n\nThe marks test named its colour helpers inside browser.execute, which the\nspec's bundler wraps in a __name the page does not have, so the WebView\nthrew a ReferenceError on both engines. The page now reads only the colours\n(the nearest opaque background found in a loop), and the contrast is worked\nout in the spec, as the other specs that measure in the page do.\n\nRefs #1457\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nAssisted-by: claude-code\nPurlis-Chat: 01M4AREQXXRGBAEWM0SZ0N0WBN\nPurlis-Persona: steward",
+          "timestamp": "2026-10-10T18:54:01+04:00",
+          "tree_id": "9701bf6278daea11d401797bdf4ae0df318cf1d7",
+          "url": "https://github.com/purlis/purlis/commit/f0dc1d257b14a678ae983275f7eabaafc08f03b2"
+        },
+        "date": 1791644842598,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.473017,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.462, 0.464, 0.473, 0.473, 0.475 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.671819999999997,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.226, 16.526, 16.672, 16.690, 16.892 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 101.5374055,
+            "unit": "ms",
+            "extra": "median of 5 runs: 101.080, 101.457, 101.537, 102.420, 102.666 ms"
           }
         ]
       }
