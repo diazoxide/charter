@@ -14,27 +14,33 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
 import type { FinishedTask, Moved, OpenChat } from "./bindings";
 import { setChatsListPrefs } from "./chatsListPrefs";
+import { cardOf } from "./chatCard.testkit";
 import type { State } from "./chatState";
 import { forgetThisLaunch } from "./regions";
 
 /**
  * **The Chats list at fifty chats, against the whole window** (#1499, V100-47 to V100-50): the
  * order its sessions stand in and when it is held still, the folds it makes by itself, the
- * filter, the two lines of a row, its keys, and what a chat moving redraws.
+ * filter, a row's one line and its card, its keys, and what a chat moving redraws.
  *
  * The harness is `ChatsSection.window.test.tsx`'s: the core's answers as fixtures, and its
  * events sent by hand.
  */
 
-/** Every draw of a row, by its chat: a row draws its activity slot each time it is drawn. */
+/** Every draw of a row, by its chat: a row asks for its task's tokens each time it is drawn
+ *  (`useTokensOnHover`, which reads nothing until the card is up). */
 const drawn = vi.hoisted(() => ({ rows: [] as number[] }));
 
-vi.mock("./ChatRowActivity", () => ({
-  ChatRowActivity: ({ session }: { session: number }) => {
-    drawn.rows.push(session);
-    return null;
-  },
-}));
+vi.mock("./tasksUsed", async (original) => {
+  const real = await original<typeof import("./tasksUsed")>();
+  return {
+    ...real,
+    useTokensOnHover: (what: Parameters<typeof real.useTokensOnHover>[0]) => {
+      if ("chat" in what) drawn.rows.push(what.chat);
+      return real.useTokensOnHover(what);
+    },
+  };
+});
 
 vi.mock("./SessionPane", () => ({
   SessionPane: ({ session }: { session: number }) => (
@@ -324,6 +330,9 @@ const shownInFront = () => screen.getByTestId("pane").textContent;
 /** The word a row says its state in. */
 const word = (name: string) => row(name).querySelector(".shown-state .word")?.textContent;
 const hiddenSaid = () => document.querySelector(".chats-hidden")?.textContent;
+/** The small count a folded row says of its tasks (#1675), as it is drawn. */
+const folded = (name: string) =>
+  row(name).querySelector('.task-count [aria-hidden="true"]')?.textContent;
 
 /** Three sessions, the first with a task, and each made to do what a test says. */
 const threeSessions = () => [
@@ -609,12 +618,11 @@ describe("the folds the Chats list makes by itself (V100-48)", () => {
     expect(row("steward 1")).toHaveAttribute("aria-expanded", "true");
     expect(shape()).toEqual(["1 steward 1", "2 devops 2", "2 devops 3"]);
 
-    // Folded by the person, the row says what it hides: both open tasks, by how each ended.
+    // Folded by the person, the row counts what it hides, and its card says how each ended.
     fireEvent.keyDown(row("steward 1"), { key: "ArrowLeft" });
     expect(row("steward 1")).toHaveAttribute("aria-expanded", "false");
-    expect(within(row("steward 1")).getByTestId("task-count-1")).toHaveTextContent(
-      "1 failed · 1 done",
-    );
+    expect(folded("steward 1")).toBe("2");
+    expect((await cardOf(row("steward 1"))).facts.Tasks).toBe("1 failed · 1 done");
   });
 
   it("counts the open tasks that are done on the row it folds over them by itself", async () => {
@@ -625,7 +633,8 @@ describe("the folds the Chats list makes by itself (V100-48)", () => {
     move(3, "done");
 
     expect(row("steward 1")).toHaveAttribute("aria-expanded", "false");
-    expect(within(row("steward 1")).getByTestId("task-count-1")).toHaveTextContent("2 done");
+    expect(folded("steward 1")).toBe("2");
+    expect((await cardOf(row("steward 1"))).facts.Tasks).toBe("2 done");
   });
 
   it("keeps a fold set by hand when it would have opened the session by itself", async () => {
@@ -635,10 +644,21 @@ describe("the folds the Chats list makes by itself (V100-48)", () => {
     expect(row("steward 1")).toHaveAttribute("aria-expanded", "false");
     move(2, "done");
     move(3, "done");
-    move(3, "waiting", [3]);
+    move(3, "running");
 
     expect(row("steward 1")).toHaveAttribute("aria-expanded", "false");
     expect(shape()).toEqual(["1 steward 1", "1 steward 4"]);
+  });
+
+  it("takes a fold set by hand off once, when a task under it comes to need the person (#1675)", async () => {
+    const { move } = await up();
+    fireEvent.keyDown(row("steward 1"), { key: "ArrowLeft" });
+    move(2, "done");
+
+    move(3, "waiting", [3]);
+
+    expect(row("steward 1")).toHaveAttribute("aria-expanded", "true");
+    expect(shape()).toEqual(["1 steward 1", "2 devops 2", "2 devops 3", "1 steward 4"]);
   });
 
   it("keeps a session opened by hand open when it would have folded it by itself", async () => {
@@ -661,20 +681,21 @@ describe("the folds the Chats list makes by itself (V100-48)", () => {
     render(<App />);
     await section();
 
-    // Five done and nothing at work: folded by itself, and its row counts them (#1491: the
-    // one count a row says, which its tab's chip and the explorer's line share).
-    await waitFor(() =>
-      expect(row("steward 1").querySelector(".task-count")?.textContent).toBe("5 done"),
-    );
+    // Five done and nothing at work: folded by itself, and its row counts them, and its card
+    // says how they ended (#1491: the one count, which its tab's chip and the explorer's line
+    // share).
+    await waitFor(() => expect(folded("steward 1")).toBe("5"));
     expect(row("steward 1")).toHaveAttribute("aria-expanded", "false");
+    expect((await cardOf(row("steward 1"))).facts.Tasks).toBe("5 done");
     expect(screen.queryByRole("group", { name: "Finished tasks of steward 1" })).toBeNull();
 
-    // Opened by hand, the finished tasks are under it, and the row says the same count: it
-    // is the same on a folded row and an open one.
+    // Opened by hand, the finished tasks are under it, and the row counts nothing: they are
+    // its rows now. Its card says the same as it did folded.
     fireEvent.keyDown(row("steward 1"), { key: "ArrowRight" });
     const group = await screen.findByRole("group", { name: "Finished tasks of steward 1" });
     expect(within(group).getByRole("button", { name: "Finished (5)" })).toBeTruthy();
-    expect(row("steward 1").querySelector(".task-count")?.textContent).toBe("5 done");
+    expect(row("steward 1").querySelector(".task-count")).toBeNull();
+    expect((await cardOf(row("steward 1"))).facts.Tasks).toBe("5 done");
     // One source: the folded marks the row drew before are gone.
     expect(theTree().querySelector(".below-summary")).toBeNull();
   });
@@ -689,9 +710,10 @@ describe("the folds the Chats list makes by itself (V100-48)", () => {
 
     expect(await screen.findByRole("group", { name: "Finished tasks of steward 1" })).toBeTruthy();
     expect(row("steward 1")).toHaveAttribute("aria-expanded", "true");
-    // Folded by hand, it counts both ends, the failure first.
+    // Folded by hand, it counts both, and its card says both ends, the failure first.
     fireEvent.keyDown(row("steward 1"), { key: "ArrowLeft" });
-    expect(row("steward 1").querySelector(".task-count")?.textContent).toBe("1 failed · 1 done");
+    expect(folded("steward 1")).toBe("2");
+    expect((await cardOf(row("steward 1"))).facts.Tasks).toBe("1 failed · 1 done");
   });
 });
 
@@ -915,34 +937,33 @@ describe("a row of the Chats list (V100-19, V100-50)", () => {
     await waitFor(() => expect(shape()).toHaveLength(4));
     return held;
   };
-  const second = (name: string) => row(name).querySelector(".line.two");
 
-  it("is two lines: the mark, the name and the state, then where it works", async () => {
+  it("is one line: the persona's badge, the name and the state, and where it works is in its card", async () => {
     const { move } = await up();
     move(1, "running");
 
+    expect(theTree().querySelector(".line.two")).toBeNull();
     const first = row("steward 1").querySelector(".line.one");
     expect(first?.querySelector(".persona-mark")).not.toBeNull();
     expect(first?.querySelector(".session")?.textContent).toBe("steward 1");
     expect(first?.querySelector(".shown-state .word")?.textContent).toBe("working");
-    expect(second("steward 1")?.querySelector(".workspace")?.textContent).toBe("alpha");
+    expect((await cardOf(row("steward 1"))).facts.Workspace).toBe("alpha");
   });
 
-  it("says the whole name on hover and to a screen reader, whatever the row cuts short", async () => {
+  it("says the whole name in its card and to a screen reader, whatever the row cuts short", async () => {
     await up();
 
-    expect(row("steward 1").querySelector(".session")).toHaveAttribute("title", "steward 1");
     expect(row("steward 1")).toHaveAccessibleName(/^steward 1/);
+    expect((await cardOf(row("steward 1"))).text).toMatch(/^steward 1/);
   });
 
-  it("says a task's workspace only when it is not its asker's, and its own branch where it has one", async () => {
+  it("says a task's workspace and its own branch in its card, and on no row", async () => {
     await up();
 
-    expect(second("devops 2")?.querySelector(".workspace")).toBeNull();
-    expect(second("devops 3")?.querySelector(".workspace")?.textContent).toBe("beta");
-    expect(second("devops 4")?.querySelector(".own-branch")?.textContent).toBe(
-      "own branch fix-login",
-    );
+    expect((await cardOf(row("devops 2"))).facts.Workspace).toBe("alpha");
+    expect((await cardOf(row("devops 3"))).facts.Workspace).toBe("beta");
+    expect((await cardOf(row("devops 4"))).facts.Branch).toBe("fix-login");
+    expect(theTree().textContent).not.toContain("fix-login");
   });
 
   it("says how long a chat has been in its state, once the window has seen it come into it", async () => {
@@ -950,25 +971,12 @@ describe("a row of the Chats list (V100-19, V100-50)", () => {
 
     // The first the window hears of it: how long it has been so is not known, and not said.
     move(2, "running");
-    expect(row("devops 2").querySelector(".since")).toBeNull();
+    expect((await cardOf(row("devops 2"))).facts["In this state"]).toBeUndefined();
 
     move(2, "waiting");
 
-    expect(row("devops 2").querySelector(".since")?.textContent).toBe("just now");
-    expect(row("devops 3").querySelector(".since")).toBeNull();
-  });
-
-  it("has its second line whether or not there is anything to say on it yet", async () => {
-    const { move } = await up();
-
-    // A task where its asker works, with no branch and no time yet: nothing to say.
-    expect(second("devops 2")).not.toBeNull();
-    expect(second("devops 2")?.textContent).toBe("");
-    move(2, "running");
-    move(2, "waiting");
-
-    // What it comes to say is said in the line that was already there.
-    expect(second("devops 2")?.textContent).toBe("just now");
+    expect((await cardOf(row("devops 2"))).facts["In this state"]).toBe("just now");
+    expect((await cardOf(row("devops 3"))).facts["In this state"]).toBeUndefined();
   });
 
   it("keeps its two status lines in the tree while they have nothing to say", async () => {
@@ -987,20 +995,6 @@ describe("a row of the Chats list (V100-19, V100-50)", () => {
     expect(theTree().textContent).not.toMatch(/no tab/i);
     for (const one of within(theTree()).getAllByRole("treeitem"))
       expect(one.getAttribute("title") ?? "").not.toMatch(/tab/i);
-  });
-
-  it("drops the second line on one line, and keeps what it said as the row's tooltip", async () => {
-    await up();
-
-    act(() => setChatsListPrefs({ lines: 1 }));
-
-    expect(theTree().querySelector(".line.two")).toBeNull();
-    // Its first line; what the chat runs on follows it on every row (#1673).
-    expect(row("devops 3")).toHaveAttribute("title", "beta\nruns on claude");
-    expect(row("devops 4")).toHaveAttribute("title", "own branch fix-login\nruns on claude");
-    expect(row("devops 2")).toHaveAttribute("title", "runs on claude");
-    // The first line is as it was.
-    expect(row("devops 3").querySelector(".line.one .session")?.textContent).toBe("devops 3");
   });
 });
 

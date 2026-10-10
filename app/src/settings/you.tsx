@@ -43,7 +43,7 @@ export function youGroups(): SettingsGroup[] {
       id: "you.chats",
       label: "Chats list",
       help: "How chats are listed and summed up, on this machine.",
-      settings: [chatRows, chatsGrouped, tasksTabbed, awaySummary],
+      settings: [chatsGrouped, tasksTabbed, awaySummary],
     },
     thisMachineGroup(),
   ];
@@ -103,39 +103,6 @@ const editor: Setting = {
           options={EDITORS.map((one) => ({ value: one.id, label: one.name, says: one.says }))}
           value={chosen}
           onValueChange={(to) => setYourEditor(to as YourEditor)}
-        />
-      ),
-      grouped: true,
-    };
-  },
-};
-
-/** Whether a row of the Chats list is two lines or one (#1499, V100-73). */
-const chatRows: Setting = {
-  id: "you.chats.rows",
-  label: "Rows",
-  help: "How much each chat's row says.",
-  useControl: function useChatRows() {
-    const { lines } = useChatsListPrefs();
-    return {
-      control: (ids) => (
-        <Choice
-          kind="radio"
-          ids={ids}
-          options={[
-            {
-              value: "2",
-              label: "Two lines",
-              says: "Name and state, then where it works and for how long.",
-            },
-            {
-              value: "1",
-              label: "One line",
-              says: "Name and state only. What the second line said is the row's tooltip.",
-            },
-          ]}
-          value={String(lines)}
-          onValueChange={(to) => setChatsListPrefs({ lines: to === "1" ? 1 : 2 })}
         />
       ),
       grouped: true,

@@ -143,19 +143,6 @@ describe("text size, in Settings", () => {
 });
 
 describe("the Chats list, in Settings (#1499, V100-73)", () => {
-  it("chooses two lines or one for a row, and starts at two", async () => {
-    render(<SettingsTab />);
-    await userEvent.click(group("Chats list"));
-
-    const rows = screen.getByRole("radiogroup", { name: "Rows" });
-    expect(within(rows).getByRole("radio", { name: "Two lines" })).toBeChecked();
-
-    await userEvent.click(within(rows).getByRole("radio", { name: "One line" }));
-
-    expect(chatsListPrefs().lines).toBe(1);
-    expect(within(rows).getByRole("radio", { name: "One line" })).toBeChecked();
-  });
-
   it("groups the list by workspace, off until it is turned on", async () => {
     render(<SettingsTab />);
     await userEvent.click(group("Chats list"));

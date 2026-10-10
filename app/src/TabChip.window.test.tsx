@@ -14,6 +14,8 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
 import type { FinishedTask, Moved, OpenChat } from "./bindings";
 import type { State } from "./chatState";
+import { facts } from "./chatCard.testkit";
+import { CARD_DELAY_MS } from "./ChatsSection";
 import { forgetKeyboard } from "./paneKeyboard";
 import { forgetThisLaunch } from "./regions";
 import { GRACE_MS, REST_MS } from "./tabTasks";
@@ -628,8 +630,10 @@ describe("the menu a chip opens", () => {
     expect(line("talk").querySelector(".since")?.textContent).toBe("2m");
     expect(line("sweep").querySelector(".since")).toBeNull();
     expect(line("probe").querySelector(".since")).toBeNull();
-    // One clock: the Chats list's own row says the same time of the same chat.
-    expect(treeRow(tree, "talk").querySelector(".since")?.textContent).toBe("2m");
+    // One clock: the Chats list's own row's card says the same time of the same chat (#1675).
+    act(() => treeRow(tree, "talk").focus());
+    pass(CARD_DELAY_MS);
+    expect(facts(screen.getByRole("tooltip"))["In this state"]).toBe("2m");
   });
 
   it("switches the tab to the row picked, closes, and puts the keyboard in that chat", async () => {

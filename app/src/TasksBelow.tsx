@@ -1,4 +1,4 @@
-import { createContext, memo, useContext, useLayoutEffect, useState, type ReactNode } from "react";
+import { createContext, useContext, useLayoutEffect, useState, type ReactNode } from "react";
 import { useSyncExternalStoreWithSelector } from "use-sync-external-store/with-selector";
 import { useChatsHere, useChatsSelect } from "./chatState";
 import { sameBuckets, taskCountsSaid, type TaskCounts } from "./taskBuckets";
@@ -80,9 +80,9 @@ export function useTasksBelow(session: number | undefined): TasksBelow {
 
 /**
  * **Session `session`'s count of its tasks** (`TaskCounts`): how many are working, waiting,
- * done and failed, read from the rows the Chats list draws. The one count: a session's row says
- * it (`TaskCountShown`), `shownState` is handed its `working` as what the session waits on, and
- * a tab's chip and a folded row's summary read it here.
+ * done and failed, read from the rows the Chats list draws. The one count: a session's row's
+ * card says it and a folded row its total (`ChatsSection`, #1675), `shownState` is handed its
+ * `working` as what the session waits on, and a tab's chip reads it here.
  *
  * Drawn again only when the count changes.
  */
@@ -102,18 +102,3 @@ export function useTaskCountSaid(session: number | undefined): string | undefine
       taskCountsSaid(taskCountOf(states, below), { atLimit: atLimitOf(below) }) || undefined,
   );
 }
-
-/**
- * **A session's count, on its row** (#1491): `2 working · 1 waiting · 3 done · 1 failed`.
- * Reads its own session's tasks and their states, so a task that changes state redraws this
- * and its own marks, and no row. Draws nothing for a session with no tasks.
- */
-export const TaskCountShown = memo(function TaskCountShown({ session }: { session: number }) {
-  const said = useTaskCountSaid(session);
-  if (said === undefined) return null;
-  return (
-    <span className="task-count" data-testid={`task-count-${session}`}>
-      {said}
-    </span>
-  );
-});

@@ -1033,7 +1033,7 @@ function TaskLine({
 }
 
 /** The id of what a menu line's task is doing, which the line is described by (#1551): its
- *  own, since the Chats list's row carries `chatDoingId` and an id is one element's. */
+ *  own, as an id is one element's. */
 function menuDoingId(session: number): string {
   return `tasks-menu-doing-${session}`;
 }

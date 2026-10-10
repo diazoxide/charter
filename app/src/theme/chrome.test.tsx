@@ -62,6 +62,8 @@ import { RemovePersona } from "../RemovePersona";
 import { RenameWorkspace } from "../RenameWorkspace";
 import { SavingView } from "../SavingView";
 import { StartChat } from "../StartChat";
+import { ChatsSection } from "../ChatsSection";
+import { chatsTree } from "../chatsTree";
 import { TabRename } from "../TabRename";
 import { TaskEndAsk } from "../TaskEnd";
 import { PinItem, UpdateItem } from "../Updates";
@@ -943,6 +945,37 @@ const DIALOGS: Opened[] = [
           onCancel={nothing}
         />,
       ),
+  },
+  {
+    name: "a Chats row's card",
+    file: "ChatsSection.tsx",
+    open: async () => {
+      render(
+        <ChatsSection
+          rows={chatsTree([
+            {
+              session: 1,
+              name: "steward 1",
+              persona: "steward",
+              workspace: "alpha",
+              shell: false,
+              parent: null,
+              mode: null,
+              from: null,
+              tab: true,
+              branch: null,
+              report: null,
+              outcome: null,
+              asking: null,
+              harness: "Claude Code",
+            },
+          ])}
+          onOpen={nothing}
+        />,
+      );
+      await userEvent.hover(await screen.findByRole("treeitem"));
+      await screen.findByRole("tooltip", {}, { timeout: 3000 });
+    },
   },
   {
     name: "a tab's name refused",

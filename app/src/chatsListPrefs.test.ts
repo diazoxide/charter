@@ -30,39 +30,39 @@ afterEach(() => {
 });
 
 describe("how the Chats list is drawn (#1499, V100-73)", () => {
-  it("is two lines and one order until the person says otherwise", () => {
+  it("is one order until the person says otherwise", () => {
     expect(loadChatsList({ version: 1, regions: [] })).toEqual({
-      prefs: { lines: 2, grouped: false, tabbed: false, away: true },
+      prefs: { grouped: false, tabbed: false, away: true },
       said: [],
     });
     expect(chatsListPrefs()).toEqual(DEFAULT_CHATS_LIST);
   });
 
   it("is read from the layout file, each field on its own", () => {
-    expect(loadChatsList({ chats: { lines: 1, grouped: true, tabbed: false } }).prefs).toEqual({
-      lines: 1,
-      grouped: true,
-      tabbed: false,
-      away: true,
-    });
     expect(loadChatsList({ chats: { grouped: true, tabbed: false } }).prefs).toEqual({
-      lines: 2,
       grouped: true,
       tabbed: false,
       away: true,
     });
-    expect(loadChatsList({ chats: { lines: 1 } }).prefs).toEqual({
-      lines: 1,
+    expect(loadChatsList({ chats: { away: false } }).prefs).toEqual({
       grouped: false,
       tabbed: false,
-      away: true,
+      away: false,
     });
+  });
+
+  it("reads a file that still says how many lines a row takes as if it did not (#1675)", () => {
+    // A row is one line now: what an older purlis wrote is no fault of the file.
+    for (const lines of [1, 2, 3])
+      expect(loadChatsList({ chats: { lines, grouped: true } })).toEqual({
+        prefs: { grouped: true, tabbed: false, away: true },
+        said: [],
+      });
   });
 
   it("opens a pressed task inside its session's tab until the person says otherwise (#1489)", () => {
     expect(DEFAULT_CHATS_LIST.tabbed).toBe(false);
     expect(loadChatsList({ chats: { tabbed: true } }).prefs).toEqual({
-      lines: 2,
       grouped: false,
       tabbed: true,
       away: true,
@@ -75,7 +75,6 @@ describe("how the Chats list is drawn (#1499, V100-73)", () => {
   it("sums up what happened while the person was away until they turn it off (#1514)", () => {
     expect(DEFAULT_CHATS_LIST.away).toBe(true);
     expect(loadChatsList({ chats: { away: false } }).prefs).toEqual({
-      lines: 2,
       grouped: false,
       tabbed: false,
       away: false,
@@ -95,7 +94,6 @@ describe("how the Chats list is drawn (#1499, V100-73)", () => {
     setChatsListPrefs({ tabbed: true });
     await expect.poll(() => written.length).toBe(1);
     expect(JSON.parse(written[0]).chats).toEqual({
-      lines: 2,
       grouped: false,
       tabbed: true,
       away: true,
@@ -103,16 +101,16 @@ describe("how the Chats list is drawn (#1499, V100-73)", () => {
   });
 
   it("is the default where the file says something else, and says so", () => {
-    const { prefs, said } = loadChatsList({ chats: { lines: 3, grouped: "yes" } });
+    const { prefs, said } = loadChatsList({ chats: { tabbed: 3, grouped: "yes" } });
 
     expect(prefs).toEqual(DEFAULT_CHATS_LIST);
-    expect(said.join()).toContain('"chats.lines" 3');
+    expect(said.join()).toContain('"chats.tabbed" 3');
     expect(said.join()).toContain('"chats.grouped" "yes"');
     expect(loadChatsList({ chats: [1] }).said).toHaveLength(1);
   });
 
   it("says what the file got wrong in the alerts drawer, linked to where it is fixed", () => {
-    handed({ version: 1, regions: [], chats: { lines: "two" } });
+    handed({ version: 1, regions: [], chats: { grouped: "two" } });
 
     expect(chatsListPrefs()).toEqual(DEFAULT_CHATS_LIST);
     expect(JSON.stringify(aboutThisMachine())).toContain(PATH);
@@ -120,13 +118,13 @@ describe("how the Chats list is drawn (#1499, V100-73)", () => {
   });
 
   it("is what the launch started from, until it is changed", () => {
-    handed({ version: 1, regions: [], chats: { lines: 1 } });
+    handed({ version: 1, regions: [], chats: { tabbed: true } });
     const { result } = renderHook(() => useChatsListPrefs());
-    expect(result.current).toEqual({ lines: 1, grouped: false, tabbed: false, away: true });
+    expect(result.current).toEqual({ grouped: false, tabbed: true, away: true });
 
-    act(() => setChatsListPrefs({ grouped: true, tabbed: false }));
+    act(() => setChatsListPrefs({ grouped: true }));
 
-    expect(result.current).toEqual({ lines: 1, grouped: true, tabbed: false, away: true });
+    expect(result.current).toEqual({ grouped: true, tabbed: true, away: true });
   });
 
   it("is written to the layout file as it is changed, and left out of it at the default", async () => {
@@ -136,16 +134,15 @@ describe("how the Chats list is drawn (#1499, V100-73)", () => {
       return null;
     });
 
-    setChatsListPrefs({ lines: 1 });
+    setChatsListPrefs({ grouped: true });
     await expect.poll(() => written.length).toBe(1);
     expect(JSON.parse(written[0]).chats).toEqual({
-      lines: 1,
-      grouped: false,
+      grouped: true,
       tabbed: false,
       away: true,
     });
 
-    setChatsListPrefs({ lines: 2 });
+    setChatsListPrefs({ grouped: false });
     await expect.poll(() => written.length).toBe(2);
     expect("chats" in JSON.parse(written[1])).toBe(false);
   });

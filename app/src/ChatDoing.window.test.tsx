@@ -9,43 +9,48 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
+import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
 import type { ChatDoing, Doing, Moved, OpenChat } from "./bindings";
-import { setChatsListPrefs } from "./chatsListPrefs";
+import { card, facts, theCard } from "./chatCard.testkit";
 import type { State } from "./chatState";
 import { forgetThisLaunch } from "./regions";
 
 /**
- * **A working chat's row says in one line what it is doing, against the whole window**
- * (#1493, V100-42, V100-71): the line coming, changing, standing in for the rest of the second
- * line beside the time and giving it back, in the present while a tool runs and in the past
- * once it is back, never changing what a row is made of, and never being there for a chat
- * nothing was heard from. And what one chat's line changing draws again.
+ * **What a working chat is doing, in its row's card, against the whole window** (#1493,
+ * V100-42, V100-71, #1675): the line coming and changing while the card is up, in the present
+ * while a tool runs and in the past once it is back, never on the row itself, and never there
+ * for a chat nothing was heard from. And what one chat's line changing draws again.
  *
  * The harness is `ChatsList.window.test.tsx`'s: the core's answers as fixtures, and its
  * events sent by hand.
  */
 
-/** Every draw of a chat's line or of its second line's contents, and of a row, by its chat. */
+/** Every draw of a chat's line, and of a row, by its chat. */
 const drawn = vi.hoisted(() => ({ lines: [] as number[], rows: [] as number[] }));
 
 vi.mock("./chatDoing", async (original) => {
   const real = await original<typeof import("./chatDoing")>();
   return {
     ...real,
-    // The line asks this each time it is drawn (`ChatDoingLine`), and so does what holds the
-    // second line's contents (`SecondLine`).
+    // The card's line asks this each time it is drawn.
     useDoingSaid: (session: number) => {
       drawn.lines.push(session);
       return real.useDoingSaid(session);
     },
-    // And a row asks this each time it is drawn. **Only the row may call it**: that is what
-    // makes a call a row's draw. The line inside the row (`ChatRowActivity`) spells the same id
-    // out for that reason (#1551); a line that called this would read here as a row redrawn.
-    chatDoingId: (session: number) => {
-      drawn.rows.push(session);
-      return real.chatDoingId(session);
+  };
+});
+
+// And a row asks this each time it is drawn (`useTokensOnHover`, which reads nothing until the
+// card is up).
+vi.mock("./tasksUsed", async (original) => {
+  const real = await original<typeof import("./tasksUsed")>();
+  return {
+    ...real,
+    useTokensOnHover: (what: Parameters<typeof real.useTokensOnHover>[0]) => {
+      if ("chat" in what) drawn.rows.push(what.chat);
+      return real.useTokensOnHover(what);
     },
   };
 });
@@ -222,16 +227,17 @@ const row = (name: string) => {
   if (found === undefined) throw new Error(`no row is named ${name}`);
   return found;
 };
-const second = (name: string) => row(name).querySelector(".line.two");
-const line = (name: string) => row(name).querySelector(".chat-doing");
-const said = (name: string) => line(name)?.textContent;
+/** Brings up row `name`'s card with a pointer resting on it, and leaves it up. */
+const opened = async (name: string) => {
+  await userEvent.hover(row(name));
+  const shown = await theCard();
+  expect(shown.querySelector(".chat-card-name")?.textContent).toBe(name);
+  return shown;
+};
+/** What the card that is up says the chat is doing, and the card's line itself. */
+const line = () => card()?.querySelector(".chat-doing") ?? null;
+const said = () => line()?.textContent;
 const word = (name: string) => row(name).querySelector(".shown-state .word")?.textContent;
-
-/** What a row is made of: its lines, and what stands in each, by class. */
-const made = (name: string) =>
-  [...row(name).children].map(
-    (part) => `${part.className}[${[...part.children].map((one) => one.className).join(",")}]`,
-  );
 
 /** A session, a task of it where it works, one in another workspace, and a second session. */
 const four = () => [
@@ -258,42 +264,40 @@ afterEach(() => {
   clearMocks();
   drawn.lines.length = 0;
   drawn.rows.length = 0;
-  act(() => setChatsListPrefs({ lines: 2 }));
 });
 
-describe("a working chat's row says what it is doing (#1493)", () => {
-  it("says it on the second line, in purlis's words, and changes as the chat works", async () => {
+describe("a working chat's card says what it is doing (#1493, #1675)", () => {
+  it("says it in purlis's words, and changes as the chat works", async () => {
     const { move, tell } = await up();
     move(2, "running");
-    expect(line("devops 2")).toBeNull();
+    await opened("devops 2");
+    expect(line()).toBeNull();
 
     tell(2, doing("thinking"));
-    expect(said("devops 2")).toBe("thinking");
+    expect(said()).toBe("thinking");
 
     tell(2, doing("command", "cargo"));
-    expect(said("devops 2")).toBe("running cargo");
+    expect(said()).toBe("running cargo");
 
     tell(2, doing("reading", "state.rs", 1));
-    expect(said("devops 2")).toBe("reading state.rs");
+    expect(said()).toBe("reading state.rs");
     tell(2, doing("reading", null, 3));
-    expect(said("devops 2")).toBe("reading 3 files");
+    expect(said()).toBe("reading 3 files");
 
-    // One line of it, and one only.
-    expect(row("devops 2").querySelectorAll(".chat-doing")).toHaveLength(1);
-    expect(line("devops 2")?.closest(".line")).toBe(second("devops 2"));
-    // The whole of it on hover, where the row cuts it short.
-    expect(line("devops 2")).toHaveAttribute("title", "reading 3 files");
+    // One line of it, and one only, in the card and not on the row.
+    expect(card()?.querySelectorAll(".chat-doing")).toHaveLength(1);
+    expect(theTree().querySelector(".chat-doing")).toBeNull();
   });
 
   it("says a tool in the present while it runs and in the past once it has come back", async () => {
     const { move, tell } = await up();
     move(2, "running");
+    await opened("devops 2");
 
     tell(2, doing("command", "cargo"));
-    expect(said("devops 2")).toBe("running cargo");
+    expect(said()).toBe("running cargo");
     tell(2, done("command", "cargo"));
-    expect(said("devops 2")).toBe("ran cargo");
-    expect(line("devops 2")).toHaveAttribute("title", "ran cargo");
+    expect(said()).toBe("ran cargo");
 
     for (const [kind, name, count, now, over] of [
       ["command", null, 0, "running a command", "ran a command"],
@@ -310,65 +314,55 @@ describe("a working chat's row says what it is doing (#1493)", () => {
       ["tool", null, 0, "using a tool", "used a tool"],
     ] as const) {
       tell(2, doing(kind, name, count));
-      expect(said("devops 2"), kind).toBe(now);
+      expect(said(), kind).toBe(now);
       tell(2, done(kind, name, count));
-      expect(said("devops 2"), kind).toBe(over);
+      expect(said(), kind).toBe(over);
     }
   });
 
-  it("stands in for where it works while the chat works, keeps how long, and gives the line back", async () => {
+  it("says it beside where the chat works and how long, and takes it away when the turn ends", async () => {
     const { move, tell } = await up();
-    // A task in another workspace: its second line says where it works.
     move(3, "running");
     move(3, "waiting");
-    expect(second("devops 3")?.querySelector(".workspace")?.textContent).toBe("beta");
-    expect(second("devops 3")?.querySelector(".since")).not.toBeNull();
-
     move(3, "running");
     tell(3, doing("editing", "Notice.tsx"));
+    const shown = await opened("devops 3");
 
-    expect(said("devops 3")).toBe("editing Notice.tsx");
-    expect(second("devops 3")?.querySelector(".workspace")).toBeNull();
-    // How long it has been at work stays, after what it is doing: "editing Notice.tsx · now".
-    const together = second("devops 3")?.querySelector(".doing-and-since");
-    expect([...(together?.children ?? [])].map((one) => one.className)).toEqual([
-      "chat-doing",
-      "since",
-    ]);
-    expect(together?.querySelector(".since")?.textContent).toBe("just now");
+    expect(said()).toBe("editing Notice.tsx");
+    expect(facts(shown)).toMatchObject({ Workspace: "beta", "In this state": "just now" });
 
     // The turn ends: the core takes the line away, and the board says it is no longer at work.
     tell(3, null);
     move(3, "waiting");
 
-    expect(line("devops 3")).toBeNull();
-    expect(second("devops 3")?.querySelector(".doing-and-since")).toBeNull();
-    expect(second("devops 3")?.querySelector(".workspace")?.textContent).toBe("beta");
-    expect(second("devops 3")?.querySelector(".since")).not.toBeNull();
+    expect(line()).toBeNull();
+    expect(facts(card())).toMatchObject({ Workspace: "beta", "In this state": "just now" });
   });
 
   it("is gone the moment the board says the turn ended, whichever word lands first", async () => {
     const { move, tell } = await up();
     move(2, "running");
     tell(2, doing("command", "cargo"));
-    expect(line("devops 2")).not.toBeNull();
+    await opened("devops 2");
+    expect(line()).not.toBeNull();
 
     // The board's word first: the line the window still holds is not drawn.
     move(2, "waiting");
-    expect(line("devops 2")).toBeNull();
+    expect(line()).toBeNull();
 
     // And a chat that needs the person wears none either.
     move(2, "running");
-    expect(line("devops 2")).not.toBeNull();
+    expect(line()).not.toBeNull();
     move(2, "waiting", [2]);
-    expect(line("devops 2")).toBeNull();
+    expect(line()).toBeNull();
   });
 
   it("takes a closed chat's line away, so the next chat with its number does not start with it", async () => {
     const { move, tell } = await up();
     move(2, "running");
     tell(2, doing("command", "cargo"));
-    expect(said("devops 2")).toBe("running cargo");
+    await opened("devops 2");
+    expect(said()).toBe("running cargo");
 
     // The chat closes: the core says it has no line.
     tell(2, null);
@@ -376,55 +370,29 @@ describe("a working chat's row says what it is doing (#1493)", () => {
     // The number is at work again before anything new was said of it.
     move(2, "running");
 
-    expect(line("devops 2")).toBeNull();
+    expect(line()).toBeNull();
   });
 
-  it("is made of the same two lines whatever it says: no row grows a line or loses one", async () => {
+  it("never changes what a row is made of: one line, whatever the chat is doing", async () => {
     const { move, tell } = await up();
     const names = ["steward 1", "devops 2", "devops 3", "steward 4"];
-    for (const name of names) expect(second(name), name).not.toBeNull();
-    expect(made("devops 2")).toHaveLength(2);
-    expect(made("devops 2")[1]).toBe("line two[]");
-    expect(made("devops 3")[1]).toBe("line two[workspace]");
+    /** What a row is made of, by class. */
+    const made = (name: string) =>
+      [...row(name).children].map(
+        (part) =>
+          `${part.className}[${[...part.children].map((one) => one.classList[0]).join(",")}]`,
+      );
+    const before = names.map(made);
 
     for (const session of [1, 2, 3, 4]) move(session, "running");
     tell(1, doing("command", "npm"));
     tell(2, doing("editing", "a_file_name_that_is_far_wider_than_a_sidebar.tsx"));
     tell(3, doing("helper"));
 
-    // Each row is still a first line and a second, and the second holds one thing: what the
-    // chat is doing, with the time beside it where there is one.
-    for (const name of ["steward 1", "devops 2", "devops 3"]) {
-      expect(row(name).children, name).toHaveLength(2);
-      expect(made(name)[1], name).toBe("line two[doing-and-since]");
-    }
+    expect(names.map(made)).toEqual(before);
+    expect(theTree().querySelector(".chat-doing, .line.two")).toBeNull();
     // Nothing is added beside a row either: the list has the same items.
     expect(theTree().querySelectorAll('li[role="none"]')).toHaveLength(4);
-    expect(line("devops 2")?.children).toHaveLength(1);
-    expect(line("devops 2")?.querySelector("bdi")?.textContent).toBe(
-      "a_file_name_that_is_far_wider_than_a_sidebar.tsx",
-    );
-
-    for (const session of [1, 2, 3]) tell(session, null);
-    for (const session of [1, 2, 3, 4]) move(session, "waiting");
-    for (const session of [1, 2, 3, 4]) move(session, "running");
-    for (const session of [1, 2, 3, 4]) move(session, "waiting");
-
-    // Given back: what a row is made of is what it was, with the time in its state now said.
-    for (const name of names) expect(row(name).children, name).toHaveLength(2);
-    expect(made("devops 2")[1]).toBe("line two[since]");
-    expect(made("devops 3")[1]).toBe("line two[workspace,since]");
-  });
-
-  it("says nothing on one line: there is no second line for it to stand in", async () => {
-    const { move, tell } = await up();
-    act(() => setChatsListPrefs({ lines: 1 }));
-    move(2, "running");
-    tell(2, doing("command", "cargo"));
-
-    expect(second("devops 2")).toBeNull();
-    expect(line("devops 2")).toBeNull();
-    expect(row("devops 2").children).toHaveLength(1);
   });
 
   it("starts from what the core holds when the window opens in the middle of a turn", async () => {
@@ -432,19 +400,21 @@ describe("a working chat's row says what it is doing (#1493)", () => {
       { plane: PLANE, session: 2, sequence: 7, doing: doing("command", "cargo") },
     ]);
     move(2, "running");
+    await opened("devops 2");
 
-    await waitFor(() => expect(said("devops 2")).toBe("running cargo"));
+    await waitFor(() => expect(said()).toBe("running cargo"));
   });
 
   it("does not take a telling older than the one it holds, or one of another project", async () => {
     const { move, tell } = await up();
     move(2, "running");
     tell(2, doing("command", "cargo"), 50);
+    await opened("devops 2");
 
     tell(2, doing("thinking"), 49);
-    expect(said("devops 2")).toBe("running cargo");
+    expect(said()).toBe("running cargo");
     tell(2, doing("searching"), 60, "/home/dev/another");
-    expect(said("devops 2")).toBe("running cargo");
+    expect(said()).toBe("running cargo");
   });
 });
 
@@ -452,23 +422,24 @@ describe("a chat nothing was heard from (V100-71)", () => {
   it("has no line and no placeholder, whatever is said of it", async () => {
     const { move, tell } = await up();
     move(1, "running");
-    const before = made("steward 4");
 
     // Chat 4's harness has sent nothing: the board knows no state for it.
     expect(word("steward 4")).toMatch(/^running \(no detail from /);
     tell(4, doing("command", "cargo"));
+    const shown = await opened("steward 4");
 
-    expect(line("steward 4")).toBeNull();
-    expect(made("steward 4")).toEqual(before);
-    expect(second("steward 4")?.textContent).toBe("beta");
+    expect(line()).toBeNull();
+    expect(shown.textContent).not.toContain("cargo");
   });
 
   it("has no line while it waits for its first prompt, or once it has ended", async () => {
     const { move, tell } = await up();
     tell(2, doing("thinking"));
+    move(2, "waiting");
+    await opened("devops 2");
     for (const state of ["waiting", "done", "failed"] as const) {
       move(2, state);
-      expect(line("devops 2"), state).toBeNull();
+      expect(line(), state).toBeNull();
     }
   });
 });
@@ -478,7 +449,8 @@ describe("what a chat can make its line read as (#1493)", () => {
     const { move, tell } = await up();
     move(2, "running");
     tell(2, doing("editing", "Notice.tsx"));
-    expect(line("devops 2")?.querySelector("bdi")?.textContent).toBe("Notice.tsx");
+    await opened("devops 2");
+    expect(line()?.querySelector("bdi")?.textContent).toBe("Notice.tsx");
 
     // The core passes no such name. Were one to arrive, the window drops it by itself: markup,
     // a space, a letter that draws as a blank, a look-alike letter, a name too long.
@@ -491,10 +463,10 @@ describe("what a chat can make its line read as (#1493)", () => {
       "a".repeat(49),
     ]) {
       tell(2, doing("editing", name));
-      expect(said("devops 2"), name).toBe("editing a file");
-      expect(line("devops 2")?.children, name).toHaveLength(0);
+      expect(said(), name).toBe("editing a file");
+      expect(line()?.children, name).toHaveLength(0);
       tell(2, doing("command", name));
-      expect(said("devops 2"), name).toBe("running a command");
+      expect(said(), name).toBe("running a command");
     }
   });
 
@@ -502,46 +474,46 @@ describe("what a chat can make its line read as (#1493)", () => {
     const { move, tell } = await up();
     move(2, "running");
     tell(2, doing("needs you", "Allow"));
-    expect(line("devops 2")).toBeNull();
+    await opened("devops 2");
+    expect(line()).toBeNull();
 
     tell(2, doing("helper", "steward"));
-    expect(said("devops 2")).toBe("waiting on a helper");
+    expect(said()).toBe("waiting on a helper");
   });
 
-  it("is never a button, a link or a notice: it is words on the row's own second line", async () => {
+  it("is never a button, a link or a notice: it is words in the card", async () => {
     const { move, tell } = await up();
     move(2, "running");
     tell(2, doing("command", "cargo"));
+    await opened("devops 2");
 
-    const shown = line("devops 2");
-    expect(shown?.tagName).toBe("SPAN");
+    const shown = line();
     expect(shown?.querySelector("button, a, [role]")).toBeNull();
     expect(shown?.closest('[role="alert"], [role="status"], .notice')).toBeNull();
   });
 });
 
-describe("what a screen reader is told of the line (#1493)", () => {
-  it("is not announced as it changes, and is the row's description on demand", async () => {
+describe("what a screen reader is told of the line (#1493, #1675)", () => {
+  it("is not announced as it changes, and is the row's description while the card is up", async () => {
     const { move, tell } = await up();
     move(2, "running");
     tell(2, doing("command", "cargo"));
+    await opened("devops 2");
 
-    const shown = line("devops 2");
+    const shown = line();
     // Not a live region, nor inside one: it would chatter.
     expect(shown?.closest("[aria-live], [role='status'], [role='alert'], [role='log']")).toBeNull();
     // Out of the row's name, which would otherwise change under a reader several times a second.
-    expect(shown).toHaveAttribute("aria-hidden", "true");
     expect(row("devops 2")).toHaveAccessibleName(/^devops 2/);
     expect(row("devops 2")).not.toHaveAccessibleName(/cargo/);
-    // And said when the row's description is asked for.
-    expect(row("devops 2")).toHaveAccessibleDescription("running cargo");
+    // And said as the row's description, with the rest of its card.
+    expect(row("devops 2")).toHaveAccessibleDescription(/running cargo/);
 
     tell(2, done("reading", null, 3));
-    expect(row("devops 2")).toHaveAccessibleDescription("read 3 files");
+    expect(row("devops 2")).toHaveAccessibleDescription(/read 3 files/);
 
     tell(2, null);
-    // Nothing doing: what is left is the row's hover, what it runs on (#1673).
-    expect(row("devops 2")).toHaveAccessibleDescription("runs on claude");
+    expect(row("devops 2")).not.toHaveAccessibleDescription(/read 3 files/);
   });
 });
 
@@ -551,7 +523,7 @@ describe("fifty working tasks (SC-3)", () => {
   // running the whole suite at once. The limit is the heavy window tests' (MemoryLists,
   // Notices), so only a hang fails it.
   it(
-    "draws again only the second line of the chat whose line changed, and no row",
+    "draws nothing for a line that changes but the card that is up, and no row",
     { timeout: 20_000 },
     async () => {
       const { move, tell } = core([
@@ -568,18 +540,26 @@ describe("fifty working tasks (SC-3)", () => {
       for (let task = 51; task <= 100; task += 1) move(task, "running");
       for (let task = 51; task <= 100; task += 1) tell(task, doing("thinking"));
       for (let turn = 0; turn < 10; turn += 1) await act(async () => {});
-      expect(theTree().querySelectorAll(".chat-doing")).toHaveLength(50);
-      /** The chats whose line, or second line's contents, were drawn since the last look. */
+      // No row says it: the lines are read by a card, and no card is up.
+      expect(theTree().querySelectorAll(".chat-doing")).toHaveLength(0);
+      /** The chats whose line was drawn since the last look. */
       const lines = () => [...new Set(drawn.lines)].sort((a, b) => a - b);
       drawn.lines.length = 0;
       drawn.rows.length = 0;
 
+      // A burst across ten chats draws nothing at all.
+      for (let task = 71; task <= 80; task += 1) tell(task, doing("editing", `f${task}.rs`));
+      expect(drawn.lines).toEqual([]);
+      expect(drawn.rows).toEqual([]);
+
+      // With chat 60's card up, its line is drawn, and nothing else.
+      await opened("devops 60");
+      drawn.lines.length = 0;
+      drawn.rows.length = 0;
       tell(60, doing("command", "cargo"));
 
-      expect(said("devops 60")).toBe("running cargo");
-      // Chat 60's line and what holds it: two draws at most, both its own.
+      expect(said()).toBe("running cargo");
       expect(lines()).toEqual([60]);
-      expect(drawn.lines.length).toBeLessThanOrEqual(2);
       expect(drawn.rows).toEqual([]);
 
       // The same thing said again draws nothing at all.
@@ -587,24 +567,9 @@ describe("fifty working tasks (SC-3)", () => {
       tell(60, doing("command", "cargo"));
       expect(drawn.lines).toEqual([]);
 
-      // The tool comes back: its own line again, and nothing else.
-      tell(60, done("command", "cargo"));
-      expect(said("devops 60")).toBe("ran cargo");
-      expect(lines()).toEqual([60]);
-      expect(drawn.rows).toEqual([]);
-
-      // A burst across ten chats draws those ten chats' lines, and no row.
-      drawn.lines.length = 0;
-      for (let task = 71; task <= 80; task += 1) tell(task, doing("editing", `f${task}.rs`));
-      expect(lines()).toEqual(Array.from({ length: 10 }, (_, at) => at + 71));
-      expect(drawn.lines.length).toBeLessThanOrEqual(20);
-      expect(drawn.rows).toEqual([]);
-
-      // A line taken away draws its own chat's second line again and nothing else.
-      drawn.lines.length = 0;
-      tell(60, null);
-      expect(line("devops 60")).toBeNull();
-      expect(lines()).toEqual([60]);
+      // Another chat's line changing draws nothing either.
+      tell(75, doing("searching"));
+      expect(drawn.lines).toEqual([]);
       expect(drawn.rows).toEqual([]);
     },
   );
