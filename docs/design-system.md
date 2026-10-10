@@ -546,7 +546,9 @@ carries are the dialog's to keep, and every question keeps the same ones:
 - **The way out first, then the acts**, and the answer that moves things on last, at the edge:
   Cancel then Delete, Close then Read again, Cancel then Close then Smart close.
 - **What cannot be taken back says so** with `ends-it`, and it is never the one Return finds:
-  the dialog focuses its way out (or, for Reopen your sessions, the answer that loses nothing).
+  the dialog focuses its way out (or, for Reopen your sessions, the answer that loses nothing;
+  for a confirm by typed name, the name box, whose Return ends nothing until the name is exact,
+  D-1210-9).
 - **Focus and Escape stay the dialog's.** The bar handles no key. Escape is the dialog's Cancel,
   or whatever that dialog says it is.
 
