@@ -143,8 +143,12 @@ export function AlertsDrawer({
  * once it has closed.
  */
 export type AlertsDrawerDoes = {
-  /** Opens Settings at a group (SE-22): a You group, or — with `plane` — that project's. */
-  openSettings: (group: string, plane?: PlaneId) => void;
+  /**
+   * Opens Settings at a group (SE-22): a You group, or — with `plane` — that project's; and,
+   * with `setting`, focuses that setting of the group (#1289), by the id the Settings builders
+   * give it.
+   */
+  openSettings: (group: string, plane?: PlaneId, setting?: string) => void;
   /** Opens another project by its path, through the window's one way in (the trust gate). */
   openProject: (path: string) => void;
   /** Opens a project's Saving view. */
@@ -377,7 +381,7 @@ function ProjectRow({
     case "settings":
       action = {
         label: "Fix it in Settings",
-        onPress: leaving(() => does.openSettings(way.group, plane)),
+        onPress: leaving(() => does.openSettings(way.group, plane, way.setting ?? undefined)),
       };
       break;
     case "open-project":
