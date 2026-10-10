@@ -1,6 +1,5 @@
-import { useSyncExternalStore } from "react";
 import type { YourEditor } from "./bindings";
-import { atCreation, sayAboutThisMachine, type Reading } from "./windowprefs";
+import { layoutPref } from "./layoutPref";
 import type { SettingsLink } from "./settings/links";
 
 /**
@@ -65,58 +64,36 @@ export function loadEditor(raw: unknown): { editor: YourEditor | undefined; said
   };
 }
 
-/** What this launch chose, if anything; `null` is "nothing changed yet". */
-let changed: YourEditor | undefined | null = null;
-/** What the launch started from, read once. */
-let started: { editor: YourEditor | undefined } | undefined;
-const listeners = new Set<(editor: YourEditor | undefined) => void>();
-
-function startingEditor(layout: Reading = atCreation().layout): YourEditor | undefined {
-  if (started !== undefined) return started.editor;
-  // A layout file charter refused is said once, by `regions.ts`.
-  const { editor, said } =
-    layout.found && layout.trouble === null
-      ? loadEditor(layout.document)
-      : { editor: undefined, said: [] };
-  if (said.length > 0) {
-    const where = layout.path || "the layout file";
-    sayAboutThisMachine("editor", {
-      severity: "warn",
-      detail: `${where}: ${said.join("; ")}`,
-      remedy: `fix ${where}, or choose your editor in Settings, which rewrites it`,
-      settings: "you.editor",
-    });
-  }
-  started = { editor };
-  return editor;
-}
+/** The store (`layoutPref.ts`), under `editor`. */
+export const YOUR_EDITOR = layoutPref<YourEditor | undefined>({
+  key: "editor",
+  fallback: undefined,
+  load: (raw) => {
+    const { editor, said } = loadEditor(raw);
+    return { value: editor, said };
+  },
+  same: (one, other) => one === other,
+  written: (editor) => editor,
+  remedy: (where) => `fix ${where}, or choose your editor in Settings, which rewrites it`,
+  settings: "you.editor",
+});
 
 /** Your editor, or nothing when none is chosen. */
 export function yourEditor(): YourEditor | undefined {
-  return changed !== null ? changed : startingEditor();
+  return YOUR_EDITOR.value();
 }
 
 /** Chooses your editor; tells every listener when it changed. */
 export function setYourEditor(editor: YourEditor): void {
-  if (yourEditor() === editor) return;
-  changed = editor;
-  sayAboutThisMachine("editor", undefined);
-  for (const listener of listeners) listener(editor);
-}
-
-/** Calls `listener` whenever your editor changes. Answers the way to stop. */
-export function onYourEditor(listener: (editor: YourEditor | undefined) => void): () => void {
-  listeners.add(listener);
-  return () => void listeners.delete(listener);
+  YOUR_EDITOR.set(editor);
 }
 
 /** {@link yourEditor}, for a component that redraws when it changes. */
 export function useYourEditor(): YourEditor | undefined {
-  return useSyncExternalStore(onYourEditor, yourEditor);
+  return YOUR_EDITOR.use();
 }
 
 /** Forgets what this launch chose and read, as a new launch would. For tests. */
 export function forgetYourEditor(): void {
-  changed = null;
-  started = undefined;
+  YOUR_EDITOR.forget();
 }
