@@ -656,8 +656,10 @@ fn a_new_identity_record_names_the_purlis_base_and_reads_only_there() {
     registry::save_local(&ctx, &local).unwrap();
     assert_eq!(identity_record(&ctx)["base"], "purlis");
 
-    let bare = Ctx::new(tmp.path(), Env::of(&[]));
-    let read = || identity::from_keyring(&bare, &v, "OP_TEAM_TOKEN").unwrap();
+    // Each read is a command of its own: one command reads a kept token once (#1180).
+    let read = || {
+        identity::from_keyring(&Ctx::new(tmp.path(), Env::of(&[])), &v, "OP_TEAM_TOKEN").unwrap()
+    };
     assert_eq!(read().as_deref(), Some(PASTED_TOKEN));
 
     // A `charter/` item beside it is never read in its place, nor instead of a missing one.
@@ -684,8 +686,8 @@ fn a_record_from_before_the_rename_reads_only_its_charter_item() {
         .to_owned();
     // A record a build from before the rename wrote: no `base`.
     set_base(&ctx, None);
-    let bare = Ctx::new(tmp.path(), Env::of(&[]));
-    let read = || identity::from_keyring(&bare, &v, "OP_TEAM_TOKEN");
+    // Each read is a command of its own: one command reads a kept token once (#1180).
+    let read = || identity::from_keyring(&Ctx::new(tmp.path(), Env::of(&[])), &v, "OP_TEAM_TOKEN");
 
     plant(&tmp, &[(format!("charter/@identity/{id}"), "old-token")]);
     assert_eq!(read().unwrap().as_deref(), Some("old-token"));

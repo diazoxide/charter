@@ -1,0 +1,225 @@
+//! How often one `purlis secret exec` makes the Keychain ask the person (#1180, V16b).
+//!
+//! A 1Password vault whose service-account token is kept in the keyring is read by running
+//! `op` once per value, and every `op` is handed the token. Where the `purlis` command is the
+//! reader, each read of that item is one Keychain question to the person, so these tests count
+//! the reads of the fenced build's stub keyring ([`keyring::stub_reads`]) through the whole
+//! command ([`exec`]).
+
+use super::*;
+use crate::secrets::{Ctx, Env, identity, keyring, registry};
+
+/// What `exec` said and printed.
+#[derive(Default)]
+struct Rec {
+    said: Vec<Say>,
+    out: Vec<u8>,
+}
+
+impl Rec {
+    fn errors(&self) -> Vec<&str> {
+        self.said
+            .iter()
+            .filter_map(|s| match s {
+                Say::Err(m) => Some(m.as_str()),
+                _ => None,
+            })
+            .collect()
+    }
+}
+
+impl Io for Rec {
+    fn say(&mut self, line: Say) {
+        self.said.push(line);
+    }
+    fn out(&mut self, bytes: &[u8]) {
+        self.out.extend_from_slice(bytes);
+    }
+    fn err(&mut self, _bytes: &[u8]) {}
+    fn stdout_is_terminal(&self) -> bool {
+        false
+    }
+    fn stdin_is_terminal(&self) -> bool {
+        true
+    }
+    fn read_stdin(&mut self) -> String {
+        String::new()
+    }
+    fn read_hidden(&mut self, _prompt: &str) -> String {
+        String::new()
+    }
+}
+
+/// A word that is no token's shape: the commit hook scans for those.
+const KEPT: &str = "kept-for-the-team";
+
+/// A plane whose 1Password vault `team` is read through a token kept in the stub keyring, an
+/// `op` stand-in that answers `op read` with `value-of-<key>` only when it was handed a token,
+/// and the directory that `op` is in.
+fn kept_plane() -> (tempfile::TempDir, tempfile::TempDir) {
+    crate::secrets::program::stand_ins_live_in_temp_folders();
+    let tmp = tempfile::tempdir().unwrap();
+    let bin = tempfile::tempdir().unwrap();
+    stand_in::program(
+        bin.path(),
+        "op",
+        "#!/bin/sh\n[ -n \"$OP_SERVICE_ACCOUNT_TOKEN\" ] || exit 1\nprintf 'value-of-%s' \"${3##*/}\"\n",
+    );
+    let ctx = on_path(tmp.path(), bin.path(), &[]);
+    let mut config = serde_json::Map::new();
+    config.insert("op-vault".into(), serde_json::json!("Fixture"));
+    config.insert(
+        "env".into(),
+        serde_json::json!({"OP_SERVICE_ACCOUNT_TOKEN": "OP_TEAM_TOKEN"}),
+    );
+    registry::add_vault(&ctx, "team", "1password", config, None, false, false).unwrap();
+    let v = registry::vault(&ctx, "team").unwrap();
+    identity::put_in_keyring(&ctx, &v, KEPT).unwrap();
+    (tmp, bin)
+}
+
+/// A context on `root` whose PATH is `bin` alone, with `more` beside it.
+fn on_path(root: &std::path::Path, bin: &std::path::Path, more: &[(&str, &str)]) -> Ctx {
+    let path = bin.to_string_lossy().into_owned();
+    let mut vars = vec![("PATH", path.as_str())];
+    vars.extend_from_slice(more);
+    Ctx::new(root, Env::of(&vars))
+}
+
+/// `secret exec team --env A=alpha --env B=beta --env C=gamma -- sh -c 'printf …'`.
+fn three_values() -> Request {
+    Request {
+        vault: "team".into(),
+        env: vec!["A=alpha".into(), "B=beta".into(), "C=gamma".into()],
+        file: Vec::new(),
+        dotenv: Vec::new(),
+        stream: false,
+        exec: false,
+        command: vec![
+            "/bin/sh".into(),
+            "-c".into(),
+            "printf '%s|%s|%s' \"$A\" \"$B\" \"$C\"".into(),
+        ],
+    }
+}
+
+fn reads(ctx: &Ctx) -> usize {
+    keyring::stub_reads(&ctx.state.join(keyring::STUB_FILE))
+}
+
+#[test]
+fn one_secret_exec_reads_a_kept_token_from_the_keychain_once_however_many_values_it_hands_on() {
+    let (tmp, bin) = kept_plane();
+    let ctx = on_path(tmp.path(), bin.path(), &[]);
+    let before = reads(&ctx);
+    let mut io = Rec::default();
+
+    let code = exec(&ctx, &three_values(), &mut io);
+
+    assert_eq!(code, 0, "{:?}", io.errors());
+    // Every value was resolved (and is masked in what the child printed).
+    assert_eq!(String::from_utf8_lossy(&io.out), "***|***|***");
+    assert_eq!(
+        reads(&ctx) - before,
+        1,
+        "each read of the kept token is one Keychain question to the person"
+    );
+}
+
+#[test]
+fn a_sandboxed_chat_no_app_answers_is_refused_a_kept_token_and_the_keychain_is_never_read() {
+    let (tmp, bin) = kept_plane();
+    let gone = tmp.path().join("no-app-listens.sock");
+    let gone = gone.to_string_lossy().into_owned();
+    let ctx = on_path(
+        tmp.path(),
+        bin.path(),
+        &[
+            (crate::hookwire::SANDBOXED_ENV, "1"),
+            (crate::hookwire::SOCKET_ENV, gone.as_str()),
+            (crate::hookwire::CHAT_ENV, "7"),
+        ],
+    );
+    let before = reads(&ctx);
+    let mut io = Rec::default();
+
+    let code = exec(&ctx, &three_values(), &mut io);
+
+    assert_eq!(code, 1);
+    assert!(io.out.is_empty(), "nothing was run");
+    let said = io.errors().join("\n");
+    assert!(said.contains("vault 'team'"), "{said}");
+    assert!(said.contains("app"), "{said}");
+    assert_eq!(
+        reads(&ctx) - before,
+        0,
+        "the chat never reaches the Keychain"
+    );
+}
+
+#[test]
+fn a_sandboxed_chat_no_app_answers_still_runs_a_vault_the_keychain_does_not_hold() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        tmp.path().join("vaults.json"),
+        serde_json::json!({"vaults": {"team": {"provider": "plain-file", "config": {"file": "team.json"}}}})
+            .to_string(),
+    )
+    .unwrap();
+    let ctx = Ctx::new(tmp.path(), Env::of(&[]));
+    let v = registry::vault(&ctx, "team").unwrap();
+    for key in ["alpha", "beta", "gamma"] {
+        crate::secrets::cmd::set_value(&ctx, &v, key, "a-plain-value").unwrap();
+    }
+    let gone = tmp.path().join("no-app-listens.sock");
+    let gone = gone.to_string_lossy().into_owned();
+    let ctx = Ctx::new(
+        tmp.path(),
+        Env::of(&[
+            (crate::hookwire::SANDBOXED_ENV, "1"),
+            (crate::hookwire::SOCKET_ENV, gone.as_str()),
+            (crate::hookwire::CHAT_ENV, "7"),
+        ]),
+    );
+    let mut io = Rec::default();
+
+    let code = exec(&ctx, &three_values(), &mut io);
+
+    assert_eq!(code, 0, "{:?}", io.errors());
+    assert_eq!(String::from_utf8_lossy(&io.out), "***|***|***");
+}
+
+#[test]
+fn a_sandboxed_chat_is_refused_secret_get_of_a_kept_token_and_the_keychain_is_never_read() {
+    let (tmp, bin) = kept_plane();
+    let ctx = on_path(
+        tmp.path(),
+        bin.path(),
+        &[(crate::hookwire::SANDBOXED_ENV, "1")],
+    );
+    let before = reads(&ctx);
+    let mut io = Rec::default();
+
+    let code = crate::secrets::cmd::get(&ctx, "team", "alpha", false, false, &mut io);
+
+    assert_eq!(code, 1);
+    assert!(io.out.is_empty(), "nothing was said of the value");
+    let said = io.errors().join("\n");
+    assert!(said.contains("secret exec team"), "{said}");
+    assert_eq!(
+        reads(&ctx) - before,
+        0,
+        "the chat never reaches the Keychain"
+    );
+
+    // Outside a sandboxed chat the same read goes on, through one Keychain read.
+    let person = on_path(tmp.path(), bin.path(), &[]);
+    let mut io = Rec::default();
+    assert_eq!(
+        crate::secrets::cmd::get(&person, "team", "alpha", false, false, &mut io),
+        0,
+        "{:?}",
+        io.errors()
+    );
+    assert_eq!(reads(&ctx) - before, 1);
+}

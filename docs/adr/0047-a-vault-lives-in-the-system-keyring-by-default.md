@@ -413,3 +413,31 @@ on who chose the item the vault reads:
 
 The two are told apart by the item each view reads, never by which keys are present. This keeps
 the rule above as written: a committed entry can neither create a record nor change one.
+
+## Amendment, 2026-10-10: one Keychain question per run, and none from a sandboxed chat (#1638)
+
+**The problem it closes.** With a vault's service-account token kept in the keyring, the
+`purlis` command made the Keychain ask once per `op` it ran, and `secret exec` runs `op` once per
+value it hands on: three `--env` values were three questions in one run. Several chats running
+`secret exec` raised a stream of them, each "Allow" good for one read. And where the app did not
+answer a sandboxed chat's `secret exec`, or for `secret get` and `cp`, which are not handed to the
+app, the command read the Keychain itself from inside the chat (V90's measurement: such a read
+asks the person).
+
+**Decision (delegated, 2026-10-10).**
+
+- **One run reads each kept token once.** The context a command reads through remembers the
+  token it read, for that run only. It is never kept across commands, and the app builds a new
+  context for every request it serves, so a replaced or deleted token is read afresh by the
+  next run.
+- **A sandboxed chat never reads the Keychain through the command.** In a chat the app started
+  sandboxed, a vault whose values come from the keyring (a `keyring` vault, or one whose token is
+  kept there) is refused rather than read: by `secret exec` when no app takes the run, and by
+  `secret get` and `cp`, which the app does not broker. The sentence says why and how to go on
+  (`secret exec` with the app open). A vault the keyring does not hold runs as it did.
+
+**Not decided here (V16b, #1180).** A chat started without the sandbox, and a terminal, still
+read the Keychain through the command, so each run asks once. Handing those reads to the app
+would make the app run a command outside any sandbox on a chat's word, would hold such chats
+to the persona's vaults for the first time, and needs a route for a terminal that is not the
+window's. Those are the operator's calls.

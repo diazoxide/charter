@@ -386,8 +386,27 @@ impl FileStore {
     }
 }
 
+/// How many times a fenced build's stub at each path was read for an item: what a test counts
+/// to say how often a run would make the Keychain ask the person (#1180, V16b). Per path, so
+/// tests running at once in one process never count each other's reads.
+#[cfg(feature = "fenced")]
+static STUB_READS: std::sync::Mutex<BTreeMap<PathBuf, usize>> =
+    std::sync::Mutex::new(BTreeMap::new());
+
+/// The items read so far from the stub at `path` ([`STUB_READS`]).
+#[cfg(feature = "fenced")]
+pub fn stub_reads(path: &std::path::Path) -> usize {
+    STUB_READS
+        .lock()
+        .map_or(0, |reads| reads.get(path).copied().unwrap_or(0))
+}
+
 impl Store for FileStore {
     fn get(&self, service: &str, account: &str) -> Result<Option<Secret>, VaultError> {
+        #[cfg(feature = "fenced")]
+        if let Ok(mut reads) = STUB_READS.lock() {
+            *reads.entry(self.path.clone()).or_default() += 1;
+        }
         Ok(self
             .load()?
             .get(&Self::slot(service, account))

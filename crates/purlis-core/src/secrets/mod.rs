@@ -207,6 +207,9 @@ pub struct Ctx {
     /// may: empty but for a read the app makes for one chat ([`Ctx::chat`]). No provider's
     /// program is run from any of it ([`program`]).
     pub(crate) chat_writes: Vec<PathBuf>,
+    /// The kept tokens this context has read from the keyring, so one command reads each once
+    /// ([`identity::Kept`]). A clone shares it; a new context starts empty.
+    pub(crate) kept: identity::Kept,
 }
 
 impl Ctx {
@@ -221,6 +224,7 @@ impl Ctx {
             state,
             env,
             chat_writes: Vec::new(),
+            kept: identity::Kept::default(),
         }
     }
 

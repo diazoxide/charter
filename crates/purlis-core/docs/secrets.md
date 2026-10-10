@@ -45,6 +45,13 @@ purlis persona secret exec --env TOKEN=API_TOKEN -- some-cli       # the active 
   have four such runs at once. Output streams back with each value's literal text masked, even
   under `--stream` and `--exec`, then the exit status. stdin is passed through when it is not a
   terminal.
+- **A sandboxed chat never reads the Keychain through the command** (#1638). Where the app
+  does not take a sandboxed chat's `secret exec` (it is closed, or does not answer), a vault
+  whose values come from the keyring (a `keyring` vault, or a 1Password vault whose token is
+  kept there) is refused with a sentence saying so, and nothing runs: read in the chat, the
+  Keychain would ask you on the chat's behalf. `secret get` and `cp` in a sandboxed chat are
+  refused such a vault the same way, since the app runs only `exec`. Any other vault runs as
+  before.
 
   **A host the chat's hosts do not list.** The command's proxy refuses it, and the command
   reports that in its own words, which often name no host (kubectl says "Forbidden"). So the
@@ -119,7 +126,8 @@ the keys and the command — never a value.
   again, held, the next time purlis reads it (one the `purlis` command made, the next time
   the command reads it), and the vault's next read through the command says so once. A
   purlis update is a new binary, so with an ad-hoc signed build the first read after an
-  update asks again.
+  update asks again. A 1Password vault's kept token is read once per `secret exec`, however
+  many values it hands on, not once per value (#1638).
 - **`plain-file`** (`--provider plain-file`) — a JSON object of key → value at 0600,
   `.charter/vaults/<vault>.json` by default. It is **plaintext on disk**. Inside a plane that is a git repository, `vault add`
   refuses a `--file` git would commit, and `secret set` checks again before it writes, because
