@@ -2,7 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
-import type { ChangeMark, FolderEntry, PieceFile, PlaneId } from "../bindings";
+import { emit } from "@tauri-apps/api/event";
+import type { BranchChanged, ChangeMark, FolderEntry, PieceFile, PlaneId } from "../bindings";
 import { PieceFileTab, PieceFilesTab } from "./PieceFiles";
 import { jumpTo } from "../fileJump";
 import { forgetYourEditor, setYourEditor } from "../yourEditor";
@@ -20,6 +21,9 @@ const file = (name: string): FolderEntry => ({
 });
 const folder = (name: string): FolderEntry => ({ ...file(name), kind: "folder" });
 
+/** Each `branch_status` the tabs asked, by branch, since the last `core`. */
+let statusAsks: string[] = [];
+
 /**
  * The core, as these tabs ask it: each file by its path, and each folder of the branch by its
  * path — by default, the folders the files' paths name.
@@ -32,6 +36,7 @@ function core(
   placeSays?: string,
 ) {
   const asked: string[] = [];
+  statusAsks = [];
   const tree = folders ?? foldersOf(Object.keys(files));
   mockIPC(
     (cmd, args) => {
@@ -55,6 +60,7 @@ function core(
       }
       if (cmd === "files_watch") return null;
       if (cmd === "branch_status") {
+        statusAsks.push(`${a.workspace}/${a.repo}/${a.piece}`);
         return {
           changes: Object.entries(changed).map(([path, mark]) => ({
             path,
@@ -290,6 +296,49 @@ describe("Show what changed in a file's own tab (#1189)", () => {
     render(<PieceFileTab plane={PLANE} cut={CUT} path="a.txt" onOpenView={() => undefined} />);
 
     await waitFor(() => expect(screen.getByTestId("light-editor")).toHaveTextContent("hello"));
+    expect(screen.queryByRole("button", { name: "Show what changed" })).toBeNull();
+  });
+
+  const moved = (piece: string | null, workspace = "alpha") =>
+    act(() =>
+      emit("branch-changed", {
+        branches: [{ plane: PLANE, workspace, repo: "svc", piece }],
+      } satisfies BranchChanged),
+    );
+
+  it("reads what the branch changed again when its own branch moves", async () => {
+    const marks: Record<string, ChangeMark> = {};
+    core({ "src/lib.rs": { kind: "text", text: "x\n" } }, undefined, undefined, marks);
+    render(<PieceFileTab plane={PLANE} cut={CUT} path="src/lib.rs" onOpenView={() => undefined} />);
+    await waitFor(() => expect(screen.getByTestId("light-editor")).toHaveTextContent("x"));
+    expect(screen.queryByRole("button", { name: "Show what changed" })).toBeNull();
+
+    marks["src/lib.rs"] = "changed";
+    await moved("fix-it");
+    expect(await screen.findByRole("button", { name: "Show what changed" })).toBeInTheDocument();
+
+    delete marks["src/lib.rs"];
+    await moved("fix-it");
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Show what changed" })).toBeNull(),
+    );
+  });
+
+  it("does not read again when another branch moves", async () => {
+    const marks: Record<string, ChangeMark> = {};
+    core({ "src/lib.rs": { kind: "text", text: "x\n" } }, undefined, undefined, marks);
+    render(<PieceFileTab plane={PLANE} cut={CUT} path="src/lib.rs" onOpenView={() => undefined} />);
+    await waitFor(() => expect(statusAsks).toEqual(["alpha/svc/fix-it"]));
+
+    marks["src/lib.rs"] = "changed";
+    await moved("other");
+    await moved(null);
+    await moved("fix-it", "beta");
+    await act(async () => {
+      await new Promise((done) => setTimeout(done, 20));
+    });
+
+    expect(statusAsks).toEqual(["alpha/svc/fix-it"]);
     expect(screen.queryByRole("button", { name: "Show what changed" })).toBeNull();
   });
 });

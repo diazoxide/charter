@@ -244,7 +244,43 @@ describe("what changed, read again when the branch moves (#1189)", () => {
 
     await waitFor(() => expect(core.asks()).toBe(2));
     expect(screen.getByTestId("merge-viewer")).toBeInTheDocument();
+  });
+
+  it("marks the comparison drawn as being compared again until the new one comes", async () => {
+    const core = slowCore();
+    const { container } = render(<PieceDiffTab plane={PLANE} cut={CUT} path="src/lib.rs" />);
+    await waitFor(() => expect(core.asks()).toBe(1));
+    await core.answer();
+    await screen.findByTestId("merge-viewer");
     expect(screen.queryByRole("status")).toBeNull();
+    expect(container.querySelector(".piece-file")).toHaveAttribute("aria-busy", "false");
+
+    await moved("fix-it");
+
+    await waitFor(() => expect(core.asks()).toBe(2));
+    expect(screen.getByRole("status")).toHaveTextContent("Comparing src/lib.rs again…");
+    expect(container.querySelector(".piece-file")).toHaveAttribute("aria-busy", "true");
+    // D-1189-3: the old comparison's line buttons stay usable while it is read again.
+    expect(screen.getByRole("button", { name: "Open at line 1" })).toBeEnabled();
+
+    await core.answer();
+
+    await waitFor(() => expect(screen.queryByRole("status")).toBeNull());
+    expect(container.querySelector(".piece-file")).toHaveAttribute("aria-busy", "false");
+    expect(screen.getByTestId("merge-viewer")).toBeInTheDocument();
+  });
+
+  it("is not marked as compared again on Compare again, which reads from Comparing…", async () => {
+    const core = slowCore();
+    render(<PieceDiffTab plane={PLANE} cut={CUT} path="src/lib.rs" />);
+    await waitFor(() => expect(core.asks()).toBe(1));
+    await core.answer();
+    await screen.findByTestId("merge-viewer");
+
+    await userEvent.click(screen.getByRole("button", { name: "Compare again" }));
+
+    expect(screen.getByRole("status")).toHaveTextContent("Comparing src/lib.rs…");
+    expect(screen.queryByText(/again…/)).toBeNull();
   });
 
   it("does not read again for another branch", async () => {
