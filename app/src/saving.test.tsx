@@ -138,8 +138,9 @@ describe("the standing's beat, and the window out of sight (#1392)", () => {
   }
 
   it("asks again on every beat while shown, never while hidden, and once on show", async () => {
-    // Only the beat's clock: the window's promises settle as they do.
-    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    // Only the beat's clock and the clock the return fold reads: the window's promises settle as
+    // they do.
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "performance"] });
     const asked = counting();
     renderHook(() => {
       usePlaneSaving(ONE);
@@ -157,5 +158,49 @@ describe("the standing's beat, and the window out of sight (#1392)", () => {
 
     await act(async () => windowShown(true));
     expect([asked("plane_saving"), asked("workspace_saving")]).toEqual([3, 3]);
+  });
+
+  it("reads once for a return that both shows and focuses the window (D-1392-6)", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "performance"] });
+    const asked = counting();
+    renderHook(() => {
+      usePlaneSaving(ONE);
+      useRepoSaving(ONE, "alpha");
+    });
+    await waitFor(() => expect(asked("workspace_saving")).toBe(1));
+    act(() => windowShown(false));
+    vi.advanceTimersByTime(60_000);
+
+    // The engine shows the window, then gives it focus, each its own task: one return, so one
+    // `git status`.
+    await act(async () => windowShown(true));
+    await act(async () => void window.dispatchEvent(new Event("focus")));
+    expect([asked("plane_saving"), asked("workspace_saving")]).toEqual([2, 2]);
+
+    // The other order folds the same way.
+    act(() => windowShown(false));
+    vi.advanceTimersByTime(60_000);
+    await act(async () => void window.dispatchEvent(new Event("focus")));
+    await act(async () => windowShown(true));
+    expect([asked("plane_saving"), asked("workspace_saving")]).toEqual([3, 3]);
+  });
+
+  it("still reads for a focus well after the show, and for every finished save", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "performance"] });
+    const asked = counting();
+    renderHook(() => usePlaneSaving(ONE));
+    await waitFor(() => expect(asked("plane_saving")).toBe(1));
+    act(() => windowShown(false));
+    await act(async () => windowShown(true));
+    expect(asked("plane_saving")).toBe(2);
+
+    // A save that finished is news, whenever it lands.
+    await act(async () => void window.dispatchEvent(new Event("charter-plane-saved")));
+    expect(asked("plane_saving")).toBe(3);
+
+    // Focus a few seconds later is a return of its own (the window was only behind another).
+    vi.advanceTimersByTime(5_000);
+    await act(async () => void window.dispatchEvent(new Event("focus")));
+    expect(asked("plane_saving")).toBe(4);
   });
 });
