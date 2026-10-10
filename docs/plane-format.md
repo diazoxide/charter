@@ -93,7 +93,7 @@ operation, and a backup skips it) and **legacy** (only the retired Python charte
 and purlis at most keeps it consistent). Clone state or Machine with none of the three
 marks is what FR-10 backs up.
 
-**Three transient stores and the dispatch records are collected** (SC-7, #1452). When the app opens a plane that is not already
+**The per-session stores and the dispatch records are collected** (SC-7, #1452, #1004). When the app opens a plane that is not already
 open in it, `purlis_core::retention::on_open` removes, from that plane's own `.charter/` only
 (`<plane>/.charter/…`, never a `$CHARTER_HOME` that several planes may share):
 
@@ -119,16 +119,36 @@ open in it, `purlis_core::retention::on_open` removes, from that plane's own `.c
   record that was cut short leaves its temporary file beside it
   (`.purlis-generated.<id>.json.<pid>.<tag>.tmp`), holding the same brief; it is collected by
   the same rule, and no other temporary file is.
+- what a chat's harness said its session cost, `.charter/app/spend/<chat>.json`, last written
+  30 days or more before, unless the chat, by its id, is one the reopen record will bring back
+  (#1457).
+- a commit gate cooldown, `.charter/commit-gate/<sid>`, and a first-edit nudge marker,
+  `.charter/ws-edit-nudge/<sid>-<ws>`, last written 30 days or more before, unless its session
+  is one the reopen record will bring back (for a nudge marker, any returning session its name
+  begins with, then `-`). Losing one costs a returning session one more question or one more
+  reminder, never its work (#1004).
+- a saved-record line a chat in a workspace left for a `Stop` that never ran,
+  `workspaces/<ws>/.charter/sessions/<chat>.saved`, last written 30 days or more before, unless
+  the chat is one the reopen record will bring back. The plane root's are markers in
+  `.charter/sessions/`, above (#1004).
+- a session's ephemeral memory, `.charter/persona-state/ephemeral/<session>/`, removed whole once
+  the session's folder, each persona folder in it and each file in those was last written 30
+  days or more before, unless the session is one the reopen record will bring back. A session
+  folder that holds anything but `<persona>/<file>` (a link, a deeper folder, a name purlis never
+  makes, a name that is not UTF-8, something it cannot read) is kept whole. A file is removed
+  only while it is the one judged, and a folder only once it is empty (#1004).
+
+`.charter/chat-turns/` has no rule: purlis neither writes nor reads it, so nothing there grows.
 
 It keeps the files of every chat the plane's reopen record (`.charter/app/reopen.json`) will
 bring back, however old: those keyed on the chat's number or on the conversation it resumes.
 With no record at all, it sweeps by age alone. If the record is there but does not parse, is
 of another version, cannot be read, or was written before chats kept their numbers, it keeps
-every session marker and trace and collects only the report drafts. It removes only plain files
-whose name is one purlis writes. It opens each directory from the plane without following a
+every file of every store above and collects only the report drafts. It removes only plain files
+whose name is one purlis writes, and the ephemeral memory folders those files emptied. It opens each directory from the plane without following a
 link, and ages, reads and removes every file through that handle. It never touches anything
-else in `.charter/`: the hook spool and every other file under `app/`, the event log, `terminals/`,
-`persona-state/ephemeral/` and the rest are not its business. The age is the file's
+else in `.charter/`: the hook spool and every other file under `app/`, the event log, `terminals/`
+(collected by `workspace use`, below) and the rest are not its business. The age is the file's
 modification time, so a file a chat still writes stays.
 
 What it cannot see is outside that guarantee:
@@ -137,6 +157,15 @@ What it cannot see is outside that guarantee:
 - A chat brought back later with Resume from a record, rather than reopened at this launch, is
   in the same position.
 - A `.charter/` copied or synced from another device carries that device's ages and chats.
+
+**`purlis workspace use` collects too** (`retention::on_select`, #1025), through the same held
+directories, each time it writes a pointer:
+- the markers in `.charter/sessions/` by the rule above: one last written 30 days or more
+  before goes, but a `.tools` or `.gate` and the markers of a chat the reopen record will bring
+  back (its `<n>.workspace` and `<n>.lock` too). Where the record cannot say which chats come
+  back, every marker is kept.
+- the per-pane pointers, `.charter/terminals/<tid>.<ending>`, by their age alone: one last
+  written 30 days or more before goes. A pane is in no reopen record.
 
 A tier line is `**Tier:** <tier>[, <mark>…]`, optionally followed by ` — ` and a reason. The tier
 and marks carry no punctuation of their own: a line with no reason has no full stop. A new
@@ -1910,8 +1939,9 @@ file `memstore.write` could have written in its new store.
   while that chat is being smart-closed, so a line sent twice closes it once.
 - **Git:** ignored — the plane root's by `/.charter/`, a workspace's by `/workspaces/*/*`,
   which the LIVE block never un-ignores it from.
-- **Collected (purlis):** the plane root's, with the other `.charter/sessions/` markers,
-  30 days after it was written (`retention::on_open`); a workspace's is not collected.
+- **Collected (purlis):** 30 days after it was written, unless the reopen record brings the
+  chat back (`retention::on_open`): the plane root's with the other `.charter/sessions/`
+  markers, a workspace's from that workspace's own `.charter/sessions/` (#1004).
 
 ### `workspaces/<ws>/changes/<slug>.json` — a cross-repo change
 
@@ -3278,6 +3308,10 @@ handoff row (`charter/dispatch.py:170` docstring).
   is not the current one and whose newest mtime is older than 6h is `rmtree`d
   (`charter/persona.py:2462`-`:2490`), from `purlis persona _gc`
   (`charter/commands_persona.py:1917`) on SessionStart.
+- **Collected (purlis):** when the app opens the plane, a session's folder is removed whole once
+  it, each persona folder in it and each file in those was last written 30 days or more before,
+  unless the session is one the reopen record brings back. A folder holding anything but
+  `<persona>/<file>` is kept whole (`retention::on_open`, #1004).
 
 ---
 
@@ -4490,10 +4524,11 @@ plane's `.gitignore` (`charter/commands.py:1096` in `_GITIGNORE_BASELINE`,
 
 **Tier:** Clone state, transient — every file below, unless its entry says otherwise.
 
-*Collected (purlis):* when the app opens a plane, every marker here last written 30 days
-or more before is removed, except a `.tools` ceiling and its `.gate` (collected at 7 days, see
-their entry) and the markers of a chat the plane's reopen record will bring back
-(`retention::on_open`; the rule is under [Every store has a tier](#every-store-has-a-tier)).
+*Collected (purlis):* when the app opens a plane, and each time `purlis workspace use` writes a
+pointer, every marker here last written 30 days or more before is removed, except a `.tools`
+ceiling and its `.gate` (collected at 7 days, see their entry) and the markers of a chat the
+plane's reopen record will bring back (`retention::on_open`, `retention::on_select`; the rule is
+under [Every store has a tier](#every-store-has-a-tier)).
 
 ### `sessions/<sid>.workspace`
 - **Format:** plain text, one workspace name + `\n`
@@ -4642,6 +4677,10 @@ their entry) and the markers of a chat the plane's reopen record will bring back
 ### `terminals/` — per-pane pointers
 
 **Tier:** Clone state, transient
+
+*Collected (purlis):* each time `purlis workspace use` writes a pointer, every pointer here last
+written 30 days or more before is removed, by its age alone: no reopen record names a pane
+(`retention::on_select`, #1025). Opening the plane in the app leaves them alone.
 
 ### `terminals/<tid>.workspace`, `terminals/<tid>.persona`
 - **Format:** plain text, one name + `\n`
@@ -5974,6 +6013,8 @@ from then on it is recorded, and a relaunch runs `codex resume <id>` or `opencod
 - **Encoding:** the file name is the chat id, refused unless it survives `_safe_name`
   unchanged (`charter/inflight.py:454`). Entries older than 10 min
   (`TURN_STALE_SECONDS`, `charter/inflight.py:415`) are deleted on read.
+- **Collected (purlis):** no rule. purlis neither writes nor reads it, so nothing there grows
+  (#1004).
 
 ### `dispatch-inflight/<agent>.<random>.json`
 - **Format:** JSON `{"agent": str, "kind": str, "ts": float}`, no newline
@@ -6007,6 +6048,9 @@ from then on it is recorded, and a relaunch runs `codex resume <id>` or `opencod
   `_COMMIT_COOLDOWN` = 3, `charter/hooks.py:8262`)
 - **Read by:** `charter/hooks.py:8320`
 - **Git:** gitignored; filename is the sanitised session id (`charter/hooks.py:8319`)
+- **Collected (purlis):** when the app opens the plane, a cooldown last written 30 days or more
+  before is removed, unless its session is one the reopen record brings back. Losing one costs
+  that session one more nudge (`retention::on_open`, #1004).
 
 ### `dispatch-commit.lock`
 - **Format:** empty file, used with `flock(LOCK_EX)`
@@ -6150,6 +6194,9 @@ about. The next save or fetch settles a `pr-open` record by asking the forge whe
 - **Encoding:** key is `f"{session}-{ws}"` with every char outside `[A-Za-z0-9._-]`
   removed (`charter/hooks.py:7652`) — **ambiguous by construction** (see the Appendix).
   Only written for a **live** workspace (`charter/hooks.py:7810`).
+- **Collected (purlis):** when the app opens the plane, a marker last written 30 days or more
+  before is removed, unless its name begins with a session the reopen record brings back,
+  then `-`. Losing one costs that session one more reminder (`retention::on_open`, #1004).
 
 ### `ws-autosave/<workspace>`
 - **Format:** plain text, `str(time.time())`, no newline; the mtime is what is actually read
