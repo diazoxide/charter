@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791638910992,
+  "lastUpdate": 1791642948988,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -5922,6 +5922,48 @@ window.BENCHMARK_DATA = {
             "value": 104.85768200000001,
             "unit": "ms",
             "extra": "median of 5 runs: 103.063, 103.352, 104.858, 104.860, 106.271 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "eyehollow@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "dbrownsimple"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "3e6c1725c35c04b67cbcac3f17cb9b514e46d29e",
+          "message": "Open the once-per-run Keychain test with unsteered!, and say when the app wipes a kept token\n\nThe guard that every test in purlis-core/tests sheds the shell's steering\nfailed on the new test (#1654). The Kept doc said a token is wiped when the\nlast context holding it goes; in the app that memory is never dropped, so it\nnow says a token is wiped when purlis deletes its item, and otherwise goes\nwith the process.\n\nRefs #1654\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nAssisted-by: claude-code\nPurlis-Chat: 01M4AREQXXRGBAEWM0SZ0N0WBN\nPurlis-Persona: steward",
+          "timestamp": "2026-10-10T18:21:02+04:00",
+          "tree_id": "8cd8687f29173d854f54f426df87cc5bb25cc526",
+          "url": "https://github.com/purlis/purlis/commit/3e6c1725c35c04b67cbcac3f17cb9b514e46d29e"
+        },
+        "date": 1791642948336,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.458235,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.444, 0.446, 0.458, 0.465, 0.477 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.3178855,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.186, 16.270, 16.318, 16.619, 16.888 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 101.136529,
+            "unit": "ms",
+            "extra": "median of 5 runs: 100.325, 100.942, 101.137, 101.703, 102.166 ms"
           }
         ]
       }
