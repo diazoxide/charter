@@ -1359,3 +1359,88 @@ fn a_host_or_path_that_holds_a_files_name_is_left_as_written() {
         "/home/dev/plane/purlis.toml: unreadable"
     );
 }
+
+/// **Each standing refusal says the key it is about** (#1292): the window links a refusal to its
+/// setting by this, never by reading the sentence. An extension id with dots in it is one step
+/// of the key, which no reading of `extensions.my.ext.enabled in …` could tell.
+#[test]
+fn a_standing_refusal_carries_the_key_it_is_about_with_a_dotted_extension_id_as_one_step() {
+    let dir = tempfile::tempdir().unwrap();
+    let shared = "schema = 1\n\n[extensions.\"my.ext\"]\nenabled = \"yes\"\n";
+    let refusals = standing(dir.path(), Which::Shared, shared);
+    let about: Vec<_> = refusals
+        .iter()
+        .filter(|one| one.why.contains("is not true or false"))
+        .collect();
+    assert_eq!(about.len(), 1, "{refusals:?}");
+    assert_eq!(
+        about[0].key,
+        Some(vec![
+            "extensions".to_owned(),
+            "my.ext".to_owned(),
+            "enabled".to_owned()
+        ])
+    );
+}
+
+/// A `[table] key = …` sentence is about that key, and a sentence about the whole file is about
+/// none (#1292).
+#[test]
+fn a_tables_default_is_its_key_and_a_whole_file_refusal_has_none() {
+    let dir = tempfile::tempdir().unwrap();
+    let shared = "schema = 1\n\n[persona]\ndefault = \"ghost\"\n";
+    let refusals = standing(dir.path(), Which::Shared, shared);
+    let ghost = refusals
+        .iter()
+        .find(|one| one.why.starts_with("[persona] default = \"ghost\""))
+        .unwrap_or_else(|| panic!("{refusals:?}"));
+    assert_eq!(
+        ghost.key,
+        Some(vec!["persona".to_owned(), "default".to_owned()])
+    );
+
+    let broken = standing(dir.path(), Which::Shared, "[memory\nshare = 1\n");
+    assert_eq!(broken.len(), 1, "{broken:?}");
+    assert_eq!(broken[0].key, None);
+}
+
+/// The key of a reader's sentence that names it first, in the readers' convention (#1292): the
+/// readers that do not yet hand their key over are read the way the window used to read them,
+/// once, here.
+#[test]
+fn a_sentence_that_starts_with_its_key_is_read_for_it() {
+    let file = "charter.toml";
+    let key = |why: &str| key_said(why, file, None);
+    let keys = |k: &[&str]| Some(k.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>());
+    assert_eq!(
+        key("plane.mode in charter.toml is not a mode"),
+        keys(&["plane", "mode"])
+    );
+    assert_eq!(
+        key("[harness] default = \"x\" names no profile"),
+        keys(&["harness", "default"])
+    );
+    assert_eq!(
+        key("[extensions.\"a b\"] in charter.toml is not an extension id"),
+        keys(&["extensions", "a b"])
+    );
+    assert_eq!(
+        key("theme in charter.toml is not a table"),
+        keys(&["theme"])
+    );
+    assert_eq!(
+        key("[harness.x] is in charter.toml, which is committed"),
+        None
+    );
+    assert_eq!(key("charter.toml could not be read (no)"), None);
+    assert_eq!(key("plane.mode in charter.local.toml is odd"), None);
+    let under = |why: &str| key_said(why, "workspaces/a/workspace.json", Some("settings"));
+    assert_eq!(
+        under("settings.theme.icons in workspaces/a/workspace.json is 7"),
+        keys(&["theme", "icons"])
+    );
+    assert_eq!(
+        under("settings in workspaces/a/workspace.json is not an object"),
+        None
+    );
+}

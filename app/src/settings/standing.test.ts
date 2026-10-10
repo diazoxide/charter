@@ -1,53 +1,15 @@
 import { describe, expect, it } from "vitest";
 import type { FileSetting, SettingsGroup } from "./groups";
-import { keyOfRefusal, standingIn } from "./standing";
+import type { SettingsRefusal } from "../bindings";
+import { standingIn } from "./standing";
 
 /**
- * **Which field a standing refusal is about** (NO-7, #1232), read from the sentences as the
- * core's readers write them (`planesave`, `extension::project`, `harness_plugin`, `theme`,
- * `settings::names_nothing`): the key first, then the file.
+ * **Where a standing refusal is fixed** (NO-7, #1232), by the key the core hands with it
+ * (#1292): the window never reads the sentence for it. Which key each reader's sentence is about
+ * is the core's to test (`settings::key_said`, `extension::project::keyed_in`).
  */
 
-describe("the key a refusal names", () => {
-  it.each([
-    [
-      "plane.mode in charter.toml is not a mode — one of off, commit, push, pr, pr-merge",
-      ["plane", "mode"],
-    ],
-    ["repos.widget.sign in charter.toml is not true or false", ["repos", "widget", "sign"]],
-    ['repos."my repo".mode in charter.toml is not a mode', ["repos", "my repo", "mode"]],
-    ["[extensions.Bad!] in charter.toml is not an extension id", undefined],
-    ["[extensions.x_y] in charter.toml is not an extension id", ["extensions", "x_y"]],
-    ['[persona] default = "ghost" names no persona in this project', ["persona", "default"]],
-    ['theme in charter.toml is not a table — write [theme] with use = "<theme>"', ["theme"]],
-    ["charter.toml is not valid TOML", undefined],
-    // The profiles loader's: `is` is a word of the sentence, never a key's name.
-    [
-      "[harness.default] is in charter.toml, which is committed — a profile is this machine's",
-      undefined,
-    ],
-    [
-      "[harness.work] is in charter.toml, which is committed — a profile is this machine's",
-      undefined,
-    ],
-    ["[plane] mode holds a value purlis does not read", undefined],
-    ["plane.mode in charter.local.toml is not a mode", undefined],
-  ])("%s", (why, keys) => {
-    expect(keyOfRefusal(why, "charter.toml")).toEqual(keys);
-  });
-
-  it("takes a workspace's settings off the front", () => {
-    const file = "workspaces/alpha/workspace.json";
-    expect(keyOfRefusal(`settings.theme.icons in ${file} is 7`, file, "settings")).toEqual([
-      "theme",
-      "icons",
-    ]);
-    expect(keyOfRefusal(`settings in ${file} is not an object`, file, "settings")).toBeUndefined();
-    expect(
-      keyOfRefusal(`${file} is not a JSON object, so purlis reads no settings`, file, "settings"),
-    ).toBeUndefined();
-  });
-});
+const said = (why: string, key: string[] | null): SettingsRefusal => ({ why, key });
 
 const at = (id: string, label: string, keys: string[], over: Partial<FileSetting> = {}) =>
   ({
@@ -96,7 +58,11 @@ const GROUPS: SettingsGroup[] = [
 describe("where a refusal is fixed", () => {
   it("is the setting it names, in its group", () => {
     expect(
-      standingIn(["plane.mode in charter.toml is not a mode"], "charter.toml", "shared", GROUPS),
+      standingIn(
+        [said("plane.mode in charter.toml is not a mode", ["plane", "mode"])],
+        "shared",
+        GROUPS,
+      ),
     ).toEqual([
       {
         why: "plane.mode in charter.toml is not a mode",
@@ -111,8 +77,7 @@ describe("where a refusal is fixed", () => {
 
   it("is a movable setting's from either file", () => {
     const [one] = standingIn(
-      ["plane.mode in charter.local.toml is not a mode"],
-      "charter.local.toml",
+      [said("plane.mode in charter.local.toml is not a mode", ["plane", "mode"])],
       "local",
       GROUPS,
     );
@@ -121,24 +86,82 @@ describe("where a refusal is fixed", () => {
 
   it("is the group of a whole table the sentence names", () => {
     const [one] = standingIn(
-      ["extensions in charter.toml is not a table"],
-      "charter.toml",
+      [said("extensions in charter.toml is not a table", ["extensions"])],
       "shared",
       GROUPS,
     );
     expect(one.to).toEqual({ group: "project.extensions", label: "Extensions" });
   });
 
-  it("is nowhere for a key no setting of this file holds", () => {
+  it("is an extension's setting when its id holds a dot, as one step of the key", () => {
+    const groups: SettingsGroup[] = [
+      {
+        id: "project.extensions",
+        label: "Extensions",
+        help: "",
+        settings: [
+          at("project.extensions.extensions.my.ext.enabled", "My ext: enabled", [
+            "extensions",
+            "my.ext",
+            "enabled",
+          ]),
+        ],
+      },
+    ];
+    const [one] = standingIn(
+      [
+        said("extensions.my.ext.enabled in charter.toml is not true or false", [
+          "extensions",
+          "my.ext",
+          "enabled",
+        ]),
+      ],
+      "shared",
+      groups,
+    );
+    expect(one.to?.setting).toBe("project.extensions.extensions.my.ext.enabled");
+  });
+
+  it("is a workspace's setting by its key under settings", () => {
+    const groups: SettingsGroup[] = [
+      {
+        id: "workspace.extensions",
+        label: "Extensions",
+        help: "",
+        settings: [
+          at(
+            "workspace.extensions.extensions.stats.enabled",
+            "Stats: enabled",
+            ["extensions", "stats", "enabled"],
+            { file: "workspace" },
+          ),
+        ],
+      },
+    ];
+    const [one] = standingIn(
+      [
+        said("settings.extensions.stats.enabled in workspaces/a/workspace.json is 1", [
+          "extensions",
+          "stats",
+          "enabled",
+        ]),
+      ],
+      "workspace",
+      groups,
+    );
+    expect(one.to?.setting).toBe("workspace.extensions.extensions.stats.enabled");
+  });
+
+  it("is nowhere for a key no setting of this file holds, or a refusal with no key", () => {
     expect(
       standingIn(
         [
-          "harness.default in charter.toml is not read",
-          "frame.x in charter.toml is not read",
-          "[harness.default] is in charter.toml, which is committed — a profile is this machine's",
-          "charter.toml is not valid TOML",
+          said("harness.default in charter.toml is not read", ["harness", "default"]),
+          said("frame.x in charter.toml is not read", ["frame", "x"]),
+          // A sentence that starts the way a key would, with no key from the core.
+          said("plane.mode in charter.toml is not a mode", null),
+          said("charter.toml is not valid TOML", null),
         ],
-        "charter.toml",
         "shared",
         GROUPS,
       ).map((one) => one.to),

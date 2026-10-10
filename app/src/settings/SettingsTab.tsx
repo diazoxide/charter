@@ -172,7 +172,7 @@ function ProjectLevelTab({ plane, ...switcher }: Switcher & { plane: PlaneId }) 
     project.state === "read"
       ? (["shared", "local"] as const).flatMap((which) => {
           const file = project.read[which];
-          return standingIn(file.refusals, file.file, which, groups).map((one) => ({
+          return standingIn(file.refusals, which, groups).map((one) => ({
             ...one,
             why: `${file.file}: ${one.why}`,
           }));
@@ -313,11 +313,7 @@ function WorkspaceLevelTab({
       )}
       groups={groups}
       waiting={waitingFor(level)}
-      standing={
-        settings
-          ? standingIn(settings.refusals, settings.file, "workspace", groups, "settings")
-          : []
-      }
+      standing={settings ? standingIn(settings.refusals, "workspace", groups) : []}
       mend={
         settings && !settings.parsed
           ? [`Open ${named(settings)} under Edit as JSON to mend it.`]

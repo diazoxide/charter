@@ -70,8 +70,9 @@ pub struct SettingsFile {
     /// Its text, for Edit as TOML — and what a save is checked against, so an edit made
     /// elsewhere since is never written over.
     pub text: String,
-    /// What charter refuses in it as it stands, in the core's words.
-    pub refusals: Vec<String>,
+    /// What charter refuses in it as it stands, in the core's words, each with the key it is
+    /// about (#1292).
+    pub refusals: Vec<SettingsRefusal>,
     /// Whether it is TOML. When it is not, `fields` is empty and only Edit as TOML can mend it.
     pub parsed: bool,
     /// Every value in it, in file order.
@@ -81,6 +82,28 @@ pub struct SettingsFile {
     /// it holds none, and left out by a caller that lists none.
     #[specta(optional)]
     pub entries: Option<Vec<SettingsEntry>>,
+}
+
+/// **One thing charter does not take from a settings file as it stands** (#1292): the core's
+/// sentence, and the key it is about (`purlis_core::settings::Refusal`), so the window links it to
+/// the setting that mends it without reading the sentence.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct SettingsRefusal {
+    /// The reader's sentence, word for word.
+    pub why: String,
+    /// The key it is about, one step per table or key (an extension id with dots in it is one
+    /// step); for a workspace's file, the key under `settings`. `null` when it is about the
+    /// whole file, or about no key a setting is at.
+    pub key: Option<Vec<String>>,
+}
+
+impl From<settings::Refusal> for SettingsRefusal {
+    fn from(one: settings::Refusal) -> Self {
+        Self {
+            why: one.why,
+            key: one.key,
+        }
+    }
 }
 
 /// One entry of a collection, as the core lists it (`purlis_core::settings::collection::Listed`).
@@ -729,7 +752,7 @@ pub(crate) fn file_of(
         which,
         file: read.file.to_owned(),
         exists: read.exists,
-        refusals: read.refusals,
+        refusals: read.refusals.into_iter().map(Into::into).collect(),
         parsed: fields.is_some(),
         fields: fields_on_the_wire(fields.unwrap_or_default()),
         entries: entries_of(root, which, &read.text),
@@ -924,8 +947,9 @@ pub struct WorkspaceSettings {
     /// Its text: what a save is checked against, so an edit made elsewhere since is never
     /// written over.
     pub text: String,
-    /// What charter does not take from its settings as they stand, in the core's words.
-    pub refusals: Vec<String>,
+    /// What charter does not take from its settings as they stand, in the core's words, each
+    /// with its key under `settings` (#1292).
+    pub refusals: Vec<SettingsRefusal>,
     /// Whether a form can change it: a JSON object, or no file yet.
     pub parsed: bool,
     /// Every value in its settings, by its path under `settings`.
@@ -1013,7 +1037,7 @@ pub(crate) fn workspace_of(
         file: read.file,
         exists: read.exists,
         text: read.text,
-        refusals: read.refusals,
+        refusals: read.refusals.into_iter().map(Into::into).collect(),
         parsed: read.parsed,
         fields: fields_on_the_wire(read.fields),
         live: read.live,
@@ -1209,6 +1233,22 @@ mod tests {
         assert!(file.fields.is_empty());
         assert_eq!(file.text, "[memory\n");
         assert_eq!(file.refusals.len(), 1);
+        assert_eq!(file.refusals[0].key, None, "the whole file names no key");
+    }
+
+    /// #1292: each standing refusal reaches the wire with the key it is about, so the window
+    /// links it without reading the sentence, an extension id with dots in it as one step.
+    #[test]
+    fn a_refusal_is_on_the_wire_with_its_key() {
+        let dir = plane("[extensions.\"my.ext\"]\nenabled = 1\n");
+        let file = file_of(dir.path(), SettingsWhich::Shared).unwrap();
+        assert_eq!(
+            file.refusals,
+            vec![SettingsRefusal {
+                why: "extensions.my.ext.enabled in charter.toml is not true or false".into(),
+                key: Some(vec!["extensions".into(), "my.ext".into(), "enabled".into()]),
+            }]
+        );
     }
 
     #[test]

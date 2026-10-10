@@ -284,7 +284,7 @@ describe("the files, at the Project level", () => {
   it("says what charter ignores in a file as it stands", async () => {
     const standing =
       "1 [[forge]] block(s) failed to resolve — [[forge]] block 0: unknown forge kind 'bitbucket'";
-    core({ shared: { ...SHARED, refusals: [standing] } });
+    core({ shared: { ...SHARED, refusals: [{ why: standing, key: null }] } });
     await at();
 
     expect(
@@ -630,7 +630,7 @@ const LEFT_OUT =
 describe("a charter.local.toml git would carry (charter-app#319)", () => {
   it("is said once in each group that shows what is in force", async () => {
     core({
-      local: { ...LOCAL, refusals: [LEFT_OUT] },
+      local: { ...LOCAL, refusals: [{ why: LEFT_OUT, key: null }] },
       shared: WITH_EXTENSIONS,
       extensions: EXTENSIONS,
       leftOut: LEFT_OUT,
@@ -1077,7 +1077,7 @@ describe("each repo's save keys, in Saving (charter-app#300, ADR 0051)", () => {
 
   it("says once that Local was left out of the repos, and only where it set them", async () => {
     core({
-      local: { ...LOCAL, refusals: [LEFT_OUT] },
+      local: { ...LOCAL, refusals: [{ why: LEFT_OUT, key: null }] },
       shared: WITH_EXTENSIONS,
       extensions: EXTENSIONS,
       saving: { ...SAVES_IN_FORCE, repos_left_out: LEFT_OUT },
