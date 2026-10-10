@@ -1520,6 +1520,7 @@ mod tests {
         serde_json::json!({ "Ok": { "Root": { "base": folder, "refs": [] } } }).to_string()
     }
 
+    #[cfg(unix)]
     const REPO: super::Branch<'static> = super::Branch {
         ws: "alpha",
         repo: "thing",
