@@ -1381,7 +1381,13 @@ pub struct Planes {
     /// The host's event log (FD-9), shared by every project: one writer per device. None until
     /// the app opens it, and on a machine that has no data home.
     events: Option<hooks::Events>,
+    /// Collects a plane's month-old per-session files as it opens (SC-7):
+    /// [`purlis_core::retention::on_open`], or a test's stand-in.
+    sweep: Sweep,
 }
+
+/// What collects a plane's month-old per-session files as [`Planes::open`] opens it.
+type Sweep = Arc<dyn Fn(&Path) + Send + Sync>;
 
 /// Told the root of a plane the app let go of.
 pub type Released = Arc<dyn Fn(&Path) + Send + Sync>;
@@ -1473,6 +1479,9 @@ impl Planes {
             relaunching: Mutex::new(Relaunching::default()),
             hosting: Arc::new(|reporting| Box::new(Sessions::reporting_to(reporting))),
             events: None,
+            sweep: Arc::new(|root| {
+                purlis_core::retention::on_open(root, std::time::SystemTime::now());
+            }),
         }
     }
 
@@ -1485,6 +1494,14 @@ impl Planes {
     /// Records every hook call of every project this registry holds into `events` (FD-9).
     pub fn recording_events(mut self, events: Option<hooks::Events>) -> Self {
         self.events = events;
+        self
+    }
+
+    /// Collects each plane it opens with `sweep` in place of the month's retention: for a test
+    /// that needs a sweep it can hold.
+    #[cfg(test)]
+    pub(crate) fn sweeping_with(mut self, sweep: Sweep) -> Self {
+        self.sweep = sweep;
         self
     }
 
@@ -1642,6 +1659,19 @@ impl Planes {
         if let Some(config) = self.config.as_deref() {
             purlis_core::leftovers::sweep_config(config);
         }
+        // The per-session files no chat has written for a month (SC-7). Only for a plane this
+        // app does not hold yet, so only when no chat of it is running in this app: the chats
+        // its reopen record will bring back are what it keeps.
+        //
+        // **Not under the registry's lock** (#1027): a sweep reads every aged trace, which on a
+        // plane used for months takes a while, and the lock is what every other project's open,
+        // close and lookup takes. So whether the plane is held is asked under the lock, and the
+        // sweep runs outside it, before this open holds the plane. Two opens of one root at once
+        // may both sweep, which removes nothing one sweep would keep; and a chat the other one
+        // starts meanwhile writes only files newer than the month a sweep removes.
+        if !self.map().contains_key(&id) {
+            (self.sweep)(&root);
+        }
 
         let mut open = self.map();
         if let Some(already) = open.get(&id) {
@@ -1654,10 +1684,6 @@ impl Planes {
             &root,
             purlis_core::secrets::Env::from_process(),
         ));
-        // The per-session files no chat has written for a month (SC-7). Below the line above,
-        // so it runs only when no chat of this plane is running in this app — the chats its
-        // reopen record will bring back are what it keeps.
-        purlis_core::retention::on_open(&root, std::time::SystemTime::now());
         // The reports kept for a workspace a sandboxed chat renamed: that chat's sandbox does
         // not let it move them, so the app does, here, where it is not sandboxed (D-T59-19).
         if let Err(why) = purlis_core::wscmd::rename::kept_reports_follow(&root) {
@@ -3860,6 +3886,71 @@ mod tests {
         planes.open(&root);
 
         assert!(while_open.exists(), "a plane already open was swept");
+    }
+
+    /// #1027: a plane's sweep runs outside the registry's lock. While one project's sweep is
+    /// still reading, another project opens and the registry answers; the first open ends once
+    /// its sweep has.
+    #[test]
+    fn a_long_sweep_holds_up_only_the_open_it_belongs_to() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let dir = tempfile::tempdir().expect("a directory");
+        let slow = dir.path().join("slow");
+        let quick = dir.path().join("quick");
+        for root in [&slow, &quick] {
+            std::fs::create_dir_all(root).expect("a project's directory");
+        }
+        let slow = slow.canonicalize().expect("resolved");
+        let (entered, sweeping) = mpsc::channel::<()>();
+        let (release, released) = mpsc::channel::<()>();
+        let released = Mutex::new(released);
+        let held_at = slow.clone();
+        let planes = Arc::new(planes().sweeping_with(Arc::new(move |root| {
+            if root == held_at {
+                let _ = entered.send(());
+                let _ = released
+                    .lock()
+                    .expect("the release")
+                    .recv_timeout(Duration::from_secs(60));
+            }
+        })));
+
+        let opening_slow = std::thread::spawn({
+            let (planes, slow) = (Arc::clone(&planes), slow.clone());
+            move || planes.open(&slow)
+        });
+        sweeping
+            .recv_timeout(Duration::from_secs(30))
+            .expect("the slow project's sweep has begun");
+
+        let (opened, quick_open) = mpsc::channel();
+        std::thread::spawn({
+            let planes = Arc::clone(&planes);
+            move || {
+                let id = planes.open(&quick);
+                let _ = opened.send((id, planes.open_now()));
+            }
+        });
+        let (quick_id, open_meanwhile) = quick_open
+            .recv_timeout(Duration::from_secs(30))
+            .expect("another project opens while the sweep runs");
+        assert_eq!(
+            open_meanwhile,
+            vec![quick_id.clone()],
+            "only the other project is open while the sweep runs"
+        );
+        assert!(
+            !opening_slow.is_finished(),
+            "the slow open waits on its own sweep"
+        );
+
+        release.send(()).expect("released");
+        let slow_id = opening_slow.join().expect("the slow project opens");
+        let mut both = vec![slow_id, quick_id];
+        both.sort_by(|one, two| one.0.cmp(&two.0));
+        assert_eq!(planes.open_now(), both);
     }
 
     #[test]

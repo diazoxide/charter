@@ -95,7 +95,9 @@ marks is what FR-10 backs up.
 
 **The per-session stores and the dispatch records are collected** (SC-7, #1452, #1004). When the app opens a plane that is not already
 open in it, `purlis_core::retention::on_open` removes, from that plane's own `.charter/` only
-(`<plane>/.charter/…`, never a `$CHARTER_HOME` that several planes may share):
+(`<plane>/.charter/…`, never a `$CHARTER_HOME` that several planes may share). The sweep runs
+outside the app's lock on its open projects (#1027), so a long one holds up only the open of
+its own plane:
 
 - a `.charter/sessions/<sid>.<ending>` marker last written 30 days or more before
   (`retention::KEEP_FOR`) — every ending but `.tools` and `.gate`, which go sooner (below);
