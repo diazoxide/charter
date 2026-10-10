@@ -110,7 +110,8 @@ function draw() {
         workspace="alpha"
         state={STATE}
         chats={[]}
-        spot={undefined}
+        // Branch `one`, picked: the Files section draws its files (#1677).
+        spot={{ repo: "svc", piece: "one", path: ONE.path }}
         onPick={() => {}}
         offers={new Map()}
         onPress={() => {}}
@@ -121,7 +122,7 @@ function draw() {
   );
 }
 
-const tree = () => screen.getByRole("tree", { name: "Repos and branches" });
+const tree = () => screen.getByRole("tree", { name: /^Files of / });
 const row = (id: string) => {
   const found = tree().querySelector<HTMLElement>(`[data-row="${id}"]`);
   if (found === null) throw new Error(`no row ${id}`);
@@ -143,21 +144,22 @@ describe("what a branch changed, in the explorer", () => {
   it("marks each file with what the branch did to it and each folder with how many it holds", async () => {
     core(TOP, { now: CHANGED });
     draw();
-    await userEvent.click(row("file:svc/one:"));
     await userEvent.click(await named("^lib"));
     await userEvent.click(await named("^src"));
 
     expect(await named("^README.md")).toHaveAccessibleName("README.md changed");
     expect(await named("^new.rs")).toHaveAccessibleName("new.rs renamed from lib/old.rs");
     expect(await named("^src")).toHaveAccessibleName("src 2 changes");
-    expect(row("file:svc/one:")).toHaveAccessibleName("Files 4 changes");
+    // The branch's own folder is the section's heading, and carries its count.
+    expect(screen.getByRole("button", { name: /^Files/ })).toHaveAccessibleName(
+      "Files one in svc 4 changes",
+    );
     expect(row("file:svc/one:src/keep.rs")).toHaveAccessibleName("keep.rs");
   });
 
   it("draws a file the branch deleted where it was, and it does not open", async () => {
     core(TOP, { now: CHANGED });
     draw();
-    await userEvent.click(row("file:svc/one:"));
     await userEvent.click(await named("^src"));
 
     const gone = await named("^gone.rs");
@@ -170,14 +172,12 @@ describe("what a branch changed, in the explorer", () => {
   it("collapses to what the branch changed, every folder of it open, with no folder read", async () => {
     const asked = core(TOP, { now: CHANGED });
     draw();
-    await userEvent.click(row("file:svc/one:"));
     await named("^README.md");
 
     await userEvent.click(screen.getByRole("button", { name: "Changed only" }));
 
     await waitFor(() =>
       expect(drawnNames()).toEqual([
-        "file:svc/one:",
         "file:svc/one:lib",
         "file:svc/one:lib/new.rs",
         "file:svc/one:src",
@@ -195,7 +195,6 @@ describe("what a branch changed, in the explorer", () => {
       now: { changes: [], folders: [], more: 0, base: "main" },
     });
     draw();
-    await userEvent.click(row("file:svc/one:"));
     await named("^README.md");
     await userEvent.click(screen.getByRole("button", { name: "Changed only" }));
 
@@ -205,7 +204,6 @@ describe("what a branch changed, in the explorer", () => {
   it("counts the changes past the most the core marks under Changed only", async () => {
     core(TOP, { now: { ...CHANGED, more: 12_345 } });
     draw();
-    await userEvent.click(row("file:svc/one:"));
     await named("^README.md");
 
     await userEvent.click(screen.getByRole("button", { name: "Changed only" }));

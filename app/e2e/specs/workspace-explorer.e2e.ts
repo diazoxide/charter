@@ -62,6 +62,27 @@ async function untilListed(expected: string[]): Promise<void> {
 async function onAlpha(): Promise<void> {
   await untilListed(["alpha", "beta"]);
   await focus("alpha");
+  // On the workspace itself, as it starts: a branch an earlier spec picked to see its files
+  // (#1677) would be where the next chat starts, and its files what Files draws.
+  await browser.execute(() => {
+    const root = document.querySelector<HTMLElement>('[data-testid="explorer"] button.spot-root');
+    if (root !== null && root.getAttribute("aria-current") !== "true") root.click();
+  });
+}
+
+/**
+ * Shows a branch's files in Explorer's *Files* section (#1677): picks the branch's row, which is
+ * what the section draws the files of, and waits for the section to be of it. {@link onAlpha}
+ * picks the workspace itself again.
+ */
+async function showFilesOf(piece: string): Promise<void> {
+  const row = await $(inExplorer(`[data-testid="piece-svc-${piece}"] .spot`));
+  await row.waitForExist({ timeout: 20_000 });
+  await row.click();
+  await $(inExplorer(`[role="tree"][aria-label^="Files of ${piece}"]`)).waitForExist({
+    timeout: 20_000,
+    timeoutMsg: `Files never showed the files of ${piece}`,
+  });
 }
 
 /**
@@ -185,12 +206,7 @@ describe("the explorer", () => {
    */
   it("expands the fixture branch into its files and opens one in its file tab", async () => {
     await onAlpha();
-    const files = await $('[data-testid="files-svc-fix-login"] .file-node');
-    await files.waitForExist({ timeout: 20_000 });
-
-    await files.click();
-
-    await expect(files).toHaveAttribute("aria-expanded", "true");
+    await showFilesOf("fix-login");
     const readme = await fileRow("fix-login", "README.md");
     await readme.click();
 
@@ -366,9 +382,7 @@ describe("the explorer", () => {
 
   it("shows a file an agent creates in an expanded folder without a refresh", async () => {
     await onAlpha();
-    const files = await $('[data-testid="files-svc-fix-login"] .file-node');
-    await files.waitForExist({ timeout: 20_000 });
-    if ((await files.getAttribute("aria-expanded")) !== "true") await files.click();
+    await showFilesOf("fix-login");
     await fileRow("fix-login", "README.md");
 
     // What an agent writing in the branch does: a file appears in its folder on disk.
@@ -396,9 +410,7 @@ describe("the explorer", () => {
     const branch = join(plane, "workspaces", "alpha", ".worktrees", "svc", "fix-login");
     mkdirSync(join(branch, "notes"), { recursive: true });
     writeFileSync(join(branch, "notes", "first.md"), "one\n");
-    const files = await $('[data-testid="files-svc-fix-login"] .file-node');
-    await files.waitForExist({ timeout: 20_000 });
-    if ((await files.getAttribute("aria-expanded")) !== "true") await files.click();
+    await showFilesOf("fix-login");
     const notes = await fileRow("fix-login", "notes", 60_000);
     await notes.click();
     await fileRow("fix-login", "notes/first.md");
@@ -416,9 +428,7 @@ describe("the explorer", () => {
     await onAlpha();
     const plane = (await ask<string[]>("open_planes"))[0];
     const branch = join(plane, "workspaces", "alpha", ".worktrees", "svc", "fix-login");
-    const files = await $('[data-testid="files-svc-fix-login"] .file-node');
-    await files.waitForExist({ timeout: 20_000 });
-    if ((await files.getAttribute("aria-expanded")) !== "true") await files.click();
+    await showFilesOf("fix-login");
     await explorerRow("fix-login", "README.md");
     const readme = readFileSync(join(branch, "README.md"), "utf8");
 
@@ -444,9 +454,7 @@ describe("the explorer", () => {
     await onAlpha();
     const plane = (await ask<string[]>("open_planes"))[0];
     const branch = join(plane, "workspaces", "alpha", ".worktrees", "svc", "fix-login");
-    const files = await $('[data-testid="files-svc-fix-login"] .file-node');
-    await files.waitForExist({ timeout: 20_000 });
-    if ((await files.getAttribute("aria-expanded")) !== "true") await files.click();
+    await showFilesOf("fix-login");
     // `.claude` holds a file git tracks, is closed, and the branch has changed nothing in it.
     const folder = await explorerRow("fix-login", ".claude");
     await expect(folder).toHaveAttribute("aria-expanded", "false");
@@ -471,9 +479,7 @@ describe("the explorer", () => {
     const branch = join(plane, "workspaces", "alpha", ".worktrees", "svc", "fix-login");
     mkdirSync(join(branch, "changed-dir"), { recursive: true });
     writeFileSync(join(branch, "changed-dir", "deep.md"), "changed\n");
-    const files = await $('[data-testid="files-svc-fix-login"] .file-node');
-    await files.waitForExist({ timeout: 20_000 });
-    if ((await files.getAttribute("aria-expanded")) !== "true") await files.click();
+    await showFilesOf("fix-login");
     await explorerRow("fix-login", "README.md");
     // By role and name: a toggle button, and the search box beside the tree.
     const changedOnly = await $("aria/Changed only");
@@ -729,9 +735,7 @@ describe("the explorer", () => {
    */
   it("draws a file's and a folder's icon from the icon theme", async () => {
     await onAlpha();
-    const files = await $('[data-testid="files-svc-fix-login"] .file-node');
-    await files.waitForExist({ timeout: 20_000 });
-    if ((await files.getAttribute("aria-expanded")) !== "true") await files.click();
+    await showFilesOf("fix-login");
 
     const readme = await explorerRow("fix-login", "README.md");
     await expect(readme.$("svg.file-icon")).toHaveAttribute("data-icon", "readme");
@@ -743,9 +747,10 @@ describe("the explorer", () => {
     );
   });
 
-  it("does not list every workspace, because the strip above already answers that", async () => {
+  it("lists the workspaces by name only, never with what the old sidebar drew", async () => {
     // ADR 0038, and the reason this region was rewritten: the old sidebar drew every
-    // workspace with its vision text under the strip that had just been made the axis.
+    // workspace with its vision text under the strip that had just been made the axis. The
+    // Workspaces section (#1677) names them and nothing more.
     await onAlpha();
     await $('[data-testid="clone-svc"]').waitForExist({ timeout: 20_000 });
 
@@ -837,9 +842,7 @@ describe("the explorer", () => {
     const branch = join(plane, "workspaces", "alpha", ".worktrees", "svc", "fix-login");
     mkdirSync(join(branch, "shell-here"), { recursive: true });
     writeFileSync(join(branch, "shell-here", "keep.md"), "kept\n");
-    const files = await $('[data-testid="files-svc-fix-login"] .file-node');
-    await files.waitForExist({ timeout: 20_000 });
-    if ((await files.getAttribute("aria-expanded")) !== "true") await files.click();
+    await showFilesOf("fix-login");
     await fileRow("fix-login", "shell-here", 60_000);
 
     const sent = await sendContextMenu('[data-row="file:svc/fix-login:shell-here"]');
@@ -933,9 +936,7 @@ describe("the explorer", () => {
         throw new Error(`${String(err)}; panes: ${(await rows()).join("|")}; said: ${said}`);
       });
 
-    const files = await $('[data-testid="files-svc-fix-login"] .file-node');
-    await files.waitForExist({ timeout: 20_000 });
-    if ((await files.getAttribute("aria-expanded")) !== "true") await files.click();
+    await showFilesOf("fix-login");
     await fileRow("fix-login", "README.md");
     // Quiet for the second the core waits on a harness of this kind before it types.
     await browser.pause(1_500);

@@ -2,6 +2,7 @@ import { LiveMark } from "./LiveDialog";
 import { Notice } from "./Notice";
 import {
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -16,6 +17,7 @@ import {
   FileSymlink,
   FileX,
   FolderGit2,
+  FolderRoot,
   Folders,
   ListFilter,
   GitBranch,
@@ -45,7 +47,9 @@ import type { Place } from "./pieceViews";
 import { Menued } from "./Menus";
 import { NotClonedHere, type Cloning } from "./NotCloned";
 import { WorktreeMark } from "./Worktree";
+import { OUTSIDE, OUTSIDE_TITLE } from "./actions";
 import type { BranchPath, Catalogued, FileOn, Offer } from "./actions";
+import { setSectionOpen, useClosedSections, type SectionId } from "./explorerSections";
 import type { WorkspaceState } from "./workspaceState";
 import { useTabStop } from "./roving";
 import { Breadcrumb, CockpitHeader, focusStands, useAheadBehind } from "./Cockpit";
@@ -167,6 +171,17 @@ import { touchingIn, touchSaid, useTouching, type Touching } from "./touching";
  * branches and files. A branch still answers "is anything already running here" in the chats'
  * own words, in the Chats view, and by the live marks below.
  *
+ * **It is in three sections, each folding on its heading** (#1677, spec #1671 B-12), an
+ * editor's explorer: *Workspaces*, the project's workspaces in the strip's order with the focused
+ * one current, where a press focuses one exactly as its tab on the strip does (the same
+ * catalogue row, `workspace.focus:<name>`, and the same menu); *Repos and branches*, the
+ * focused workspace's own tree; and *Files*, of where the next chat starts — the picked branch
+ * or repo, or each repo's own folder while the workspace itself is picked. Each section's tree
+ * is its own Tab stop. A folded section is hidden and stays mounted, so its folds and the place
+ * the keyboard was in it come back with it; which ones are folded is kept in the layout file
+ * (`explorerSections.ts`). Only the workspaces are a list the strip also draws, and they are
+ * not a tablist: the strip stays the axis (ADR 0036), and this is a way to it.
+ *
  * **What a chat is touching right now is marked live** (FM-6, #1109; V86 F6): a file a chat's
  * tool reads or edits, and every folder above it up to the branch's *Files* row, carry a dot
  * naming the chat on hover, which fades a few seconds after the chat goes quiet on it
@@ -175,6 +190,7 @@ import { touchingIn, touchSaid, useTouching, type Touching } from "./touching";
  */
 export function Explorer({
   plane,
+  workspaces = [],
   workspace,
   live = false,
   state,
@@ -191,6 +207,9 @@ export function Explorer({
 }: {
   /** The project, for reading a branch's folders. Without one no folder is read. */
   plane?: PlaneId;
+  /** Every workspace the strip can bring forward, in its order, the plane root first: what the
+   *  *Workspaces* section lists. */
+  workspaces?: readonly string[];
   /** The focused workspace, or nothing when the strip is on the chats that are in none. */
   workspace: string | undefined;
   /** Whether that workspace is LIVE (charter-app#301): its row carries the mark. */
@@ -233,15 +252,27 @@ export function Explorer({
   /** The cockpit's *Files* rows the operator closed: open until they do (FM-5). */
   const [shut, setShut] = useState<ReadonlySet<string>>(new Set());
   const cockpit = cockpitOf(workspace, state, focus);
-  const cockpitFiles =
-    cockpit === undefined || workspace === undefined
-      ? undefined
-      : fileFold(workspace, { ...cockpit.ref, folder: "" });
+  /** Where the *Files* section is of: the picked branch or repo, or nothing for the workspace
+   *  itself, whose repos' own folders it lists. */
+  const filesTop: BranchFolderRef | undefined =
+    cockpit !== undefined
+      ? { ...cockpit.ref, folder: "" }
+      : spot === undefined
+        ? undefined
+        : { repo: spot.repo, piece: spot.piece ?? null, folder: "" };
+  const topFold =
+    filesTop === undefined || workspace === undefined ? undefined : fileFold(workspace, filesTop);
+  // The top of the files drawn is always open: the section's heading, or the cockpit's *Files*
+  // row until the operator closes it, is what stands for it.
   const expandedNow =
-    cockpitFiles !== undefined && !shut.has(cockpitFiles) && !expanded.has(cockpitFiles)
-      ? new Set([...expanded, cockpitFiles])
+    topFold !== undefined && !shut.has(topFold) && !expanded.has(topFold)
+      ? new Set([...expanded, topFold])
       : expanded;
-  const open = openFolders(workspace, state, expandedNow);
+  const tops: BranchFolderRef[] =
+    filesTop !== undefined
+      ? [filesTop]
+      : (state.panels?.repos ?? []).map((repo) => ({ repo, piece: null, folder: "" }));
+  const open = openFolders(workspace, tops, expandedNow);
   const branches: BranchRef[] = open
     .filter((ref) => ref.folder === "")
     .map(({ repo, piece }) => ({ repo, piece }));
@@ -288,11 +319,21 @@ export function Explorer({
     levels: new Map(),
     touching,
   };
-  const tree =
-    cockpit === undefined || workspace === undefined
-      ? treeOf(workspace, state, folded, files)
-      : cockpitTreeOf(workspace, cockpit, files);
-  const drawn = tree.filter((row) => row.drawn);
+  const closed = useClosedSections();
+  /** The rows of each section's tree, and of the cockpit's: ids never repeat across them, so
+   *  one lookup answers for every row. A folded section draws none of its rows. */
+  const shownIn = (rows: Row[], section: SectionId) =>
+    closed.has(section) ? rows.map((row) => ({ ...row, drawn: false })) : rows;
+  const workspaceRows = shownIn(workspacesTreeOf(workspaces), "workspaces");
+  const placeRows = cockpit === undefined ? shownIn(treeOf(workspace, state, folded), "repos") : [];
+  const fileRows =
+    workspace === undefined
+      ? []
+      : cockpit !== undefined
+        ? cockpitTreeOf(workspace, cockpit, files)
+        : shownIn(filesTreeOf(workspace, tops, filesTop !== undefined, files), "files");
+  const tree = [...workspaceRows, ...placeRows, ...fileRows];
+  const drawnOf = (rows: Row[]) => rows.filter((row) => row.drawn);
   const picked =
     cockpit !== undefined
       ? undefined
@@ -301,15 +342,24 @@ export function Explorer({
         : spot.piece === undefined
           ? cloneRow(spot.repo)
           : pieceRow(spot.repo, spot.piece);
-  const stop = useTabStop(
+  const focusedRow = workspaceRow(workspace ?? OUTSIDE);
+  const workspacesStop = useTabStop(
+    focusedRow,
+    drawnOf(workspaceRows).map((row) => row.id),
+  );
+  const placeStop = useTabStop(
     picked,
-    drawn.map((row) => row.id),
+    drawnOf(placeRows).map((row) => row.id),
+  );
+  const filesStop = useTabStop(
+    undefined,
+    drawnOf(fileRows).map((row) => row.id),
   );
 
   /** Opens or closes a clone or a branch's folder: the one fold state of each, whether a click
    *  or a key asked. A clone is open until folded; a folder is closed until opened. */
   const fold = (key: string, open: boolean) => {
-    if (key === cockpitFiles)
+    if (key === topFold)
       setShut((was) => {
         if (open !== was.has(key)) return was;
         const now = new Set(was);
@@ -371,7 +421,7 @@ export function Explorer({
       return;
     const wanted =
       cockpit !== undefined
-        ? drawn[0]?.id
+        ? drawnOf(fileRows)[0]?.id
         : left === undefined
           ? undefined
           : pieceRow(left.slice(0, left.indexOf("/")), left.slice(left.indexOf("/") + 1));
@@ -385,11 +435,12 @@ export function Explorer({
   /** Steps back out of the cockpit to the whole workspace. */
   const leave = () => onFocus?.(undefined);
 
-  /** Left, Right and type-ahead (#238). Up, Down, Home and End are the roving focus's. */
-  const onTreeKey = (event: KeyboardEvent<HTMLElement>) => {
+  /** Left, Right and type-ahead (#238) on one of the trees, by its rows. Up, Down, Home and End
+   *  are the roving focus's. */
+  const onTreeKey = (rows: Row[]) => (event: KeyboardEvent<HTMLElement>) => {
     if (event.altKey || event.ctrlKey || event.metaKey) return;
     const target = event.target as HTMLElement;
-    const to = treeKey(drawn, target.dataset.row, event.key);
+    const to = treeKey(drawnOf(rows), target.dataset.row, event.key);
     if (to === "not-mine") return;
     event.preventDefault();
     if (to === "stay") return;
@@ -400,38 +451,94 @@ export function Explorer({
         ?.focus();
   };
 
+  /** The *Workspaces* section: every workspace the strip can bring forward, the focused one
+   *  current, each pressed through the strip's own catalogue row and with the strip's menu. */
+  const workspacesSection = (
+    <Section id="workspaces" title="Workspaces" closed={closed.has("workspaces")}>
+      <RovingFocusGroup.Root asChild orientation="vertical" {...workspacesStop}>
+        <div
+          className="tree"
+          role="tree"
+          aria-label="Workspaces of this project"
+          onKeyDown={onTreeKey(workspaceRows)}
+        >
+          {workspaces.map((name) => {
+            const root = name === OUTSIDE;
+            const id = workspaceRow(name);
+            const current = name === (workspace ?? OUTSIDE);
+            const offer = offers.get(`workspace.focus:${name}`);
+            return (
+              <Menued
+                key={name}
+                on={root ? { on: "root" } : { on: "workspace", workspace: name }}
+                offers={offers}
+                onPress={onPress}
+              >
+                <RovingFocusGroup.Item asChild tabStopId={id} active={current}>
+                  <button
+                    type="button"
+                    className="spot"
+                    {...treeitem(id)}
+                    // The current item, as the picked spot below is: the strip is where a
+                    // workspace is selected (ADR 0036).
+                    aria-current={current ? "true" : undefined}
+                    // What a press does, on the rows where it does something.
+                    title={offer?.available ? offer.title : undefined}
+                    onClick={() => {
+                      if (offer?.available) onPress(offer);
+                    }}
+                  >
+                    {root ? (
+                      <FolderRoot className="node-icon" />
+                    ) : (
+                      <Folders className="node-icon" />
+                    )}
+                    <span className="spot-name">{root ? OUTSIDE_TITLE : name}</span>
+                    {current && live && <LiveMark />}
+                  </button>
+                </RovingFocusGroup.Item>
+              </Menued>
+            );
+          })}
+        </div>
+      </RovingFocusGroup.Root>
+    </Section>
+  );
+
   if (workspace === undefined) {
     return (
-      // Inside the same roving group as the full explorer below, so that the `nav` is the SAME
-      // element when a workspace arrives: a different parent would have React remount it, and
-      // everything holding the old one — a scenario, a screen reader's place — would lose it.
-      <RovingFocusGroup.Root asChild orientation="vertical" {...stop}>
-        <nav className="explorer" aria-label="Explorer" data-testid="explorer">
-          {/* The strip for chats outside every workspace is not a workspace on the plane, so
+      // The same `nav` as the full explorer's below, so that it is the SAME element when a
+      // workspace arrives: everything holding the old one — a scenario, a screen reader's place —
+      // would otherwise lose it.
+      <nav ref={navRef} className="explorer" aria-label="Explorer" data-testid="explorer">
+        {workspacesSection}
+        {/* The strip for chats outside every workspace is not a workspace on the plane, so
             there is no directory to explore and nothing honest to draw. */}
-          <p className="empty">No workspace focused, so there is nothing to explore.</p>
-        </nav>
-      </RovingFocusGroup.Root>
+        <p className="empty">No workspace focused, so there is nothing to explore.</p>
+      </nav>
     );
   }
 
   const { panels, pieces, piecesRefused } = state;
   const clones = panels?.repos ?? [];
+  const at: FileRows = {
+    plane,
+    place: { workspace, repo: filesTop?.repo ?? "", piece: filesTop?.piece ?? null },
+    files,
+    fold,
+    treeitem,
+    isDrawn,
+    onOpenFile,
+    onPress,
+    icons,
+  };
   /** A branch's *Files* row, and its folders under it as they are opened. */
-  const filesOf = (repo: string, piece: string | null) => (
+  const filesOf = (repo: string, piece: string | null, name?: string) => (
     <FilesRow
       branch={{ repo, piece, folder: "" }}
-      at={{
-        plane,
-        place: { workspace, repo, piece },
-        files,
-        fold,
-        treeitem,
-        isDrawn,
-        onOpenFile,
-        onPress,
-        icons,
-      }}
+      name={name}
+      repo={name !== undefined}
+      at={{ ...at, place: { workspace, repo, piece } }}
     />
   );
   const filterBox = open.length > 0 && (
@@ -480,250 +587,271 @@ export function Explorer({
   if (cockpit !== undefined) {
     const { ref, name, on } = cockpit;
     return (
-      <RovingFocusGroup.Root asChild orientation="vertical" {...stop}>
-        <nav
-          ref={navRef}
-          className="explorer cockpit"
-          aria-label="Explorer"
-          data-testid="explorer"
-          onKeyDown={(event) => {
-            // Esc steps back out; one something inside already took (the filter box clearing
-            // itself, a menu closing) has done its job.
-            if (event.key !== "Escape" || event.defaultPrevented) return;
-            event.preventDefault();
-            leave();
-          }}
-        >
-          <Breadcrumb
-            workspace={workspace}
-            repo={ref.repo}
-            name={ref.piece === null ? undefined : name}
-            onLeave={leave}
-          />
-          <CockpitHeader
-            name={on}
-            repo={ref.repo}
-            piece={ref.piece}
-            apart={apart}
-            status={cockpitStatus}
-            offers={offers}
-            onPress={onPress}
-          />
-          {state.trouble && (
-            <ReadRefused cause={`workspace-read:${workspace}`} onReadAgain={onReadAgain}>
-              {state.trouble}
-            </ReadRefused>
-          )}
-          {filterBox}
-          <div className="tree" role="tree" aria-label={`Files of ${name}`} onKeyDown={onTreeKey}>
+      <nav
+        ref={navRef}
+        className="explorer cockpit"
+        aria-label="Explorer"
+        data-testid="explorer"
+        onKeyDown={(event) => {
+          // Esc steps back out; one something inside already took (the filter box clearing
+          // itself, a menu closing) has done its job.
+          if (event.key !== "Escape" || event.defaultPrevented) return;
+          event.preventDefault();
+          leave();
+        }}
+      >
+        {/* Workspaces stays above the cockpit: a focused branch is still in a workspace, and
+            the way to another is still here (#1677). */}
+        {workspacesSection}
+        <Breadcrumb
+          workspace={workspace}
+          repo={ref.repo}
+          name={ref.piece === null ? undefined : name}
+          onLeave={leave}
+        />
+        <CockpitHeader
+          name={on}
+          repo={ref.repo}
+          piece={ref.piece}
+          apart={apart}
+          status={cockpitStatus}
+          offers={offers}
+          onPress={onPress}
+        />
+        {state.trouble && (
+          <ReadRefused cause={`workspace-read:${workspace}`} onReadAgain={onReadAgain}>
+            {state.trouble}
+          </ReadRefused>
+        )}
+        {filterBox}
+        <RovingFocusGroup.Root asChild orientation="vertical" {...filesStop}>
+          <div
+            className="tree"
+            role="tree"
+            aria-label={`Files of ${name}`}
+            onKeyDown={onTreeKey(fileRows)}
+          >
             <ul className="files" role="group">
               <li role="none" data-testid={`files-${ref.repo}-${ref.piece}`}>
                 {filesOf(ref.repo, ref.piece)}
               </li>
             </ul>
           </div>
-          {toggles}
-        </nav>
-      </RovingFocusGroup.Root>
+        </RovingFocusGroup.Root>
+        {toggles}
+      </nav>
     );
   }
 
+  /** What the *Files* section is of, as its heading and its tree say it. */
+  const filesName =
+    spot === undefined
+      ? workspace
+      : spot.piece === undefined
+        ? spot.repo
+        : pieceName(pieces[spot.repo], spot.repo, spot.piece);
+  const topLevel = filesTop === undefined ? undefined : levelOf(files, filesTop);
+  // What the picked branch changed in all, and whether a chat is in it now: the marks its own
+  // folder's row carried, on the heading that stands for that folder.
+  const topKey = filesTop === undefined ? undefined : branchKey(filesTop);
+  const topMarks = topKey !== undefined && (
+    <>
+      {" "}
+      <TouchMark names={touching.get(topKey)?.get("")} />
+      <ChangeBadge marked={indexes.get(topKey)?.marks.get("")} folder />
+    </>
+  );
+
   return (
-    <RovingFocusGroup.Root asChild orientation="vertical" {...stop}>
-      <nav ref={navRef} className="explorer" aria-label="Explorer" data-testid="explorer">
+    <nav ref={navRef} className="explorer" aria-label="Explorer" data-testid="explorer">
+      {workspacesSection}
+
+      <Section id="repos" title="Repos and branches" closed={closed.has("repos")}>
         {state.trouble && (
           <ReadRefused cause={`workspace-read:${workspace}`} onReadAgain={onReadAgain}>
             {state.trouble}
           </ReadRefused>
         )}
 
-        {filterBox}
-
         {/* The tree is the rows and what holds them. The sentences about the whole region — the
           trouble above, the pending and empty notes and what purlis would not read below —
           are outside it. The ones about ONE clone (its worktrees could not be listed, are
           still coming, or are none) stay inside that clone's `<details>`, beside the row they
           explain, and so inside the tree: moving them out would take them away from it. */}
-        <div className="tree" role="tree" aria-label="Repos and branches" onKeyDown={onTreeKey}>
-          <RovingFocusGroup.Item asChild tabStopId={ROOT} active={spot === undefined}>
-            <button
-              type="button"
-              className="spot spot-root"
-              {...treeitem(ROOT)}
-              // Not `aria-selected`, even in a tree: the three tablists in this window are
-              // where it selects (ADR 0036), and a picked spot is not a selection the keyboard
-              // moves but the place the next chat starts — the current item, which is what
-              // `aria-current` is for and what the old sidebar's workspace rows used.
-              aria-current={spot === undefined ? "true" : undefined}
-              onClick={() => onPick(undefined)}
-            >
-              <Folders className="node-icon" />
-              <span className="spot-name">{workspace}</span>
-              {live && <LiveMark />}
-              <span className="spot-what">the workspace itself</span>
-            </button>
-          </RovingFocusGroup.Item>
+        <RovingFocusGroup.Root asChild orientation="vertical" {...placeStop}>
+          <div
+            className="tree"
+            role="tree"
+            aria-label="Repos and branches"
+            onKeyDown={onTreeKey(placeRows)}
+          >
+            <RovingFocusGroup.Item asChild tabStopId={ROOT} active={spot === undefined}>
+              <button
+                type="button"
+                className="spot spot-root"
+                {...treeitem(ROOT)}
+                // Not `aria-selected`, even in a tree: the three tablists in this window are
+                // where it selects (ADR 0036), and a picked spot is not a selection the keyboard
+                // moves but the place the next chat starts — the current item, which is what
+                // `aria-current` is for and what the old sidebar's workspace rows used.
+                aria-current={spot === undefined ? "true" : undefined}
+                onClick={() => onPick(undefined)}
+              >
+                <Folders className="node-icon" />
+                <span className="spot-name">{workspace}</span>
+                {live && <LiveMark />}
+                <span className="spot-what">the workspace itself</span>
+              </button>
+            </RovingFocusGroup.Item>
 
-          {clones.length > 0 && (
-            // The clones are the workspace row's children, and the wrapper is what lets them be
-            // drawn as such — the tree lines hang off it, one level in from the root row.
-            <div className="clones" role="group">
-              {clones.map((repo) => (
-                // `<details>` and not a primitive: the browser has a collapsible and
-                // `docs/ui-primitives.md` says native HTML that already does the job is not what
-                // the Radix rule is about. Open by default — a closed explorer explores nothing.
-                <details
-                  className="clone"
-                  key={repo}
-                  data-testid={`clone-${repo}`}
-                  // Held by the fold state rather than by the element, so that Left and Right
-                  // (#238) open and close it through the same state a click on the heading does.
-                  open={!folded.has(foldKey(workspace, repo))}
-                  onToggle={(event) => fold(foldKey(workspace, repo), event.currentTarget.open)}
-                >
-                  {/* The clone's menu: a new tab in it, and picking it as where new chats
-                    start (charter-app#174). On the heading, for the piece rows' reason — the
-                    `<details>` also holds every row inside the clone. */}
-                  <Menued on={{ on: "clone", repo }} offers={offers} onPress={onPress}>
-                    <RovingFocusGroup.Item
-                      asChild
-                      tabStopId={cloneRow(repo)}
-                      active={picked === cloneRow(repo)}
-                    >
-                      <summary
-                        {...treeitem(cloneRow(repo))}
-                        aria-current={picked === cloneRow(repo) ? "true" : undefined}
+            {clones.length > 0 && (
+              // The clones are the workspace row's children, and the wrapper is what lets them be
+              // drawn as such — the tree lines hang off it, one level in from the root row.
+              <div className="clones" role="group">
+                {clones.map((repo) => (
+                  // `<details>` and not a primitive: the browser has a collapsible and
+                  // `docs/ui-primitives.md` says native HTML that already does the job is not what
+                  // the Radix rule is about. Open by default — a closed explorer explores nothing.
+                  <details
+                    className="clone"
+                    key={repo}
+                    data-testid={`clone-${repo}`}
+                    // Held by the fold state rather than by the element, so that Left and Right
+                    // (#238) open and close it through the same state a click on the heading does.
+                    open={!folded.has(foldKey(workspace, repo))}
+                    onToggle={(event) => fold(foldKey(workspace, repo), event.currentTarget.open)}
+                  >
+                    {/* The clone's menu: a new tab in it, and picking it as where new chats
+                      start (charter-app#174). On the heading, for the piece rows' reason — the
+                      `<details>` also holds every row inside the clone. */}
+                    <Menued on={{ on: "clone", repo }} offers={offers} onPress={onPress}>
+                      <RovingFocusGroup.Item
+                        asChild
+                        tabStopId={cloneRow(repo)}
+                        active={picked === cloneRow(repo)}
                       >
-                        {/* The twisty says which way the disclosure goes, which the default marker
-                    said in the platform's own glyph at the platform's own size. It turns
-                    with `[open]`, and the turn is the one motion here that is a direct
-                    answer to a click — `prefers-reduced-motion` stops it all the same. */}
-                        <ChevronRight className="twisty" />
-                        <FolderGit2 className="node-icon" />
-                        <span className="repo">{repo}</span>
-                        <PieceCount pieces={pieces[repo]} refused={piecesRefused[repo]} />
-                      </summary>
-                    </RovingFocusGroup.Item>
-                  </Menued>
-                  {/* The repo's own folder (#948), before its branches: the files of whatever
-                    the repo has checked out. */}
-                  <ul className="pieces" role="group">
-                    <li role="none" data-testid={`files-${repo}`}>
-                      {filesOf(repo, null)}
-                    </li>
-                  </ul>
-                  {piecesRefused[repo] ? (
-                    // Said, never swallowed: a clone with no rows otherwise reads as a clone
-                    // nobody has cut a branch in.
-                    <ReadRefused
-                      cause={`branches-read:${workspace}/${repo}`}
-                      onReadAgain={onReadAgain}
-                    >
-                      purlis could not list the branches of <code>{repo}</code>:{" "}
-                      {piecesRefused[repo]}
-                    </ReadRefused>
-                  ) : pieces[repo] === undefined ? (
-                    <Pending>Asking git…</Pending>
-                  ) : pieces[repo].length === 0 ? (
-                    <p className="none">No branches cut here</p>
-                  ) : (
-                    <ul className="pieces" role="group">
-                      {pieces[repo].map((piece) => {
-                        const isPicked = spot?.repo === repo && spot.piece === piece.piece;
-                        return (
-                          <li
-                            key={piece.piece}
-                            role="none"
-                            data-testid={`piece-${repo}-${piece.piece}`}
-                          >
-                            {/* **Right-click is what these rows were missing** (charter-app#174).
-                            The menu is the catalogue filtered to this piece — merge above the
-                            line, remove below it, and the discard row that only exists while
-                            the core has refused THIS removal. Nothing here says what those
-                            rows mean; `Menus.tsx` draws whatever `actions.ts` has.
+                        <summary
+                          {...treeitem(cloneRow(repo))}
+                          aria-current={picked === cloneRow(repo) ? "true" : undefined}
+                        >
+                          {/* The twisty says which way the disclosure goes, which the default
+                      marker said in the platform's own glyph at the platform's own size. It
+                      turns with `[open]`, and the turn is the one motion here that is a direct
+                      answer to a click — `prefers-reduced-motion` stops it all the same. */}
+                          <ChevronRight className="twisty" />
+                          <FolderGit2 className="node-icon" />
+                          <span className="repo">{repo}</span>
+                          <PieceCount pieces={pieces[repo]} refused={piecesRefused[repo]} />
+                        </summary>
+                      </RovingFocusGroup.Item>
+                    </Menued>
+                    {piecesRefused[repo] ? (
+                      // Said, never swallowed: a clone with no rows otherwise reads as a clone
+                      // nobody has cut a branch in.
+                      <ReadRefused
+                        cause={`branches-read:${workspace}/${repo}`}
+                        onReadAgain={onReadAgain}
+                      >
+                        purlis could not list the branches of <code>{repo}</code>:{" "}
+                        {piecesRefused[repo]}
+                      </ReadRefused>
+                    ) : pieces[repo] === undefined ? (
+                      <Pending>Asking git…</Pending>
+                    ) : pieces[repo].length === 0 ? (
+                      <p className="none">No branches cut here</p>
+                    ) : (
+                      <ul className="pieces" role="group">
+                        {pieces[repo].map((piece) => {
+                          const isPicked = spot?.repo === repo && spot.piece === piece.piece;
+                          return (
+                            <li
+                              key={piece.piece}
+                              role="none"
+                              data-testid={`piece-${repo}-${piece.piece}`}
+                            >
+                              {/* **Right-click is what these rows were missing**
+                            (charter-app#174). The menu is the catalogue filtered to this piece —
+                            merge above the line, remove below it, and the discard row that only
+                            exists while the core has refused THIS removal. Nothing here says
+                            what those rows mean; `Menus.tsx` draws whatever `actions.ts` has.
 
                             On the button and not on the `<li>`: the `<li>` also holds the
-                            branch's files, and each of those is its own row with its own
-                            identity. `asChild`, so the row gains no element. */}
-                            <Menued
-                              on={{ on: "worktree", repo, piece: piece.piece }}
-                              offers={offers}
-                              onPress={onPress}
-                            >
-                              <RovingFocusGroup.Item
-                                asChild
-                                tabStopId={pieceRow(repo, piece.piece)}
-                                active={isPicked}
-                                focusable={isDrawn(pieceRow(repo, piece.piece))}
+                            branch's marks. `asChild`, so the row gains no element. */}
+                              <Menued
+                                on={{ on: "worktree", repo, piece: piece.piece }}
+                                offers={offers}
+                                onPress={onPress}
                               >
-                                <button
-                                  type="button"
-                                  className="spot"
-                                  aria-current={isPicked ? "true" : undefined}
-                                  {...treeitem(pieceRow(repo, piece.piece))}
-                                  // The folder's whole path: ADR 0072 §4 shows it only where a
-                                  // path is wanted, and the row itself reads the branch.
-                                  title={piece.path}
-                                  onClick={() =>
-                                    onPick({ repo, piece: piece.piece, path: piece.path })
-                                  }
+                                <RovingFocusGroup.Item
+                                  asChild
+                                  tabStopId={pieceRow(repo, piece.piece)}
+                                  active={isPicked}
+                                  focusable={isDrawn(pieceRow(repo, piece.piece))}
                                 >
-                                  <GitBranch className="node-icon" />
-                                  <BranchLabel repo={repo} piece={piece} />
-                                </button>
-                              </RovingFocusGroup.Item>
-                            </Menued>
-                            {/* The two states the operator has to see BEFORE they start a chat in
-                          a tree: `unwired` and `stale`. The same component the palette's
-                          worktree rows are written against, without the branch the row
-                          above already reads (#1102). */}
-                            <WorktreeMark
-                              withBranch={false}
-                              worktree={{
-                                workspace,
-                                repo,
-                                piece: piece.piece,
-                                branch: piece.branch,
-                                wired: piece.wired,
-                                stale: piece.stale,
-                              }}
-                            />
-                            {/* What the piece said about itself — `done`, `abandoned: <why>` or
-                          `silent 3d` — so a finished piece and a quiet one do not look alike
-                          (charter#368). An age, never a verdict. */}
-                            {piece.said && (
-                              <span className="label said" data-testid="piece-said">
-                                {piece.said}
-                              </span>
-                            )}
-                            {/* A branch purlis cut for a chat that never started in it — a crash
-                          between the cut and the start leaves one (#835). Said, with its age,
-                          and never swept: its folder's removal stays the row's menu's. */}
-                            {piece.unclaimed && (
-                              <span
-                                className="label said"
-                                data-testid="piece-unclaimed"
-                                title={`purlis cut this branch ${piece.unclaimed} ago for a chat that never started in it. Nothing removes it on its own: start a chat in it, or remove its folder from its menu.`}
-                              >
-                                unclaimed {piece.unclaimed}
-                              </span>
-                            )}
-                            {/* Its files (FM-1), first among its children. */}
-                            <ul className="files" role="group">
-                              <li role="none" data-testid={`files-${repo}-${piece.piece}`}>
-                                {filesOf(repo, piece.piece)}
-                              </li>
-                            </ul>
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  )}
-                </details>
-              ))}
-            </div>
-          )}
-        </div>
+                                  <button
+                                    type="button"
+                                    className="spot"
+                                    aria-current={isPicked ? "true" : undefined}
+                                    {...treeitem(pieceRow(repo, piece.piece))}
+                                    // The folder's whole path: ADR 0072 §4 shows it only where a
+                                    // path is wanted, and the row itself reads the branch.
+                                    title={piece.path}
+                                    onClick={() =>
+                                      onPick({ repo, piece: piece.piece, path: piece.path })
+                                    }
+                                  >
+                                    <GitBranch className="node-icon" />
+                                    <BranchLabel repo={repo} piece={piece} />
+                                  </button>
+                                </RovingFocusGroup.Item>
+                              </Menued>
+                              {/* The two states the operator has to see BEFORE they start a chat
+                            in a tree: `unwired` and `stale`. The same component the palette's
+                            worktree rows are written against, without the branch the row
+                            above already reads (#1102). */}
+                              <WorktreeMark
+                                withBranch={false}
+                                worktree={{
+                                  workspace,
+                                  repo,
+                                  piece: piece.piece,
+                                  branch: piece.branch,
+                                  wired: piece.wired,
+                                  stale: piece.stale,
+                                }}
+                              />
+                              {/* What the piece said about itself — `done`, `abandoned: <why>`
+                            or `silent 3d` — so a finished piece and a quiet one do not look
+                            alike (charter#368). An age, never a verdict. */}
+                              {piece.said && (
+                                <span className="label said" data-testid="piece-said">
+                                  {piece.said}
+                                </span>
+                              )}
+                              {/* A branch purlis cut for a chat that never started in it — a
+                            crash between the cut and the start leaves one (#835). Said, with
+                            its age, and never swept: its folder's removal stays the row's
+                            menu's. */}
+                              {piece.unclaimed && (
+                                <span
+                                  className="label said"
+                                  data-testid="piece-unclaimed"
+                                  title={`purlis cut this branch ${piece.unclaimed} ago for a chat that never started in it. Nothing removes it on its own: start a chat in it, or remove its folder from its menu.`}
+                                >
+                                  unclaimed {piece.unclaimed}
+                                </span>
+                              )}
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    )}
+                  </details>
+                ))}
+              </div>
+            )}
+          </div>
+        </RovingFocusGroup.Root>
 
         {panels === undefined ? (
           <Pending>Reading the project…</Pending>
@@ -749,11 +877,106 @@ export function Explorer({
             purlis will not read <code>{name}</code>: {why}
           </ReadRefused>
         ))}
+      </Section>
 
+      {/* **Files, of where the next chat starts** (#1677): what a branch's row held under it,
+          moved to a section of its own so a branch is one row and its files one tree. The
+          picked branch's or repo's files are the tree's first level; with the workspace itself
+          picked, each repo's own folder is a row that opens. */}
+      <Section
+        id="files"
+        title="Files"
+        of={filesName}
+        marks={topMarks || undefined}
+        closed={closed.has("files")}
+      >
+        {filterBox}
+        <RovingFocusGroup.Root asChild orientation="vertical" {...filesStop}>
+          <div
+            className="tree"
+            role="tree"
+            aria-label={`Files of ${filesName}`}
+            data-testid="files"
+            onKeyDown={onTreeKey(fileRows)}
+          >
+            {filesTop === undefined || topLevel === undefined ? (
+              <ul className="files" role="group">
+                {clones.map((repo) => (
+                  <li key={repo} role="none" data-testid={`files-${repo}`}>
+                    {filesOf(repo, null, repo)}
+                  </li>
+                ))}
+              </ul>
+            ) : "pending" in topLevel ? (
+              <Pending>Reading the files of {filesName}…</Pending>
+            ) : "trouble" in topLevel ? (
+              <FolderRefused>{topLevel.trouble}</FolderRefused>
+            ) : (
+              <FolderEntries branch={filesTop} level={topLevel} at={at} />
+            )}
+          </div>
+        </RovingFocusGroup.Root>
         {toggles}
-      </nav>
-    </RovingFocusGroup.Root>
+      </Section>
+    </nav>
   );
+}
+
+/** One of Explorer's sections (#1677): a heading that folds it, and what it holds. **Folding
+ *  hides and never unmounts**, so a section opened again has its folds and its stop as it left
+ *  them. The heading is a disclosure button, the pattern an editor's explorer uses. */
+function Section({
+  id,
+  title,
+  of,
+  marks,
+  closed,
+  children,
+}: {
+  id: SectionId;
+  title: string;
+  /** What the section is of, said quietly after its title. */
+  of?: string;
+  /** The marks of what it is of, after that. */
+  marks?: ReactNode;
+  closed: boolean;
+  children: ReactNode;
+}) {
+  const body = useId();
+  return (
+    <div className="explorer-section" data-section={id}>
+      <h2 className="sidebar-title explorer-section-head">
+        <button
+          type="button"
+          // #190: WebKit leaves a button out of the tab sequence without `tabIndex`.
+          tabIndex={0}
+          aria-expanded={!closed}
+          aria-controls={body}
+          onClick={() => setSectionOpen(id, closed)}
+        >
+          <ChevronRight className="twisty" data-open={!closed || undefined} />
+          {title}
+          {of !== undefined && (
+            <>
+              {" "}
+              <span className="section-of">{of}</span>
+            </>
+          )}
+          {marks}
+        </button>
+      </h2>
+      <div id={body} className="explorer-section-body" hidden={closed}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+/** A branch's name as the explorer reads it, by its folder; the folder itself when the
+ *  workspace has not listed it (yet). */
+function pieceName(pieces: readonly Piece[] | undefined, repo: string, piece: string): string {
+  const found = pieces?.find((one) => one.piece === piece);
+  return found === undefined ? piece : `${branchOf(found)} in ${repo}`;
 }
 
 /** **A read this region was refused, as a Notice** (NO-4, V91b): the sentence, and **Read
@@ -1042,10 +1265,14 @@ function FilesRow({
   branch,
   name = "Files",
   always = false,
+  repo = false,
   at,
 }: {
   branch: BranchFolderRef;
-  /** Its name: *Files* for the branch's own folder, the folder's name below it. */
+  /** A repo's own folder, drawn as the repo, in the *Files* section. */
+  repo?: boolean;
+  /** Its name: *Files* for the branch's own folder in the cockpit, the repo's for a repo's own
+   *  folder in the *Files* section, the folder's name below either. */
   name?: string;
   /** Always open: a folder of *Changed only*'s, which does not fold. */
   always?: boolean;
@@ -1069,9 +1296,14 @@ function FilesRow({
         }}
       >
         <ChevronRight className="twisty" data-open={open || undefined} />
-        {/* The branch's own folder is the *Files* row; a folder under it is drawn by name. */}
+        {/* The branch's own folder is the *Files* row, or a repo's own folder by its name in
+            the *Files* section; a folder under either is drawn by name. */}
         {branch.folder === "" ? (
-          <Files className="node-icon" />
+          repo ? (
+            <FolderGit2 className="node-icon" />
+          ) : (
+            <Files className="node-icon" />
+          )
         ) : (
           <FileIcon symbol={iconFor(at.icons, { name, folder: true, open })} />
         )}
@@ -1219,13 +1451,14 @@ function joined(folder: string, name: string): string {
 }
 
 /**
- * The folders the operator opened that are drawn: each one whose *Files* row and every folder
- * above it is open too, of a branch the workspace still has. These are what is read and
- * watched — a folder inside a closed one is neither.
+ * The folders the operator opened that are drawn: each one under one of `tops` — the folders
+ * the *Files* section or the cockpit draws — whose every folder above it is open too. These are
+ * what is read and watched: a folder inside a closed one is neither, and nor is a branch's that
+ * is not drawn.
  */
 function openFolders(
   workspace: string | undefined,
-  state: WorkspaceState,
+  tops: readonly BranchFolderRef[],
   expanded: ReadonlySet<string>,
 ): BranchFolderRef[] {
   if (workspace === undefined) return [];
@@ -1238,10 +1471,7 @@ function openFolders(
       if (child !== undefined) walk(child);
     }
   };
-  for (const repo of state.panels?.repos ?? []) {
-    walk({ repo, piece: null, folder: "" });
-    for (const piece of state.pieces[repo] ?? []) walk({ repo, piece: piece.piece, folder: "" });
-  }
+  for (const top of tops) walk(top);
   return out;
 }
 
@@ -1261,6 +1491,8 @@ export function childOf(
 
 /** The workspace's own row, as a stop in the explorer's roving focus. */
 const ROOT = "root";
+/** A workspace's row in the *Workspaces* section. */
+const workspaceRow = (workspace: string) => `workspace:${workspace}`;
 const cloneRow = (repo: string) => `clone:${repo}`;
 const pieceRow = (repo: string, piece: string) => `piece:${repo}/${piece}`;
 /** A folded clone, by workspace as well as name: two workspaces can each clone `svc`. */
@@ -1376,34 +1608,25 @@ export type TreeItem = {
  * the stop and says nothing about where it is, and a row listed as drawn that is not could be
  * the only stop, which would leave the explorer with none at all.
  *
- * The shape: the workspace, then the chats in no worktree, the line for other workspaces' tasks
- * and the clones as its children, the worktrees as a clone's, and the chats working in a
- * worktree as its. A chat's children are its count of helpers, with a helper each under it
- * once unfolded, and the line for its tasks. A clone whose worktrees could not be listed has
- * none drawn.
- *
- * @param chats The chats drawn as rows: those with a tab of their own (#1490).
+ * The shape of *Repos and branches*: the workspace, the clones as its children and the
+ * branches as a clone's. A clone whose branches could not be listed has none drawn. Their files
+ * are the *Files* section's ({@link filesTreeOf}).
  */
 function treeOf(
   workspace: string | undefined,
   state: WorkspaceState,
   folded: ReadonlySet<string>,
-  files: FilesOf,
 ): Row[] {
   if (workspace === undefined) return [];
   const { panels, pieces } = state;
   const clones = (panels?.repos ?? []).map((repo): TreeNode => {
-    const branches = (pieces[repo] ?? []).map((piece): TreeNode => ({
+    const kids = (pieces[repo] ?? []).map((piece): TreeNode => ({
       id: pieceRow(repo, piece.piece),
       // What the row reads first, so a typed letter finds it by its branch (#1102).
       name: branchOf(piece),
-      kids: [folderNode(workspace, { repo, piece: piece.piece, folder: "" }, "Files", files)],
+      kids: [],
       shows: true,
     }));
-    const kids = [
-      folderNode(workspace, { repo, piece: null, folder: "" }, "Files", files),
-      ...branches,
-    ];
     const key = foldKey(workspace, repo);
     const open = !folded.has(key);
     return {
@@ -1456,6 +1679,37 @@ function folderNode(
     kids,
     shows: open,
   };
+}
+
+/** The *Workspaces* section's rows: one level, in the strip's order. */
+function workspacesTreeOf(workspaces: readonly string[]): Row[] {
+  return workspaces.map((name, i) => ({
+    id: workspaceRow(name),
+    name: name === OUTSIDE ? OUTSIDE_TITLE : name,
+    level: 1,
+    parent: undefined,
+    posinset: i + 1,
+    setsize: workspaces.length,
+    drawn: true,
+    parents: false,
+  }));
+}
+
+/**
+ * The *Files* section's rows: the entries of the one folder it is of as its first level, when
+ * `flat`; else each of `tops` — the repos' own folders — as a row that opens.
+ */
+function filesTreeOf(
+  workspace: string,
+  tops: readonly BranchFolderRef[],
+  flat: boolean,
+  files: FilesOf,
+): Row[] {
+  if (flat && tops.length === 1) return fileTreeRows(workspace, tops[0], files);
+  const rows: Row[] = [];
+  const kids = tops.map((top) => folderNode(workspace, top, top.repo, files));
+  kids.forEach((kid, i) => walkRows(kid, undefined, true, i, kids.length, rows));
+  return rows;
 }
 
 /** A node and everything under it, as rows, appended to `rows` in the order they are drawn. */

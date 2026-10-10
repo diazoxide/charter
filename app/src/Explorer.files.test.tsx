@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render, screen, within } from "@testing-librar
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
-import { Explorer } from "./Explorer";
+import { Explorer, type Spot } from "./Explorer";
 import { ChatsHere, fixedChats, nothingKnown } from "./chatState";
 import type {
   ExtensionTheme,
@@ -97,7 +97,15 @@ function core(
   return asked;
 }
 
-function draw(onOpenFile = vi.fn(), onPress: (offer: Offer) => void = () => {}) {
+/** Branch `one`, picked: the *Files* section draws its files (#1677). */
+const PICKED: Spot = { repo: "svc", piece: "one", path: ONE.path };
+
+function draw(
+  onOpenFile = vi.fn(),
+  onPress: (offer: Offer) => void = () => {},
+  /** `null` for the workspace itself, nothing picked. */
+  spot: Spot | null = PICKED,
+) {
   render(
     <ChatsHere.Provider value={fixedChats(nothingKnown)}>
       <Explorer
@@ -105,7 +113,7 @@ function draw(onOpenFile = vi.fn(), onPress: (offer: Offer) => void = () => {}) 
         workspace="alpha"
         state={STATE}
         chats={[]}
-        spot={undefined}
+        spot={spot ?? undefined}
         onPick={() => {}}
         offers={new Map()}
         onPress={onPress}
@@ -117,7 +125,7 @@ function draw(onOpenFile = vi.fn(), onPress: (offer: Offer) => void = () => {}) 
   return onOpenFile;
 }
 
-const tree = () => screen.getByRole("tree", { name: "Repos and branches" });
+const tree = () => screen.getByRole("tree", { name: /^Files of / });
 const row = (id: string) => {
   const found = tree().querySelector<HTMLElement>(`[data-row="${id}"]`);
   if (found === null) throw new Error(`no row ${id}`);
@@ -132,9 +140,10 @@ describe("a branch's files in the explorer", () => {
       "one:src": [entry("lib.rs")],
     });
     const opened = draw();
-    expect(asked).toEqual([]);
+    // The picked branch's own folder is the section's first level, read at once.
+    await named("^src");
+    expect(asked).toEqual(["one:"]);
 
-    await userEvent.click(row("file:svc/one:"));
     await userEvent.click(await named("^src"));
     await userEvent.click(await named("^lib.rs"));
 
@@ -147,7 +156,8 @@ describe("a branch's files in the explorer", () => {
 
   it("opens a file of the repo's own folder as the repo's, with no branch folder named", async () => {
     core({ ":": [entry("README.md")] });
-    const opened = draw();
+    // With the workspace itself picked, each repo's own folder is a row of the section.
+    const opened = draw(vi.fn(), () => {}, null);
 
     await userEvent.click(row("file:svc/:"));
     await userEvent.click(await named("^README.md"));
@@ -168,7 +178,6 @@ describe("a branch's files in the explorer", () => {
       ],
     });
     const opened = draw();
-    await userEvent.click(row("file:svc/one:"));
 
     const away = await named("^away.txt");
     await userEvent.click(away);
@@ -187,7 +196,6 @@ describe("a branch's files in the explorer", () => {
       ],
     });
     const opened = draw();
-    await userEvent.click(row("file:svc/one:"));
     await named("^README.md");
 
     expect(within(tree()).queryByRole("treeitem", { name: /^\.env/ })).toBeNull();
@@ -210,7 +218,6 @@ describe("a branch's files in the explorer", () => {
     const folders: Record<string, FolderEntry[]> = { "one:": [entry("README.md")] };
     const asked = core(folders);
     draw();
-    await userEvent.click(row("file:svc/one:"));
     await named("^README.md");
 
     folders["one:"] = [entry("README.md"), entry("new.rs")];
@@ -261,7 +268,6 @@ describe("a branch's files in the explorer", () => {
       { shouldMockEvents: true },
     );
     draw();
-    await userEvent.click(row("file:svc/one:"));
     await vi.waitFor(() => expect(watches.length).toBeGreaterThan(0));
 
     // An agent makes a folder in the branch before the watch holds: no event will say so.
@@ -280,7 +286,6 @@ describe("a branch's files in the explorer", () => {
       "one:a\nb": [entry("inside.md")],
     });
     draw();
-    await userEvent.click(row("file:svc/one:"));
     // Found by its id: a selector cannot spell a line break as plainly.
     const folder = await vi.waitFor(() => {
       const found = [...tree().querySelectorAll<HTMLElement>("[data-row]")].find(
@@ -299,22 +304,19 @@ describe("a branch's files in the explorer", () => {
     core({ "one:": [entry("a.md")] }, { "one:": 12_345 });
     draw();
 
-    await userEvent.click(row("file:svc/one:"));
-
     expect(await screen.findByText("12,345 more not shown")).toBeInTheDocument();
   });
 
   it("Home and End reach the ends of the tree from a file row", async () => {
     core({ "one:": [entry("a.md"), entry("b.md")] });
     draw();
-    await userEvent.click(row("file:svc/one:"));
     await named("^b.md");
 
     row("file:svc/one:a.md").focus();
     await userEvent.keyboard("{End}");
     expect(row("file:svc/one:b.md")).toHaveFocus();
     await userEvent.keyboard("{Home}");
-    expect(row("root")).toHaveFocus();
+    expect(row("file:svc/one:a.md")).toHaveFocus();
   });
 
   it("says beside an ignored file why it does not open, once ignored files are shown", async () => {
@@ -324,7 +326,6 @@ describe("a branch's files in the explorer", () => {
       ],
     });
     draw();
-    await userEvent.click(row("file:svc/one:"));
     await userEvent.click(await screen.findByRole("button", { name: "Show ignored files" }));
 
     expect(await named("^\\.env")).toHaveTextContent("ignored by git, so purlis does not open it");
@@ -333,19 +334,15 @@ describe("a branch's files in the explorer", () => {
   it("moves through files with the arrows and opens one with Enter", async () => {
     core({ "one:": [entry("a.md"), entry("b.md")] });
     const opened = draw();
-    await userEvent.click(row("file:svc/one:"));
     await named("^b.md");
 
-    row("file:svc/one:").focus();
-    await userEvent.keyboard("{ArrowRight}");
-    expect(row("file:svc/one:a.md")).toHaveFocus();
+    row("file:svc/one:a.md").focus();
     await userEvent.keyboard("{ArrowDown}{Enter}");
 
     expect(opened).toHaveBeenCalledWith({ workspace: "alpha", repo: "svc", piece: "one" }, "b.md");
+    // A first-level row has no parent row to climb to: the section's heading stands for it.
     await userEvent.keyboard("{ArrowLeft}");
-    expect(row("file:svc/one:")).toHaveFocus();
-    await userEvent.keyboard("{ArrowLeft}");
-    expect(row("file:svc/one:")).toHaveAttribute("aria-expanded", "false");
+    expect(row("file:svc/one:b.md")).toHaveFocus();
   });
 });
 
@@ -361,7 +358,6 @@ describe("a branch's files are drawn with the project's icon theme (FM-3)", () =
   it("draws charter's own icons for a file's type and a folder's name", async () => {
     core(FOLDERS);
     draw();
-    await userEvent.click(row("file:svc/one:"));
     const src = await named("^src");
     expect(iconOf(src)).toBe("folder-src");
     expect(iconOf(await named("^README.md"))).toBe("readme");
@@ -394,7 +390,6 @@ describe("a branch's files are drawn with the project's icon theme (FM-3)", () =
       },
     );
     draw();
-    await userEvent.click(row("file:svc/one:"));
     await vi.waitFor(async () => expect(iconOf(await named("^README.md"))).toBe("seti-md"));
     expect(iconOf(await named("^src"))).toBe("seti-folder");
     expect(iconOf(await named("^notes.zzz"))).toBe("seti-file");
@@ -414,7 +409,6 @@ describe("a file or folder row's menu (FM-10)", () => {
   it("offers a file its paths, a reveal and your editor, and nothing that writes", async () => {
     core({ "one:": [entry("src", { kind: "folder" }), entry("README.md")] });
     draw();
-    await userEvent.click(row("file:svc/one:"));
 
     const rows = await menuOf("README.md");
 
@@ -432,7 +426,6 @@ describe("a file or folder row's menu (FM-10)", () => {
     core({ "one:": [entry("src", { kind: "folder" }), entry("README.md")] });
     const pressed: Offer[] = [];
     draw(vi.fn(), (offer) => pressed.push(offer));
-    await userEvent.click(row("file:svc/one:"));
 
     await menuOf("README.md");
     await userEvent.click(screen.getByRole("menuitem", { name: "Add to a chat's context" }));
@@ -450,7 +443,6 @@ describe("a file or folder row's menu (FM-10)", () => {
     core({ "one:": [entry("README.md"), entry("NOTES.md")] });
     const pressed: Offer[] = [];
     draw(vi.fn(), (offer) => pressed.push(offer));
-    await userEvent.click(row("file:svc/one:"));
     act(() => readAt(PLANE, { workspace: "alpha", repo: "svc", piece: "one" }, "README.md", 42));
 
     await menuOf("README.md");
@@ -476,7 +468,6 @@ describe("a file or folder row's menu (FM-10)", () => {
   it("drags a file or folder row as a reference to it, onto a chat (FM-9)", async () => {
     core({ "one:": [entry("src", { kind: "folder" }), entry("README.md")] });
     draw();
-    await userEvent.click(row("file:svc/one:"));
     const set: Record<string, string> = {};
     const dataTransfer = { setData: (type: string, value: string) => (set[type] = value) };
 
@@ -496,7 +487,6 @@ describe("a file or folder row's menu (FM-10)", () => {
     core({ "one:": [entry("src", { kind: "folder" })] });
     const pressed: Offer[] = [];
     draw(vi.fn(), (offer) => pressed.push(offer));
-    await userEvent.click(row("file:svc/one:"));
 
     expect(await menuOf("src")).toContain("Open a shell tab here");
     await userEvent.click(screen.getByRole("menuitem", { name: "Open a shell tab here" }));
@@ -509,12 +499,12 @@ describe("a file or folder row's menu (FM-10)", () => {
     ]);
   });
 
-  it("gives the branch's own Files row its folder's absolute path, a reveal and a shell (#1143)", async () => {
-    core({ "one:": [] });
+  it("gives a repo's own folder row its absolute path, a reveal and a shell (#1143)", async () => {
+    core({ ":": [] });
     const pressed: Offer[] = [];
-    draw(vi.fn(), (offer) => pressed.push(offer));
+    draw(vi.fn(), (offer) => pressed.push(offer), null);
 
-    fireEvent.contextMenu(row("file:svc/one:"));
+    fireEvent.contextMenu(row("file:svc/:"));
     const menu = await screen.findByRole("menu");
     const rows = within(menu)
       .getAllByRole("menuitem")
@@ -528,7 +518,7 @@ describe("a file or folder row's menu (FM-10)", () => {
     ]);
     await userEvent.click(within(menu).getByRole("menuitem", { name: "Open a shell tab here" }));
     expect(pressed.map((offer) => offer.does)).toEqual([
-      { verb: "shellInFolder", at: { workspace: "alpha", repo: "svc", piece: "one", path: "" } },
+      { verb: "shellInFolder", at: { workspace: "alpha", repo: "svc", piece: null, path: "" } },
     ]);
   });
 });
