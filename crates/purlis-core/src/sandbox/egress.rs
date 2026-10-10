@@ -731,7 +731,7 @@ enum GaveUp {
 fn held_said(host: &str, port: u16, held: GaveUp) -> String {
     match held {
         GaveUp::TimedOut => format!(
-            "purlis's sandbox does not allow {host}:{port} yet: purlis asked the person while \
+            "purlis's sandbox does not allow {host}:{port} yet: the person was asked while \
              this connection waited, and nobody answered in time. The ask stays with them; once \
              they allow it, run the command again"
         ),
