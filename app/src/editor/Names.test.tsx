@@ -110,9 +110,7 @@ describe("every control an editor tab draws has a name", () => {
 
   it("in a branch's tree", async () => {
     core();
-    const { container } = render(
-      <BranchTree plane={PLANE} place={CUT} onPick={() => undefined} />,
-    );
+    const { container } = render(<BranchTree plane={PLANE} place={CUT} onPick={() => undefined} />);
     await screen.findByRole("treeitem", { name: "README.md" });
 
     held(container, "a branch's tree");
