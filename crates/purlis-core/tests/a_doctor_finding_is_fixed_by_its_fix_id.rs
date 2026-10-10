@@ -259,8 +259,8 @@ fn every_fix_but_discover_is_applied_by_bare_fix() {
             "local-ignore",
             "memory-optimize",
             "git-identity",
-            // Eligible for bare --fix, but no doctor row offers it yet, so bare --fix (which
-            // applies the fixes the rows offer) does not run it today.
+            // Offered by the `workspace layout` row while a workspace is behind it (#1289), so
+            // bare --fix runs it then: it only adds and never removes your content.
             "workspace-reinit"
         ]
     );
