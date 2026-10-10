@@ -13,10 +13,14 @@
 //! holds (V91m) and which is refused under its field with a pointer to the vault.
 //!
 //! **What uses a profile** ([`referrers`]) is a `[harness] default` that names it, in either
-//! settings file — but only when the name would then name nothing: a table that replaces a
-//! built-in (`[harness.claude]`) leaves the built-in standing, so the default still starts a
-//! chat. A chat's record names its profile too, and is not a user here: a reopened chat whose
-//! profile is gone is skipped by name (ADR 0022), never started on another.
+//! settings file, a persona whose own definition names it with `profile:`, and a
+//! `[dispatch.profiles]` list of the project's file that holds it (#1380) — but only when the
+//! name would then name nothing: a table that replaces a built-in (`[harness.claude]`) leaves
+//! the built-in standing, so each of them still starts a chat. A persona's line and a dispatch
+//! list are never rewritten from here (a persona's file is its own, the project's file every
+//! teammate's), so either keeps a rename refused, however it is asked. A chat's record names its
+//! profile too, and is not a user here: a reopened chat whose profile is gone is skipped by name
+//! (ADR 0022), never started on another.
 //!
 //! **Rename** (V91k) is allowed only while nothing uses the profile, and is refused naming who
 //! does, as a remove is — each user saying whether it [`Referrer::follows`] a rename everywhere,
@@ -31,7 +35,7 @@ use std::path::Path;
 
 use super::Step;
 use super::Which;
-use super::collection::{FieldRefusal, Listed, Referrer, Refusal};
+use super::collection::{Elsewhere, FieldRefusal, Listed, Referrer, Refusal};
 use crate::doctor::SettingsGroup;
 use crate::profiles;
 
@@ -565,7 +569,8 @@ fn renaming(
 }
 
 /// Who uses the profile `name` that the local file `before` declares and `after` does not:
-/// each `[harness] default` naming it, when `after` leaves that name no profile at all.
+/// each `[harness] default` naming it, each `[dispatch.profiles]` list holding it and each
+/// persona naming it, when `after` leaves that name no profile at all.
 fn referrers(root: &Path, name: &str, before: &str, after: &str) -> Vec<Referrer> {
     let committed = std::fs::read_to_string(crate::names::manifest(root)).ok();
     let declared = crate::harness_declaration::read(root);
@@ -602,10 +607,81 @@ fn referrers(root: &Path, name: &str, before: &str, after: &str) -> Vec<Referrer
                 // This file's own default is written with the rename; the project's is every
                 // teammate's, and a rename on this machine never rewrites it.
                 follows: which == Which::Local,
+                elsewhere: None,
             });
         }
     }
+    out.extend(listed_for_dispatch(root, name, committed.as_deref()));
+    out.extend(named_by_personas(root, name));
     out
+}
+
+/// Each `[dispatch.profiles]` list of the project's file `committed` that names the profile
+/// `name` (#1380): a dispatched chat it governs starts on one of its profiles or not at all, so
+/// a rename would refuse what it lets start today. The file is every teammate's and is never
+/// rewritten from here, so none follows.
+fn listed_for_dispatch(root: &Path, name: &str, committed: Option<&str>) -> Vec<Referrer> {
+    let Some(cfg) = committed.and_then(|text| text.parse::<toml::Table>().ok()) else {
+        return Vec::new();
+    };
+    let Some(lists) = cfg
+        .get(crate::dispatchprofiles::TABLE)
+        .and_then(|table| table.get(crate::dispatchprofiles::KEY))
+        .and_then(toml::Value::as_table)
+    else {
+        return Vec::new();
+    };
+    lists
+        .iter()
+        .filter(|(_, list)| {
+            list.as_array().is_some_and(|list| {
+                list.iter()
+                    .any(|one| one.as_str().map(str::trim) == Some(name))
+            })
+        })
+        .map(|(persona, _)| Referrer {
+            what: format!(
+                "[dispatch.profiles] {} in {} lets chats dispatched to {} start on it.",
+                crate::shown::short(persona),
+                Which::Shared.file_at(root),
+                crate::shown::short(persona),
+            ),
+            group: None,
+            follows: false,
+            elsewhere: None,
+        })
+        .collect()
+}
+
+/// Each persona whose own definition names the profile `name` with `profile:` (#1380): its
+/// dispatched chats start on it. A persona's file is its own, and a rename on this machine
+/// never rewrites it, so none follows; each is changed in its persona's tab (#1241).
+fn named_by_personas(root: &Path, name: &str) -> Vec<Referrer> {
+    crate::personagrant::list_personas(root)
+        .into_iter()
+        .filter(|persona| {
+            crate::personas::load(root, persona).is_some_and(|pairs| {
+                pairs
+                    .iter()
+                    .rev()
+                    .find(|(key, value)| {
+                        key == crate::personaprofile::KEY && !value.trim().is_empty()
+                    })
+                    .is_some_and(|(_, value)| value.trim() == name)
+            })
+        })
+        .map(|persona| Referrer {
+            what: format!(
+                "profile: {} in {} starts the chats dispatched to {} on it.",
+                crate::shown::short(name),
+                crate::personaverbs::def_rel(root, &persona),
+                crate::shown::short(&persona),
+            ),
+            group: None,
+            follows: false,
+            elsewhere: Some(Elsewhere::Persona(persona)),
+        })
+        .collect()
 }
 
 #[cfg(test)]

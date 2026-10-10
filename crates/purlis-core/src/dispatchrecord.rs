@@ -1160,6 +1160,30 @@ pub fn folder_of(root: &Path, cwd: &Path) -> String {
     }
 }
 
+/// **Each record whose folder `moved` names somewhere else**, rewritten to name it there
+/// (#1698): the local project's move ([`crate::localproject`]) hands the folders it moved. A
+/// folder in the project is written relative to it ([`folder_of`]), so only one named by its
+/// whole path is ever handed to `moved`. Each record is changed under the store's lock and read
+/// and written through no link, as every write here is. How many were rewritten, or the first
+/// write that failed.
+pub fn folders_moved(root: &Path, moved: impl Fn(&Path) -> Option<String>) -> io::Result<usize> {
+    let mut rewritten = 0;
+    for id in ids(root) {
+        let changed = change(root, &id, |record| {
+            let Some(folder) = record.place.folder.as_deref().map(Path::new) else {
+                return false;
+            };
+            let Some(now) = folder.is_absolute().then(|| moved(folder)).flatten() else {
+                return false;
+            };
+            record.place.folder = Some(now);
+            true
+        })?;
+        rewritten += usize::from(changed);
+    }
+    Ok(rewritten)
+}
+
 /// **The ended tasks whose reports reached no chat, and that `asked` answers for** (#1513,
 /// V100-64), oldest first: what the chat that asked is handed when the person reopens it.
 /// `asked` is given each record, and says whether its asking chat is the chat coming back.

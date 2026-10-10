@@ -563,7 +563,8 @@ enum Taken {
 
 /// The local plane in the data home `data`, made if it is not there, with `repo` taken in and the
 /// project laid out from the template `choice` names. A plane that is made takes its forge
-/// from `forge`, the operator's answer, else from `repo`'s remote.
+/// from `forge`, the operator's answer, else from `repo`'s remote; a plane that is there adds
+/// the forge of a self-managed remote by that answer (#1669).
 fn taken_in(
     data: &Path,
     repo: &Path,
@@ -586,7 +587,14 @@ fn taken_in(
         Err(firstrun::NotMade::AsksForForge(why)) => return Ok(Taken::AsksForge(why)),
         Err(firstrun::NotMade::Refused(why)) => return Err(why),
     };
-    let taken = firstrun::take_in_from(&root, repo, choice)?;
+    // A project that is there asks the same question of a self-managed repo (#1669), before
+    // anything is copied; the answer adds the forge on the remote's host.
+    if forge.is_none()
+        && let Some(why) = firstrun::forge_question(&root, repo)
+    {
+        return Ok(Taken::AsksForge(why));
+    }
+    let taken = firstrun::take_in_as(&root, repo, choice, forge)?;
     // The repo is in whatever came of its forge; a forge that could not be added is the
     // operator's to add in Settings › Project › Forges, and the window has no field to say it.
     if let firstrun::ForgeTaken::NotAdded(why) = &taken.forge {
@@ -687,6 +695,58 @@ mod tests {
         assert_eq!(forge.kind, Kind::GitLab);
         assert_eq!(forge.host, "git.example.com");
         assert_eq!(owner, "platform");
+    }
+
+    /// #1669: a self-managed repo opened into the first-run project that is already there asks
+    /// for its forge's kind, copies nothing until it is answered, and the answer adds a block on
+    /// the remote's host.
+    #[test]
+    fn a_self_managed_repo_opened_into_the_project_that_is_there_asks_first() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let data = dir.path().join("data");
+        let site = a_repo(&dir.path().join("site"));
+        with_origin(&site, "https://github.com/acme/site.git");
+        let (root, _) =
+            taken(taken_in(&data, &site, &firstrun::Choice::NoTemplate, None).expect("answered"));
+        let repo = a_repo(&dir.path().join("widget"));
+        with_origin(&repo, "git@git.example.com:platform/widget.git");
+
+        let asked = taken_in(&data, &repo, &firstrun::Choice::NoTemplate, None).expect("answered");
+        assert!(
+            matches!(&asked, Taken::AsksForge(why) if why.contains("git.example.com")),
+            "{asked:?}"
+        );
+        assert!(
+            !root.join("workspaces").join("widget").exists(),
+            "asking copied the repo"
+        );
+
+        let (_, taken_in_after) = taken(
+            taken_in(
+                &data,
+                &repo,
+                &firstrun::Choice::NoTemplate,
+                Some(Kind::GitLab),
+            )
+            .expect("answered"),
+        );
+        assert!(
+            matches!(&taken_in_after.forge, firstrun::ForgeTaken::Added(found) if found.kind == Kind::GitLab),
+            "{:?}",
+            taken_in_after.forge
+        );
+        let cfg = purlis_core::forge::load_config(&root).expect("charter.toml reads");
+        let hosts: Vec<String> = purlis_core::forge::to_query(&cfg)
+            .expect("the forges read")
+            .into_iter()
+            .map(|(forge, _, _)| forge.host)
+            .collect();
+        assert!(hosts.contains(&"git.example.com".to_owned()), "{hosts:?}");
+        assert_eq!(taken_in_after.workspace, "widget");
+        assert!(
+            root.join("workspaces").join("widget").exists(),
+            "answered, it is copied"
+        );
     }
 
     /// #880: the first run's one project tracks the forge of every repo taken into it, so the

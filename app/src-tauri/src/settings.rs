@@ -348,12 +348,52 @@ pub struct EntryFieldRefusal {
 
 /// Something that uses an entry, which stops its removal. `group` is the Settings group it is
 /// changed in (`project.saving`) when it is a setting; `follows`, whether a rename everywhere
-/// (#1380) changes it too, in the one write that renames the entry.
+/// (#1380) changes it too, in the one write that renames the entry. `level` and `target` say
+/// where it is changed when that is not the entry's own level (#1241): a persona's tab, a
+/// workspace's settings. Both null for one changed at the entry's own level.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
 pub struct EntryReferrer {
     pub what: String,
     pub group: Option<String>,
     pub follows: bool,
+    /// Optional on the wire, so a referrer written before #1241 still reads as one changed
+    /// at the entry's own level.
+    #[specta(optional)]
+    pub level: Option<ReferrerLevel>,
+    /// The workspace or the persona, by name, at those levels.
+    #[specta(optional)]
+    pub target: Option<String>,
+}
+
+/// The level a referrer is changed at, when it is not the entry's own
+/// (`purlis_core::settings::collection::Elsewhere`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, specta::Type)]
+#[serde(rename_all = "lowercase")]
+pub enum ReferrerLevel {
+    Project,
+    Workspace,
+    Persona,
+    You,
+}
+
+impl From<settings::collection::Referrer> for EntryReferrer {
+    fn from(one: settings::collection::Referrer) -> Self {
+        use settings::collection::Elsewhere;
+        let (level, target) = match one.elsewhere {
+            None => (None, None),
+            Some(Elsewhere::Project) => (Some(ReferrerLevel::Project), None),
+            Some(Elsewhere::You) => (Some(ReferrerLevel::You), None),
+            Some(Elsewhere::Workspace(name)) => (Some(ReferrerLevel::Workspace), Some(name)),
+            Some(Elsewhere::Persona(name)) => (Some(ReferrerLevel::Persona), Some(name)),
+        };
+        Self {
+            what: one.what,
+            group: one.group.map(|group| group.id().to_owned()),
+            follows: one.follows,
+            level,
+            target,
+        }
+    }
 }
 
 /// What adding or removing a collection entry answered: the file as it now stands, or every
@@ -753,11 +793,7 @@ fn refused(refusal: settings::collection::Refusal) -> EntryWritten {
         referrers: refusal
             .referrers
             .into_iter()
-            .map(|one| EntryReferrer {
-                what: one.what,
-                group: one.group.map(|group| group.id().to_owned()),
-                follows: one.follows,
-            })
+            .map(EntryReferrer::from)
             .collect(),
         reasons: refusal.file,
     }
@@ -1134,6 +1170,33 @@ fn value_to_core(value: SettingsValue) -> Result<Value, String> {
 mod tests {
     use super::*;
 
+    /// #1241: a referrer changed at another level carries that level and its target on the
+    /// wire, and one changed at the entry's own level carries neither.
+    #[test]
+    fn a_referrer_at_another_level_goes_on_the_wire_with_its_level_and_target() {
+        use settings::collection::{Elsewhere, Referrer};
+        let one = |elsewhere| {
+            serde_json::to_value(EntryReferrer::from(Referrer {
+                what: "It uses it.".to_owned(),
+                group: None,
+                follows: false,
+                elsewhere,
+            }))
+            .unwrap()
+        };
+        let persona = one(Some(Elsewhere::Persona("devops".to_owned())));
+        assert_eq!(persona["level"], "persona");
+        assert_eq!(persona["target"], "devops");
+        let workspace = one(Some(Elsewhere::Workspace("alpha".to_owned())));
+        assert_eq!(workspace["level"], "workspace");
+        assert_eq!(workspace["target"], "alpha");
+        let you = one(Some(Elsewhere::You));
+        assert_eq!(you["level"], "you");
+        assert!(you["target"].is_null());
+        let here = one(None);
+        assert!(here["level"].is_null() && here["target"].is_null());
+    }
+
     /// #1405: the field's check is the core's parser, word for word.
     #[test]
     fn the_host_field_is_checked_by_the_cores_parser() {
@@ -1201,6 +1264,8 @@ mod tests {
                 what: "The repo billing (inventory/repos.json) is on git.acme.dev.".into(),
                 group: None,
                 follows: false,
+                level: None,
+                target: None,
             }]
         );
     }

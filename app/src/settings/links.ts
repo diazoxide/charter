@@ -6,6 +6,7 @@ import {
   workspaceSettingsView,
   type ViewRef,
 } from "../tabs";
+import type { EntryReferrer } from "./driver";
 import { LEVELS, type GroupLink, type Level } from "./groups";
 
 /**
@@ -164,4 +165,27 @@ export function landing(
       workspace: link.workspace,
     };
   return undefined;
+}
+
+/**
+ * **Where a referrer changed at another level is followed** (#1241, D-1241-5): a collection's
+ * refusal names what uses an entry, and one kept somewhere other than the entry's own level
+ * says which level and which workspace or persona. A persona's is its tab, through the
+ * catalogue's row ({@link showPersona}); a group of another level's Settings is a link, which
+ * the project's window lands through {@link landing}.
+ *
+ * `undefined` for a referrer at the entry's own level (no `level`, as every referrer was before
+ * #1241): its group opens in the tab it was refused in. `null` for one that names a level and
+ * no place there to follow: it is said, and no link is drawn.
+ */
+export function referrerElsewhere(
+  referrer: Pick<EntryReferrer, "group" | "level" | "target">,
+): { action: string; label: string } | { link: SettingsLink } | null | undefined {
+  const { group, level, target } = referrer;
+  if (level === undefined || level === null) return undefined;
+  if (level === "persona")
+    return target ? { action: showPersona(target), label: `Show ${target}` } : null;
+  if (group === null) return null;
+  if (level === "workspace") return target ? { link: { group, workspace: target } } : null;
+  return { link: { group } };
 }

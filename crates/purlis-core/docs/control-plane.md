@@ -59,7 +59,7 @@ schema = 1
 [persona]
 default = "steward"
 
-# Optional, and not followed by this version: see "Where worktrees live" below.
+# Optional, and not followed by this version (#1381): see "Where worktrees live" below.
 [plane]
 worktrees = "../plane.worktrees" # Where worktrees would live instead of
                                   # workspaces/<ws>/.worktrees/.

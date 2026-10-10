@@ -171,8 +171,12 @@ setting that uses it"), before anything is written, and the form offers **Rename
 write of one file, so a failure leaves nothing half-renamed; its Undo is the rename back
 everywhere. A profile's users that follow are the local file's own `[harness] default`; the
 project's default is every teammate's and never follows, so while it names the profile the
-rename stays refused. A picker's New… for the collection opens its Add form and picks what was
-added.
+rename stays refused, and so does a persona whose definition names it with `profile:` or a
+`[dispatch.profiles]` list holding it (#1380). A user changed at another level than the entry's
+says which (`Referrer::elsewhere`, on the wire `level` and `target`, #1241), and its link goes
+there: a persona's to its tab (*Show <persona>*), another level's group through the window's
+`landing()`. A user with neither draws its group's link at this level, as before. A picker's
+New… for the collection opens its Add form and picks what was added.
 
 ## The Notice is a house piece too, by its own amendment
 

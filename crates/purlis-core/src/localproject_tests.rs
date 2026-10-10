@@ -542,3 +542,97 @@ fn a_data_home_in_the_config_home_is_no_new_place() {
     );
     assert!(places.old().join("workspaces").is_dir());
 }
+
+/// A task's record in the project, naming the folder it worked in as `folder`.
+fn a_task_record(project: &Path, folder: &str) -> String {
+    use crate::dispatchrecord::{Asker, ChatRef, Mode, Opening, Place, Worker};
+    let chat = |n: u32, name: &str| ChatRef {
+        chat: n,
+        id: None,
+        name: name.to_owned(),
+        persona: None,
+    };
+    crate::dispatchrecord::open(
+        project,
+        Opening {
+            mode: Mode::Task,
+            asker: Asker {
+                chat: chat(1, "steward 1"),
+                ..Default::default()
+            },
+            persona: Some("devops".to_owned()),
+            worker: Worker {
+                chat: chat(2, "first task"),
+                ..Default::default()
+            },
+            task: Some("first task".to_owned()),
+            place: Place {
+                workspace: Some("shop".to_owned()),
+                folder: Some(folder.to_owned()),
+                worktree: None,
+            },
+            brief: "Look.".to_owned(),
+            report_owed: true,
+        },
+        chrono::Utc::now(),
+    )
+    .expect("a task's record")
+    .id
+}
+
+/// #1698: a task record that names a folder in the old place by its whole path names it in the
+/// new one, as a path in the project; one that names a folder outside the project is left as
+/// it was.
+#[test]
+fn a_task_record_naming_a_folder_in_the_old_place_names_it_in_the_new_one() {
+    let machine = an_old_local_project();
+    let old = machine.places.old();
+    let inside = a_task_record(&old, &machine.worktree.display().to_string());
+    let outside = a_task_record(&old, "/somewhere/else");
+    let relative = a_task_record(&old, "workspaces/shop");
+
+    let answer = run(&machine.places, &REAL);
+
+    assert!(matches!(answer, Moved::Moved { .. }), "{answer:?}");
+    let new = machine.places.current();
+    let folder = |id: &str| {
+        crate::dispatchrecord::read(&new, id)
+            .expect("the record")
+            .place
+            .folder
+    };
+    assert_eq!(
+        folder(&inside).as_deref(),
+        Some("workspaces/shop/.worktrees/shop/first-task-1")
+    );
+    assert_eq!(folder(&outside).as_deref(), Some("/somewhere/else"));
+    assert_eq!(folder(&relative).as_deref(), Some("workspaces/shop"));
+}
+
+/// #1698: only a folder inside the old place by plain steps is rewritten. One that leaves it by
+/// `..`, or only shares its spelling's start, is left as it was, so no record is made to name
+/// a place outside the project.
+#[test]
+fn a_task_folder_that_leaves_the_old_place_is_not_rewritten() {
+    let dir = tempfile::tempdir().expect("a directory");
+    let project = dir.path().canonicalize().expect("the directory");
+    let old = PathBuf::from("/old/place");
+    let inside = a_task_record(&project, "/old/place/workspaces/shop");
+    let escaping = a_task_record(&project, "/old/place/../../etc");
+    let sibling = a_task_record(&project, "/old/place-two/workspaces/shop");
+
+    task_records(&project, &[old], &project).expect("rewritten");
+
+    let folder = |id: &str| {
+        crate::dispatchrecord::read(&project, id)
+            .expect("the record")
+            .place
+            .folder
+    };
+    assert_eq!(folder(&inside).as_deref(), Some("workspaces/shop"));
+    assert_eq!(folder(&escaping).as_deref(), Some("/old/place/../../etc"));
+    assert_eq!(
+        folder(&sibling).as_deref(),
+        Some("/old/place-two/workspaces/shop")
+    );
+}

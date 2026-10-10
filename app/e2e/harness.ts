@@ -63,6 +63,16 @@ function theRunsTree(): string {
 export const THE_RUNS_TREE = theRunsTree();
 
 /**
+ * The variable that names the file answering the next native dialog, as the `e2e` build reads
+ * it (`DIALOG_ANSWER` in `src-tauri/src/opener.rs`; #1680). `dialogs.test.ts` holds the two
+ * spellings together.
+ */
+export const DIALOG_ANSWER_VARIABLE = "PURLIS_E2E_DIALOG_ANSWER";
+
+/** The file every app this run launches reads a native dialog's answer from (`dialogs.ts`). */
+export const THE_RUNS_DIALOG_ANSWER = join(THE_RUNS_TREE, "dialog-answer.json");
+
+/**
  * The environment a charter process this run starts is given: the plane it means, a machine
  * store of its own, and the fence.
  *
@@ -90,6 +100,9 @@ export function theRunsEnvironment(
     // A `$HOME` of the run's own, holding a git identity (#1250): see `THE_RUNS_HOME`.
     HOME: home,
     GIT_CONFIG_GLOBAL: join(home, ".gitconfig"),
+    // Where a spec says what the next native dialog answers, read by the `e2e` build alone
+    // (#1680, `dialogs.ts`).
+    [DIALOG_ANSWER_VARIABLE]: THE_RUNS_DIALOG_ANSWER,
     ...extra,
   };
 }
