@@ -34,6 +34,11 @@ fn hook(word: &str, payload: &serde_json::Value) -> Heard {
 
 /// [`hook`], in a chat the app started sandboxed or not.
 fn hook_in(word: &str, payload: &serde_json::Value, sandboxed: bool) -> Heard {
+    hook_of(word, payload, sandboxed, "claude")
+}
+
+/// [`hook_in`], in a chat of `harness`.
+fn hook_of(word: &str, payload: &serde_json::Value, sandboxed: bool, harness: &str) -> Heard {
     let dir = tempfile::tempdir().expect("a directory");
     let path = dir.path().join("hooks.sock");
     let listener = Listener::bind(dir.path(), &path).expect("a socket");
@@ -71,7 +76,7 @@ fn hook_in(word: &str, payload: &serde_json::Value, sandboxed: bool) -> Heard {
         .env(SOCKET_ENV, &path)
         .env(CHAT_ENV, "7")
         .env(TOKEN_ENV, token.expose())
-        .env(HARNESS_ENV, "claude")
+        .env(HARNESS_ENV, harness)
         .env(CHAT_DIR_ENV, "/Users/dev/plane/workspaces/a/repo")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -317,4 +322,72 @@ fn each_host_claude_codes_proxy_refused_reaches_the_app_and_the_chat_is_told_to_
     }
     assert!(!told.contains(CANARY), "{told}");
     holds_nothing_of_the_call(&heard);
+}
+
+/// #1663, replayed: a dispatched task ran a database client through a brokered run with both
+/// streams on standard output, and the host's lookup failed. The failure's error is all the
+/// hook has, and no Notice came. Now the lookup is a block naming its host, which the chat is
+/// not told back: its context stays fixed words.
+#[test]
+fn a_lookup_refused_inside_a_2_1_run_reaches_the_app_with_its_host() {
+    let heard = hook(
+        "posttoolusefailure-blocked",
+        &serde_json::json!({
+            "hook_event_name": "PostToolUseFailure",
+            "tool_name": "Bash",
+            "tool_input": {"command": format!(
+                "purlis secret exec prod-db -- sh -c 'usql \"$DSN\" -f {CANARY}.sql' 2>&1"
+            )},
+            "error": "Exit code 1\nerror: dial tcp: lookup db.prod.example.com: no such host\n",
+            "cwd": "/Users/dev/plane/workspaces/a/repo",
+        }),
+    );
+    let lookup = Block {
+        operation: Operation::Lookup,
+        kind: Kind::Host,
+        ours: false,
+    };
+    assert_eq!(
+        heard
+            .blocked
+            .iter()
+            .map(|one| (one.sandbox_blocked, one.target.as_deref()))
+            .collect::<Vec<_>>(),
+        vec![(lookup, Some("db.prod.example.com"))]
+    );
+    let told = context_of(&heard.said, "PostToolUseFailure");
+    assert!(told.contains("a lookup of an internet host"), "{told}");
+    assert!(!told.contains("db.prod"), "fixed words only: {told}");
+    holds_nothing_of_the_call(&heard);
+}
+
+/// #1663: an opencode chat runs behind purlis's own proxy, which tells the app each host it
+/// refused by name; its hook leaves those to it, so one refusal is one Notice. A lookup it
+/// still tells.
+#[test]
+fn a_chat_purlis_wraps_leaves_its_refused_hosts_to_the_proxy() {
+    let heard = hook_of(
+        "posttooluse-blocked",
+        &serde_json::json!({
+            "hook_event_name": "PostToolUse",
+            "tool_name": "bash",
+            "tool_response": {
+                "stderr": "purlis's sandbox does not allow x.example:443: no egress preset or \
+                           host of this project lists it\n\
+                           curl: (6) Could not resolve host: api.example.com",
+                "mixed": true,
+            },
+            "cwd": "/Users/dev/plane/workspaces/a/repo",
+        }),
+        true,
+        "opencode",
+    );
+    assert_eq!(
+        heard
+            .blocked
+            .iter()
+            .map(|one| (one.sandbox_blocked.operation, one.sandbox_blocked.kind))
+            .collect::<Vec<_>>(),
+        vec![(Operation::Lookup, Kind::Host)]
+    );
 }

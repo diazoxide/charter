@@ -1803,9 +1803,21 @@ impl Applied {
     /// egress proxy and the chat's own temp directory, for a harness charter wraps ([`Form::
     /// Opencode`], [`Form::Codex`]); `None` for a harness whose own sandbox holds the policy.
     pub fn confine(&self) -> std::io::Result<Option<Confinement>> {
+        self.confine_keeping(egress::Refusals::default())
+    }
+
+    /// [`Self::confine`], its proxy keeping what it refuses in `refusals`, which may tell the
+    /// app each host as it is refused (#1663): the wrapped harness's own road for a block, by
+    /// the proxy's word, never the chat's.
+    pub fn confine_keeping(
+        &self,
+        refusals: egress::Refusals,
+    ) -> std::io::Result<Option<Confinement>> {
         match &*self.form {
-            Form::Opencode(wrap) => Confinement::start(wrap.hosts.clone()).map(Some),
-            Form::Codex(wrap) => Confinement::start(wrap.hosts.clone()).map(Some),
+            Form::Opencode(opencode::Wrap { hosts, .. })
+            | Form::Codex(codex::Wrap { hosts, .. }) => {
+                Confinement::start_keeping(hosts.clone(), refusals).map(Some)
+            }
             Form::ClaudeCode(_) => Ok(None),
         }
     }
