@@ -320,7 +320,7 @@ describe("the window's three strips", () => {
     // The fresh mark (#1204's fixture line): drawn beside the first chat's tab, in its strip.
     expect(
       await within(stripNamed("Tabs")).findByRole("button", {
-        name: /plane updated since this chat started$/,
+        name: /project updated since this chat started$/,
       }),
     ).toBeInTheDocument();
 
