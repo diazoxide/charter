@@ -47,8 +47,18 @@ env:
   NEXTEST_VERSION: "0.9.146"
 
 jobs:
+  # The Rust suite in two parts on two runners, each building the tests and running half of
+  # them (`--partition`): one runner took 14 to 17 minutes, longer than any other job a pull
+  # request waits on (2026-10-10). Part 1 also runs fmt and clippy, part 2 the doctests, so the
+  # two take about as long. Each part builds for itself: a build handed from one job to the next
+  # saves runner minutes, not the wait, since no test can start before the build ends.
+  # `rust-checks` below carries the required check's name and passes when both parts did.
   rust:
-    name: rust (fmt, clippy, test)
+    name: rust tests (part ${{ matrix.part }} of 2)
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [1, 2]
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -76,9 +86,11 @@ jobs:
       # tauri::generate_context! reads the built frontend, so it has to exist before clippy.
       - run: mkdir -p app/dist
       - run: cargo fmt --all --check
+        if: matrix.part == 1
       # `purlis-session-protocol/bench` so the latency bench, which only that feature builds, is
       # linted too (SC-16).
       - run: cargo clippy --workspace --all-targets --locked --features purlis-session-protocol/bench -- -D warnings
+        if: matrix.part == 1
       # cargo-nextest runs every test binary's tests at once, each test in a process of its own,
       # where `cargo test` runs the binaries one after another. Its settings are in
       # `.config/nextest.toml`. A machine without it runs the same tests with `cargo test`.
@@ -96,8 +108,10 @@ jobs:
       # own running after it ends (#923) — a stand-in or a signal-ignoring fixture that outlived
       # its test — and kills each one by pid. `--reap` is safe here because the runner is the
       # job's own machine.
+      #
+      # `count:` deals each binary's tests out in turn, so each part gets half of every binary.
       - name: Run the tests
-        run: tools/no-orphans.sh --reap -- cargo nextest run --workspace --locked --profile ci
+        run: tools/no-orphans.sh --reap -- cargo nextest run --workspace --locked --profile ci --partition count:${{ matrix.part }}/2
       # The slowest tests and test binaries, as notices on the run: what makes the step above
       # slow, readable through the checks API without the job's log. A report, so it never turns
       # the job red.
@@ -107,7 +121,21 @@ jobs:
         run: node tools/slowest-tests.mjs target/nextest/ci/junit.xml
       # nextest does not run doctests, so cargo does.
       - name: Run the doctests
+        if: matrix.part == 2
         run: tools/no-orphans.sh --reap -- cargo test --workspace --locked --doc
+  # The required check `rust (fmt, clippy, test)`: green only when both parts of `rust` are.
+  # `!cancelled()` so a red part still reports here as red, not as skipped, which a required
+  # check would count as passing.
+  rust-checks:
+    name: rust (fmt, clippy, test)
+    needs: rust
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Both parts passed
+        env:
+          RESULT: ${{ needs.rust.result }}
+        run: test "$RESULT" = success
   deny:
     name: rust (licences, advisories)
     runs-on: ubuntu-24.04
@@ -586,14 +614,27 @@ jobs:
           --test the_handoff_guard_answers_what_the_python_answers
           --test the_plane_root_guards_answer_what_the_python_answers
 
+  # The scenario specs on macOS in two parts on two runners (WebdriverIO's `--shard`): on one
+  # runner the job took 15 minutes, 7 of them building on macOS's slow runner and 6 running the
+  # specs one at a time, longer than any other job but `rust` (2026-10-10). Each part builds for
+  # itself, as `rust`'s do, and part 1 also runs the five runs that each need an app of their own
+  # (`extras`). `scenario-checks` carries the required check's name. Linux, which takes 9
+  # minutes, stays one job, `scenario-linux`, with the same steps.
   scenario:
-    name: scenario tests (${{ matrix.os }})
+    name: scenario tests (${{ matrix.os }}, part ${{ matrix.shard }} of ${{ matrix.shards }})
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, ubuntu-24.04]
+        os: [macos-latest]
+        shard: [1, 2]
+        shards: [2]
+        include:
+          - shard: 1
+            extras: true
+          - shard: 2
+            extras: false
     runs-on: ${{ matrix.os }}
-    steps:
+    steps: &scenario-steps
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # bubblewrap and socat: Claude Code's Linux sandbox runs through them, and a project
       # charter makes runs its chats sandboxed (ADR 0067 §1).
@@ -624,10 +665,10 @@ jobs:
       - name: Build the app for the scenario tests
         run: npx tauri build --debug --no-bundle --features e2e --config src-tauri/tauri.e2e.conf.json
         working-directory: app
-      - run: npm run e2e
+      - run: npm run e2e -- --shard ${{ matrix.shard }}/${{ matrix.shards }}
         if: runner.os == 'macOS'
         working-directory: app
-      - run: xvfb-run -a npm run e2e
+      - run: xvfb-run -a npm run e2e -- --shard ${{ matrix.shard }}/${{ matrix.shards }}
         if: runner.os == 'Linux'
         working-directory: app
       # A harness reporting its own state through `charter hook`, all the way to what the
@@ -635,50 +676,50 @@ jobs:
       # different one.
       - name: What a chat is doing, from a real hook
         run: npm run e2e:state
-        if: runner.os == 'macOS'
+        if: runner.os == 'macOS' && matrix.extras
         working-directory: app
       - name: What a chat is doing, from a real hook
         run: xvfb-run -a npm run e2e:state
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && matrix.extras
         working-directory: app
       # The app started the way an operator starts it — from Finder, with the `PATH` Finder
       # gives — on charter's own built-in profile. Its own run, because it is the app's
       # ENVIRONMENT that is under test and one run is one environment (charter-app#134).
       - name: A chat on a built-in profile, from a Finder launch
         run: npm run e2e:finder
-        if: runner.os == 'macOS'
+        if: runner.os == 'macOS' && matrix.extras
         working-directory: app
       - name: A chat on a built-in profile, from a Finder launch
         run: xvfb-run -a npm run e2e:finder
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && matrix.extras
         working-directory: app
       # A layout file written before the app starts, and the window's first frame drawn from
       # it (M6.9). Its own run, because the file has to be on disk before the one app process
       # a run keeps is started.
       - name: The window's first frame, from a layout file
         run: npm run e2e:layout
-        if: runner.os == 'macOS'
+        if: runner.os == 'macOS' && matrix.extras
         working-directory: app
       - name: The window's first frame, from a layout file
         run: xvfb-run -a npm run e2e:layout
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && matrix.extras
         working-directory: app
       # The app launched over an old charter install, and the launch's migration it runs
       # (RN-10). Its own run, because the old install has to be on disk before the one app
       # process a run keeps is started, and this is the one app that migrates at launch.
       - name: An upgrade over an old charter install
         run: npm run e2e:upgrade
-        if: runner.os == 'macOS'
+        if: runner.os == 'macOS' && matrix.extras
         working-directory: app
       - name: An upgrade over an old charter install
         run: xvfb-run -a npm run e2e:upgrade
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && matrix.extras
         working-directory: app
       # The app ended and started again, which no scenario spec can do: WebdriverIO's service
       # keeps one app process for a whole run, so a spec that quits takes the run with it.
       - name: Reopening what was open, across a real relaunch
         run: npm run e2e:relaunch
-        if: runner.os == 'macOS'
+        if: runner.os == 'macOS' && matrix.extras
         working-directory: app
       # `dbus-run-session` because a Linux desktop has a WORKING session bus and this runner
       # does not. The runner has one — that was the wrong description, and charter-app#24's
@@ -688,7 +729,7 @@ jobs:
       # bus works, so it gets one.
       - name: Reopening what was open, across a real relaunch
         run: dbus-run-session -- xvfb-run -a npm run e2e:relaunch
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && matrix.extras
         working-directory: app
       # Each failed test as an annotation on its spec's line, with its assertion: the checks API
       # carries annotations, so a failure reads there without the log or the artifact.
@@ -699,8 +740,34 @@ jobs:
       - if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: scenario-logs-${{ matrix.os }}
+          name: scenario-logs-${{ matrix.os }}-${{ matrix.shard }}
           path: app/logs
+
+  # The required check `scenario tests (macos-latest)`: green only when both parts are, and
+  # `!cancelled()` for the reason `rust-checks` gives.
+  scenario-checks:
+    name: scenario tests (macos-latest)
+    needs: scenario
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Both parts passed
+        env:
+          RESULT: ${{ needs.scenario.result }}
+        run: test "$RESULT" = success
+
+  # Its own job, not a leg of `scenario`'s matrix, so that `scenario-checks` waits on macOS
+  # alone. One part: Linux's build is quick and its specs are not the longest wait.
+  scenario-linux:
+    name: scenario tests (${{ matrix.os }})
+    strategy:
+      matrix:
+        os: [ubuntu-24.04]
+        shard: [1]
+        shards: [1]
+        extras: [true]
+    runs-on: ${{ matrix.os }}
+    steps: *scenario-steps
 
   windows:
     # M4, the Windows question. ADR 0025 names macOS, Linux AND Windows; nothing has ever
