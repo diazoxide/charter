@@ -170,7 +170,7 @@ describe("the new-vault dialog", () => {
     const kept = within(dialog).getByRole("radiogroup", { name: "Kept in" });
     expect(kept.closest(".ui-setting-row")).not.toBeNull();
     expect(within(dialog).getByRole("radio", { name: "Plain file" })).toHaveAccessibleDescription(
-      "A plaintext file under the plane's state directory, which git never sees.",
+      "A plaintext file under the project's state directory, which git never sees.",
     );
 
     core({});

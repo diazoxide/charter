@@ -52,8 +52,8 @@ export function PlaneUpdatedMark({ files }: { files?: readonly string[] }) {
     <span
       className="plane-updated"
       role="img"
-      aria-label="plane updated since this chat started"
-      title={`Plane updated since this chat started: ${files.join(", ")}. It runs on what it read at its start until it is started fresh.`}
+      aria-label="project updated since this chat started"
+      title={`Project updated since this chat started: ${files.join(", ")}. It runs on what it read at its start until it is started fresh.`}
     >
       <RefreshCw />
     </span>
@@ -90,8 +90,8 @@ export function FreshMark({
       type="button"
       className="plane-updated fresh-mark"
       tabIndex={-1}
-      aria-label={`${offer.title} — plane updated since this chat started`}
-      title={`Plane updated since this chat started: ${files.join(", ")}. Press to start it fresh on what is there now.`}
+      aria-label={`${offer.title} — project updated since this chat started`}
+      title={`Project updated since this chat started: ${files.join(", ")}. Press to start it fresh on what is there now.`}
       onClick={() => onPress(offer)}
     >
       <RefreshCw />

@@ -525,7 +525,7 @@ function declaredGroups(read: ProjectRead, reread?: () => void): SettingsGroup[]
     {
       id: "project.general",
       label: "General",
-      help: "What a chat starts on when nothing else names it, the update channel, the version lock and where worktrees go.",
+      help: "What a chat starts on when nothing else names it, the update channel, the version lock and where branch folders go.",
       settings: fromShared(
         "project.general",
         sharedGeneral.filter((one) => !isDefaultHarness(one)),

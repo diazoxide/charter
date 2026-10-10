@@ -577,8 +577,8 @@ const REPO_KEYS: readonly SaveKey[] = [
  */
 export function planeGroup(section: Section): Group {
   return {
-    title: "Plane",
-    note: "How the project is saved. charter.local.toml overrides charter.toml key by key. [plane] worktrees is under General.",
+    title: "Saving",
+    note: "How the project is saved. charter.local.toml overrides charter.toml key by key. Where branch folders go is under General.",
     controls: (file, _extensions, _theme, asked) => {
       const saving = answered(asked);
       return [
@@ -694,7 +694,7 @@ export const SHARED: Group[] = [
       textAt(key("charter", "version"), "Version lock", {
         hint: "The purlis version this project is pinned to, as 1.2.3. Empty pins nothing.",
       }),
-      textAt(key("plane", "worktrees"), "Worktrees folder", {
+      textAt(key("plane", "worktrees"), "Branch folders", {
         hint: "Under the project or one folder beside it, such as ../charter.worktrees.",
       }),
     ],

@@ -86,13 +86,13 @@ describe("the status line says where you are", () => {
     // looked yet".
     draw({ read: false, where: undefined, workspaces: undefined });
 
-    expect(words()).toContain("reading the plane…");
+    expect(words()).toContain("reading the project…");
     // And `ws 0` is not drawn either, for the same reason: nobody has counted yet.
     expect(screen.queryByTestId("status-workspaces")).toBeNull();
   });
 
   it("says the window is on no workspace once the plane has answered with none", () => {
-    // A plane that holds no workspaces answers perfectly well. "reading the plane…" under it
+    // A plane that holds no workspaces answers perfectly well. "reading the project…" under it
     // would be charter waiting forever for something that has already happened.
     draw({ read: true, where: undefined, workspaces: 0 });
 
@@ -159,7 +159,7 @@ describe("a count is drawn only when charter can stand behind it", () => {
       }),
     });
 
-    expect(words()).toContain("pieces 3");
+    expect(words()).toContain("branches 3");
   });
 
   it("draws no piece count while a clone has not answered yet", () => {

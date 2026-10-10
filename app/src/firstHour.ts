@@ -1,7 +1,9 @@
 /**
  * **The words the first-hour surfaces never say** (ADR 0072 §3, settled by V6): charter's nouns
  * outside the five concepts' budget. Each is still used where it belongs — Settings, a view tab
- * opened later, the CLI, the docs. FR-3's UI-string test is meant to reuse this list.
+ * opened later, the CLI, the docs. Three of them, plane, piece and worktree, are retired from
+ * the whole window (FR-3): `copy.ts` refuses them on every shown string, and `copy.test.ts`
+ * holds them to this list.
  *
  * Matched as whole words, ignoring case, except `LIVE` and `LOCAL`, which are the save modes'
  * shouted labels: a lower-case "local" is an ordinary word, and is in `charter.local.toml`.

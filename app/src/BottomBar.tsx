@@ -145,7 +145,7 @@ export function BottomBar({
       {repos?.cache_refused && <Trouble>{repos.cache_refused}</Trouble>}
 
       {panels === undefined ? (
-        <Pending>Reading the plane…</Pending>
+        <Pending>Reading the project…</Pending>
       ) : names.length === 0 && panels.absent.length === 0 ? (
         <p className="none">No repos in this workspace</p>
       ) : (
