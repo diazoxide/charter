@@ -676,7 +676,7 @@ impl Store {
 /// The entries of the directory `fd` holds, `.` and `..` left out, each with its own type as
 /// `lstat` gives it, and a regular file with more than one name read as a link.
 fn entries(fd: rustix::fd::BorrowedFd<'_>) -> rustix::io::Result<Vec<(String, FileType)>> {
-    let mut out = Vec::new();
+    let mut names = Vec::new();
     let mut dir = rustix::fs::Dir::read_from(fd)?;
     while let Some(entry) = dir.read() {
         let entry = entry?;
@@ -687,14 +687,32 @@ fn entries(fd: rustix::fd::BorrowedFd<'_>) -> rustix::io::Result<Vec<(String, Fi
         if name == "." || name == ".." {
             continue;
         }
-        let stat = rustix::fs::statat(fd, name, AtFlags::SYMLINK_NOFOLLOW)?;
+        names.push(name.to_owned());
+    }
+    kinds(fd, names)
+}
+
+/// Each of `names` in the directory `fd` holds with its type as `lstat` gives it. A name that
+/// is no longer there is left out: the listing named it, and an edit's rename took it away
+/// before it was looked at, which is not a store that cannot be read.
+fn kinds(
+    fd: rustix::fd::BorrowedFd<'_>,
+    names: impl IntoIterator<Item = String>,
+) -> rustix::io::Result<Vec<(String, FileType)>> {
+    let mut out = Vec::new();
+    for name in names {
+        let stat = match rustix::fs::statat(fd, name.as_str(), AtFlags::SYMLINK_NOFOLLOW) {
+            Ok(stat) => stat,
+            Err(rustix::io::Errno::NOENT) => continue,
+            Err(e) => return Err(e),
+        };
         let kind = FileType::from_raw_mode(stat.st_mode);
         let kind = if kind == FileType::RegularFile && stat.st_nlink > 1 {
             FileType::Symlink
         } else {
             kind
         };
-        out.push((name.to_owned(), kind));
+        out.push((name, kind));
     }
     Ok(out)
 }
@@ -781,5 +799,27 @@ mod tests {
         let _ = child.wait();
 
         assert!(next.is_ok(), "the lock outlived its store: {next:?}");
+    }
+
+    /// An entry the listing named and that went before it was looked at (an edit's temporary
+    /// file renamed over its memory, between the read of the directory and its `lstat`) is not
+    /// in the store, and does not make the whole store unreadable.
+    #[test]
+    fn an_entry_that_went_between_the_listing_and_its_look_is_left_out() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("there.md"), "here\n").unwrap();
+        let fd = rustix::fs::open(
+            root.path(),
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .unwrap();
+
+        let found = kinds(fd.as_fd(), ["gone.md".to_owned(), "there.md".to_owned()]);
+
+        assert_eq!(
+            found.unwrap(),
+            vec![("there.md".to_owned(), FileType::RegularFile)]
+        );
     }
 }
