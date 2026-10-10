@@ -64,6 +64,7 @@ fn two_values() -> Request {
 
 #[test]
 fn the_app_reads_a_kept_token_once_however_many_requests_ask_and_afresh_once_it_is_replaced() {
+    purlis_core::unsteered!();
     keyhold::this_process_is_the_app();
     let tmp = tempfile::tempdir().unwrap();
     let bin = tempfile::tempdir().unwrap();

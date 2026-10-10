@@ -513,9 +513,11 @@ pub fn from_keyring(ctx: &Ctx, vault: &Vault, source: &str) -> Result<Option<Str
 /// **It fails closed.** It is asked only after the vault's record in the keyring is checked
 /// again, on every read ([`from_keyring`]): a token removed through purlis takes its record
 /// with it and is never answered from here, a replaced token is a new item, so it is never
-/// read stale, and an item purlis deletes is forgotten here too ([`forget`]). Only a token found is remembered; a read that found none, or failed, is made
-/// again. `Debug` names no token, and each token it holds is wiped from memory when the last
-/// context holding it goes.
+/// read stale, and an item purlis deletes is forgotten here too ([`forget`]). Only a token
+/// found is remembered; a read that found none, or failed, is made again. `Debug` names no
+/// token. A token is wiped from memory when it is dropped: in a command, when the last context
+/// holding it goes; in the app, when purlis deletes its item. The app's memory itself is never
+/// dropped, so a token the app still holds as it quits goes with the process's memory.
 #[derive(Clone, Default)]
 pub struct Kept(std::sync::Arc<std::sync::Mutex<KeptTokens>>);
 
