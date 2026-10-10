@@ -1438,8 +1438,11 @@ pub enum NotDeleted {
     CheckedOut,
     /// The branch the clone is on does not hold every commit of it.
     NotMerged,
-    /// git refused, in its own words.
+    /// git refused, in its own words: the log keeps them, and the window never shows them,
+    /// since they can name a path or carry git's own `-D` advice (#1102).
     Git(String),
+    /// Tidying the folder's record away first was refused, in the window's words.
+    Tidy(String),
 }
 
 impl NotDeleted {
@@ -1473,7 +1476,11 @@ impl NotDeleted {
                  keeps it: deleting a branch that holds work is never purlis's act. Nothing was \
                  deleted."
             ),
-            Self::Git(why) => format!(
+            Self::Git(_) => format!(
+                "git would not delete '{branch}' in {repo}, so nothing was deleted. Delete it in \
+                 your own terminal to see git's reason."
+            ),
+            Self::Tidy(why) => format!(
                 "git would not delete '{branch}': {}. Nothing was deleted.",
                 crate::shown::short(why.trim().trim_end_matches('.'))
             ),
@@ -1622,13 +1629,18 @@ pub fn delete_left_branch(
             return Err(NotDeleted::NotMerged);
         }
         worktree::clear_gone(root, ws, repo, piece)
-            .map_err(|refusal| NotDeleted::Git(refusal.in_window()))?;
+            .map_err(|refusal| NotDeleted::Tidy(refusal.in_window()))?;
         let deleted = git::run(&clone, &["branch", "-d", "--", branch], git::READ)
             .map_err(|_| NotDeleted::Git("git did not answer".to_owned()))?;
         if deleted.ok() {
             Ok(())
         } else {
             let said = deleted.err.lines().next().unwrap_or_default();
+            // git's words stay in the log, where the person who reads them has the terminal.
+            tracing::warn!(
+                "purlis: git would not delete the branch {} in {repo}: {said}",
+                crate::shown::short(branch)
+            );
             Err(NotDeleted::Git(
                 said.trim_start_matches("error: ").to_owned(),
             ))

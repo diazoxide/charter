@@ -1197,6 +1197,31 @@ fn a_merge_that_is_refused_says_why_and_that_nothing_was_merged() {
 }
 
 #[test]
+fn a_branch_git_will_not_delete_is_said_in_the_window_s_own_words() {
+    // #1102: git's first line can name a path or carry its own `-D` advice. The window has a
+    // sentence of its own; git's words stay in the log.
+    let git = NotDeleted::Git(
+        "the branch 'x' is not fully merged.\nIf you are sure you want to delete it, run \
+         'git branch -D x'"
+            .to_owned(),
+    );
+    let said = git.in_window("api", "check-b5rc0def");
+    assert_eq!(
+        said,
+        "git would not delete 'check-b5rc0def' in api, so nothing was deleted. Delete it in \
+         your own terminal to see git's reason."
+    );
+    for leak in ["-D", "fully merged", "run"] {
+        assert!(!said.contains(leak), "{leak}: {said}");
+    }
+    // Tidying the folder's record first is refused in words already the window's.
+    assert_eq!(
+        NotDeleted::Tidy("its record could not be read".to_owned()).in_window("api", "b"),
+        "git would not delete 'b': its record could not be read. Nothing was deleted."
+    );
+}
+
+#[test]
 fn a_task_with_no_folder_has_nothing_to_merge_and_git_is_never_asked() {
     let (_dir, root) = project();
     let tree = Tree {
