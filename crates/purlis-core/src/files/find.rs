@@ -128,7 +128,8 @@ pub struct Finder {
     listings: HashMap<(PathBuf, Named), Result<Listing, String>>,
     projects: HashMap<PathBuf, Vec<Named>>,
     cap: usize,
-    /// What finds each branch's folder: the bounded reader's child, or, with none, this process.
+    /// What finds and lists each branch: the bounded reader's child, or, with none, this
+    /// process.
     reader: Option<Reader>,
 }
 
@@ -149,8 +150,9 @@ impl Finder {
         }
     }
 
-    /// The same finder, finding each branch's folder by `reader`'s child, so listing a branch
-    /// starts no git to find its folder in this process (#1189).
+    /// The same finder, finding and listing each branch by `reader`'s child, so listing a
+    /// branch starts no git in this process (#1189, FM-11). Each listing is cut at the cap in
+    /// the child, which says how long it was.
     pub fn reading_with(mut self, reader: Reader) -> Self {
         self.reader = Some(reader);
         self
@@ -321,13 +323,28 @@ fn listing(
     cap: usize,
 ) -> Result<Listing, String> {
     let read = || -> Result<Listing, Refused> {
-        let folder = super::found(reader, plane, branch)?;
-        let mut paths = super::files_in(&folder, branch)?;
-        let partial = (paths.len() > cap).then(|| {
+        // With a reader, its child finds the folder and lists it, cut at the cap there, so this
+        // process starts no git (#1189); with none, both are done here.
+        let (folder, mut paths, total) = match reader {
+            Some(reader) => {
+                let folder = super::root(reader, plane, branch)?.path().to_path_buf();
+                let never = std::sync::atomic::AtomicBool::new(false);
+                let offered = super::offered_by(reader, plane, branch, Some(cap), &never)?
+                    .ok_or_else(super::answered_else)?;
+                (folder, offered.files, offered.total)
+            }
+            None => {
+                let folder = super::folder_of(plane, branch)?;
+                let paths = super::files_in(&folder, branch)?;
+                let total = paths.len();
+                (folder, paths, total)
+            }
+        };
+        let partial = (total > cap).then(|| {
             format!(
                 "{} has {} files, and only the first {} of them are searched by name",
                 branch.called(),
-                paths.len(),
+                total,
                 cap
             )
         });

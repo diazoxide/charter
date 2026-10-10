@@ -110,8 +110,8 @@ struct Session {
     finder: Finder,
 }
 
-/// A palette session's finder: each branch's folder found by the bounded reader's child, so
-/// listing a branch starts no git to find it in this process (#1189).
+/// A palette session's finder: each branch's folder found and listed by the bounded reader's
+/// child, so listing a branch starts no git in this process (#1189).
 fn finder() -> Finder {
     Finder::default().reading_with(crate::reader())
 }
