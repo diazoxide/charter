@@ -6,6 +6,7 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { ViewPane } from "./Views";
 import { catalogue, catalogued, type Offer } from "./actions";
 import { noTabs } from "./tabs";
+import { searchFromFocus, searchView } from "./contentSearch";
 import type {
   ActionAnswer,
   ExtensionView,
@@ -319,6 +320,22 @@ describe("the persona view", () => {
     expect(gone).toHaveTextContent("steward is not here any more");
     expect(gone).toHaveTextContent("This plane has no persona called steward any more.");
     expect(screen.queryByRole("alert")).toBeNull();
+  });
+});
+
+/**
+ * **Search is a side view only** (#1701, D-1701-2): nothing opens a Search view tab since the
+ * left side's Search view took ⌘⇧F (#1676), so a pane draws none. A search's view reference is
+ * the side view's own state (`PlaneView`'s `sideSearch`), never a tab's.
+ */
+describe("a search's view", () => {
+  it("is not drawn as a tab of its own", async () => {
+    const { opened } = core(() => ({ kind: "gone", why: "There is no view called search." }));
+    draw(searchView(searchFromFocus(undefined, "alpha")), { title: "Search" });
+
+    await screen.findByTestId("view-gone");
+    expect(screen.queryByRole("searchbox")).toBeNull();
+    expect(opened).toHaveLength(1);
   });
 });
 

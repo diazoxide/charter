@@ -146,24 +146,19 @@ describe("the Changes view", () => {
   });
 
   /**
-   * **The rows stay rows when the region is narrow, and jsdom cannot say so.**
+   * **The rows stay rows when the view is narrow, and jsdom cannot say so.**
    *
    * The operator asked for it of every tree in the window: a row names one thing and never
-   * folds, and the region scrolls sideways instead. Down here that is the repo table's naming
-   * cells and the worktree tree under each clone. A used height and a `scrollWidth` are the
-   * only evidence for either, and jsdom gives every box a size of zero — so this is the only
-   * place it can be asked. It also catches a rule that emitted no CSS at all.
+   * folds, and the view scrolls sideways instead. Here that is every row of the Changes tree
+   * (#1701) — a repo's heading, its changes, its branches and each branch — held by Tailwind's
+   * `whitespace-nowrap`. A used height and a `scrollWidth` are the only evidence for either, and
+   * jsdom gives every box a size of zero — so this is the only place it can be asked. It also
+   * catches a class that emitted no CSS at all.
    *
-   * The one cell that holds a SENTENCE — a tree purlis could not read, a fetch that did not
-   * happen — still wraps, and the next test is the one that holds it to that.
-   *
-   * **A cell's own height says nothing here**, which cost this spec a red run: a table cell is
-   * as tall as its ROW, so the pipeline cell wrapping — as it is meant to — made every other
-   * cell in that row two lines tall. What is measured is a `Range` over each cell's CONTENT,
-   * whose bounding box is one line box when nothing folded and two when something did,
-   * whatever the row around it is doing.
+   * The rows that hold a SENTENCE — a tree purlis could not read, a fetch that did not happen —
+   * still wrap, so they are left out here, and the next test is the one that holds them to that.
    */
-  it("keeps a repo's naming cells and its worktrees on one line, and scrolls sideways", async () => {
+  it("keeps every row that names something on one line, and scrolls sideways", async () => {
     await onAlpha();
     await untilSays("repo-svc", "main");
 
@@ -173,7 +168,8 @@ describe("the Changes view", () => {
       // **The view's own box is narrowed**, to a width narrower than its content whatever the
       // side's width is: the question is about this scroll container, not about the slot.
       const was = bar.getAttribute("style") ?? "";
-      bar.style.width = "200px";
+      // A tree is narrower than the table was, so the box is narrower than it was asked at.
+      bar.style.width = "120px";
 
       /** One line of this element's own font, plus half a line and four pixels of slack — a
        *  row that wrapped is a WHOLE line taller than that, and a row that did not can still
@@ -182,45 +178,25 @@ describe("the Changes view", () => {
         const css = getComputedStyle(el);
         const line = Number.parseFloat(css.lineHeight);
         const one = Number.isFinite(line) ? line : Number.parseFloat(css.fontSize) * 1.5;
-        return one * 1.5 + 4;
+        return one * 1.5 + 4 + Number.parseFloat(css.paddingTop) * 2;
       };
-      const named = (el: Element, what: string) =>
-        `${what} (${(el.textContent ?? "").slice(0, 40)})`;
-
-      /** How tall a cell's CONTENT is, which is not how tall the cell is. */
-      const content = (el: Element, what: string) => {
-        const range = document.createRange();
-        range.selectNodeContents(el);
-        return {
-          what: named(el, what),
-          height: range.getBoundingClientRect().height,
-          limit: limitOf(el),
-        };
-      };
-
-      const rows = [
-        ...[
-          ...bar.querySelectorAll(".repo-row > .repo, .repo-row > .dirt, .repo-row > .worktrees"),
-        ].map((cell) => content(cell, "a naming cell")),
-        // A worktree row is not a table cell, so its own box is the answer for it.
-        ...[...bar.querySelectorAll(".worktree-tree > li")].map((li) => ({
-          what: named(li, "a worktree row"),
-          height: li.getBoundingClientRect().height,
-          limit: limitOf(li) + Number.parseFloat(getComputedStyle(li).paddingTop) * 2,
-        })),
-      ];
-      // And as the engine resolved them: a rule that emitted no CSS at all — the trap
-      // `docs/design-system.md` names — reads `normal` here.
-      const naming = [
-        ...bar.querySelectorAll(".repo-row > .repo, .repo-row > .dirt, .repo-row > .worktrees"),
-      ].map((el) => getComputedStyle(el).whiteSpace);
+      const naming = [...bar.querySelectorAll('[role="treeitem"]')].filter(
+        (row) => row.querySelector(".none, .unreadable") === null,
+      );
+      const rows = naming.map((row) => ({
+        what: `a row (${(row.textContent ?? "").slice(0, 40)})`,
+        height: row.getBoundingClientRect().height,
+        limit: limitOf(row),
+      }));
 
       const answer = {
         scrollWidth: bar.scrollWidth,
         clientWidth: bar.clientWidth,
         over: 0,
         rows,
-        naming,
+        // As the engine resolved them: a class that emitted no CSS at all — the trap
+        // `docs/design-system.md` names — reads `normal` here.
+        naming: naming.map((el) => getComputedStyle(el).whiteSpace),
       };
       bar.scrollLeft = 10_000;
       answer.over = bar.scrollLeft;
@@ -235,19 +211,18 @@ describe("the Changes view", () => {
       .filter((row) => row.height > row.limit)
       .map((row) => `${row.what}: ${row.height}px, and one line of it is ${row.limit}px`);
     expect(wrapped).toEqual([]);
-    expect(measured.naming.length).toBeGreaterThan(2);
     expect([...new Set(measured.naming)]).toEqual(["nowrap"]);
     expect(measured.scrollWidth).toBeGreaterThan(measured.clientWidth);
     expect(measured.over).toBeGreaterThan(0);
   });
 
-  it("lets the cell that holds a sentence wrap, because a refusal is not a name", async () => {
-    // A pipeline cell with nothing to name says why, in charter's own words and at charter's
+  it("lets the row that holds a sentence wrap, because a refusal is not a name", async () => {
+    // A pipeline row with nothing to name says why, in charter's own words and at charter's
     // own length — `not fetched — <reason>`, or `no pipeline recorded` once a refresher this
     // very run has written an entry that names none. Both are `.none`, and which of the two
     // is on screen depends on whether a refresh has landed yet, so this waits for the cell
     // rather than for either sentence. Held on one line, either would push the region's
-    // horizontal scroll out past every column it has.
+    // horizontal scroll out past every row it has.
     await onAlpha();
     const cell = await $('[data-testid="ci-tool"] .none');
     await cell.waitForExist({ timeout: 30_000 });
