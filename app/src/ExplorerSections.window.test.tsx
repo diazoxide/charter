@@ -264,6 +264,66 @@ describe("Explorer in sections (#1677)", () => {
   });
 });
 
+describe("Explorer kept per project across a relaunch (B-11, #1686)", () => {
+  const repos = () => within(explorer().getByRole("tree", { name: "Repos and branches" }));
+
+  it("writes a section folded and a clone folded under the project", async () => {
+    const asked = core();
+    render(<App />);
+    await showTheExplorer();
+    await explorer_ready();
+
+    await userEvent.click(explorer().getByRole("button", { name: /^Files/ }));
+    await userEvent.click(repos().getByRole("treeitem", { name: /^svc/ }));
+
+    await waitFor(() =>
+      expect(explorerOf(asked)).toEqual({ closed: ["files"], folded: ["alpha/svc"] }),
+    );
+  });
+
+  it("launches with the project's own folds, whatever the machine's", async () => {
+    (globalThis as Record<string, unknown>)[GLOBAL] = {
+      layout: {
+        path: "layout.json",
+        found: true,
+        document: {
+          version: 2,
+          regions: [],
+          explorer: { closed: ["workspaces"] },
+          projects: { [PLANE]: { explorer: { closed: ["files"], folded: ["alpha/svc"] } } },
+        },
+        trouble: null,
+      },
+      theme: { path: "theme.json", found: false, document: null, trouble: null },
+    };
+    const asked = core();
+    render(<App />);
+    await showTheExplorer();
+    await explorer_ready();
+
+    expect(repos().getByRole("treeitem", { name: /^svc/ })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+    expect(explorer().getByRole("button", { name: /^Files/ })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+    expect(explorer().getByRole("button", { name: "Workspaces" })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+    // Showing Explorer writes the arrangement; the project's folds go with it as they were.
+    await waitFor(() => expect(written(asked)).toBeDefined());
+    expect(explorerOf(asked)).toEqual({ closed: ["files"], folded: ["alpha/svc"] });
+  });
+});
+
+/** What the last layout written keeps for the project's Explorer. */
+const explorerOf = (asked: Asked[]) =>
+  (written(asked)?.projects as Record<string, { explorer?: unknown }> | undefined)?.[PLANE]
+    ?.explorer;
+
 /** The explorer once the project is read, whether or not it is the view open. */
 async function explorer_ready() {
   await screen.findByTestId("clone-svc");

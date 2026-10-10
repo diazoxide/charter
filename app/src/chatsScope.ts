@@ -1,4 +1,6 @@
 import type { ChatRow } from "./chatsTree";
+import { forgetProjectViews, keepFacet, keptFacet } from "./projectViews";
+import { onLayoutMovedAside } from "./windowprefs";
 
 /**
  * **The Chats list follows the focused workspace** (#1655, D-qw97-1): the rows of the trees
@@ -92,43 +94,86 @@ export const SCOPES: readonly { scope: Scope; says: string }[] = [
   { scope: "all", says: "All" },
 ];
 
-const KEY = "purlis.chats.scope:";
+/** Where web storage kept the pick before the layout file did (#1679). Read until the window
+ *  moves it into the file ({@link settleScope}), and by nothing after. */
+const LEGACY_KEY = "purlis.chats.scope:";
+
+const isScope = (held: unknown): held is Scope => SCOPES.some((one) => one.scope === held);
+
+/** The scope the file (or this launch) keeps for `plane`, or nothing. */
+function filed(plane: string): Scope | undefined {
+  const held = keptFacet(plane, "chats");
+  const scope =
+    held !== null && typeof held === "object" && !Array.isArray(held)
+      ? (held as { scope?: unknown }).scope
+      : undefined;
+  return isScope(scope) ? scope : undefined;
+}
+
+/** What web storage kept for `plane` before the file did, where it kept a scope. */
+function legacy(plane: string): Scope | undefined {
+  try {
+    const held = globalThis.localStorage.getItem(LEGACY_KEY + plane);
+    return isScope(held) ? held : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * **The scope the person last picked for `plane`**, or the workspace's (#1679).
  *
- * Kept in the window's web storage, by project, so it survives a relaunch and each project
- * has its own: a view's scope is how this person looks at this project on this machine, and no
- * file holds it yet (ADR 0038, 2026-10-10). Nothing here is needed: storage a webview refuses, or a value
- * that is not a scope, is the default.
+ * Kept per project on this machine in `layout.json` v2 (B-11, #1696), under the project's
+ * `chats.scope` (`projectViews.ts`): a view's scope is how this person looks at this project. A
+ * pick web storage kept before that is read until {@link settleScope} moves it. A value that
+ * is not a scope is the default.
  */
 export function keptScope(plane: string | undefined): Scope {
   if (plane === undefined) return "workspace";
-  try {
-    const held = globalThis.localStorage.getItem(KEY + plane);
-    return SCOPES.find((one) => one.scope === held)?.scope ?? "workspace";
-  } catch {
-    return "workspace";
-  }
+  return filed(plane) ?? legacy(plane) ?? "workspace";
 }
 
-/** Keeps `scope` as the one the person picked for `plane`. The default is kept as no value. */
+/** Keeps `scope` as the one the person picked for `plane`. The default is kept as nothing. */
 export function keepScope(plane: string | undefined, scope: Scope): void {
   if (plane === undefined) return;
+  keepFacet(plane, "chats", scope === "workspace" ? undefined : { scope });
+  forgetLegacy(plane);
+}
+
+/**
+ * **Moves the pick web storage kept for `plane` into the layout file, once** (#1696), as
+ * `regions.ts` once moved its own key: the file's pick wins where it has one, and the key goes
+ * either way, so the two never answer the same question.
+ */
+export function settleScope(plane: string | undefined): void {
+  if (plane === undefined) return;
+  const held = legacy(plane);
+  if (held !== undefined && filed(plane) === undefined) keepScope(plane, held);
+  forgetLegacy(plane);
+}
+
+function forgetLegacy(plane: string): void {
   try {
-    if (scope === "workspace") globalThis.localStorage.removeItem(KEY + plane);
-    else globalThis.localStorage.setItem(KEY + plane, scope);
+    globalThis.localStorage.removeItem(LEGACY_KEY + plane);
   } catch {
-    // Storage refused: the pick holds for this window's run, as #1655's chip did.
+    // No storage: nothing kept there.
   }
 }
 
 /** Forgets every project's kept scope, as a machine that never picked one. For tests. */
 export function forgetKeptScopes(): void {
+  forgetProjectViews();
+  forgetEveryLegacy();
+}
+
+function forgetEveryLegacy(): void {
   try {
-    const keys = Object.keys(globalThis.localStorage).filter((key) => key.startsWith(KEY));
+    const keys = Object.keys(globalThis.localStorage).filter((key) => key.startsWith(LEGACY_KEY));
     for (const key of keys) globalThis.localStorage.removeItem(key);
   } catch {
     // No storage: nothing kept.
   }
 }
+
+// Use the default layout: every project's scope is the default, web storage's old picks too.
+onLayoutMovedAside(forgetEveryLegacy);

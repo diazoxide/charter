@@ -18,6 +18,7 @@ import { drawnWith } from "./cascade.testkit";
 import { card, cardOf as cardOfRow, facts, theCard } from "./chatCard.testkit";
 import { CARD_LEAVE_MS } from "./ChatsSection";
 import { forgetThisLaunch } from "./regions";
+import { GLOBAL } from "./windowprefs";
 import type { Shown } from "./shownState";
 import { stripNamed } from "./test-strips";
 
@@ -359,6 +360,7 @@ afterEach(() => {
   cleanup();
   clearMocks();
   drawn.marks.length = 0;
+  Reflect.deleteProperty(globalThis, GLOBAL);
 });
 
 describe("the Chats section", () => {
@@ -1523,12 +1525,22 @@ describe("the Chats view's scope: this tab, the workspace, or all (#1679)", () =
   });
 
   it("remembers the scope picked for the project when the window opens it again", async () => {
-    core(three());
+    const { asked } = core(three());
     const { unmount } = render(<App />);
     await section();
     await pickScope("All");
+    // Kept in the project's entry in layout.json v2 (B-11, #1696).
+    const writes = () => asked.filter((one) => one.cmd === "write_layout");
+    await waitFor(() => expect(writes().length).toBeGreaterThan(0));
+    const document: unknown = JSON.parse(String(writes().at(-1)?.args.text));
+    expect(document).toMatchObject({ projects: { [PLANE]: { chats: { scope: "all" } } } });
     unmount();
     forgetThisLaunch();
+    // The next launch is handed the file the window wrote.
+    (globalThis as Record<string, unknown>)[GLOBAL] = {
+      layout: { path: "layout.json", found: true, document, trouble: null },
+      theme: { path: "theme.json", found: false, document: null, trouble: null },
+    };
 
     render(<App />);
     const tree = await section();

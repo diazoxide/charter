@@ -277,10 +277,10 @@ between its three.
 - **All** lists every workspace's chats.
 
 The pick is **kept for each project on this machine**, so it is there after a relaunch. It is
-how one person looks at one project, like the folds, and is kept in the window's web storage
-(local storage, where the folds use the session's, since a scope names no chat and outlives a
-launch) rather than in `layout.json`, which has no per-project place for a view's state until
-the views land in its next version (#1673). A row asked for outside the scope widens the scope
+how one person looks at one project, like the folds. It was first kept in the window's web
+storage, since `layout.json` had no per-project place for a view's state; since #1696 it is in
+the project's entry of `layout.json` v2 (`projects[path].chats.scope`, B-11), beside Explorer's
+folds (#1686), and the web storage key is moved there once. A row asked for outside the scope widens the scope
 to the narrowest that lists it, and that is not kept, because the person did not pick it.
 
 **In every scope, a chat the scope leaves out that needs the person is named at the top**: the

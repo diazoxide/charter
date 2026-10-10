@@ -277,7 +277,9 @@ has it; nothing reads the key after that.
   ],
   "projects": {
     "/home/me/project": {
-      "regions": [{ "id": "navigation", "side": "left", "order": 0, "collapsed": true }]
+      "regions": [{ "id": "navigation", "side": "left", "order": 0, "collapsed": true }],
+      "explorer": { "closed": ["files"], "folded": ["alpha/svc"] },
+      "chats": { "scope": "all" }
     }
   },
   "text": { "window": 15, "terminal": 14 },
@@ -302,12 +304,29 @@ has it; nothing reads the key after that.
   leaves out is where it starts; an id this build does not have is left out and named in the
   alerts drawer. **`bottom`**, the repository state bar every file before #1676 placed, is read
   past without a word: its content is the Changes view.
-- **`projects`** is each project's own arrangement, by its path, as `regions` is written
-  (#1673): the side a view is on, which view it shows, its width and whether it is away come
-  back as that project left them. purlis writes a project's entry when its arrangement changes;
-  the core keeps the entries a window did not send, so two windows keep each other's, and keeps
-  at most 32, letting go of the projects opened longest ago first. An entry that is not an
-  arrangement is skipped, and the project starts from the machine's.
+- **`projects`** is what each project keeps on this machine, by its path (#1673, B-11).
+  **`regions`** is its own arrangement, as the top-level `regions` is written: the side a view
+  is on, which view it shows, its width and whether it is away come back as that project left
+  them. Leave it out and the project starts from the machine's. Beside it, what its views keep
+  (#1686, #1696):
+  - **`explorer`**: **`closed`**, the sections folded on their headings, as the top-level
+    `explorer.closed` says them, an empty list when every one is open; and the rows of
+    Explorer's trees as the person left them: **`folded`**, the clones folded under *Repos
+    and branches*, **`opened`**, the folders opened under *Files*, and **`shut`**, the
+    cockpit's *Files* rows closed. These three are Explorer's own row keys, written by it and
+    not meant to be written by hand; a key that names nothing on screen opens or folds
+    nothing. The whole of `explorer` is held to 2 KiB, letting go of the folders opened
+    longest ago first.
+  - **`chats`**: **`scope`**, the Chats view's scope, `tab` (This tab) or `all`. Leave it out
+    for the workspace's, the default. A pick an older purlis kept in the window's web storage
+    is moved here the first time the Chats view is drawn.
+
+  purlis writes a project's entry when anything in it changes; the core keeps the entries a
+  window did not send, so two windows keep each other's. It keeps at most 32, and at most
+  24 KiB of them, letting go of the projects opened longest ago first. An entry that is not
+  an object, or whose `regions` is not a list, is skipped, and the project starts from the
+  machine's. The Chats view's folds are not kept here: a fold names a chat by its number,
+  which holds only while purlis runs, so they are kept for the window's run (#1687).
 - **`view`**, on a region that has views, is the one it shows: `chats`, `explorer`, `search`
   or `changes` for `navigation`, and `todos`, `memory`, `personas`, `sessions`, `vaults` or
   `panel:` and an extension's panel key (`panel:ext/<extension>/<id>`) for `aside` (#1678).
@@ -355,8 +374,9 @@ has it; nothing reads the key after that.
   the sections folded on their headings, out of `workspaces`, `repos` (the focused workspace's
   repos and branches) and `files`. Leave it out, as purlis does, while every section is open. A
   name that is not a section is left out, and the alerts drawer says so. Folding a section
-  writes it (`app/src/explorerSections.ts`). It is the machine's and not a project's: which
-  sections a person keeps open is a habit, where a side's view is about the project in front.
+  writes it (`app/src/explorerSections.ts`). Each project keeps its own too, under
+  `projects` (#1686); this one is the last fold in any project, which a project with none of
+  its own starts from, as a project with no arrangement starts from the machine's.
 - **`dismissed`** is the Notices you dismissed (NO-2, V91j), per project by its path, each
   by its cause. A Notice stays hidden while its cause is kept here, and the window lets the
   cause go once the project answers without it, so the Notice shows again if the cause comes

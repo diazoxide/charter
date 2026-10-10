@@ -1,15 +1,17 @@
 import { useSyncExternalStore } from "react";
 import { atCreation, onLayoutMovedAside, sayAboutThisMachine, type Reading } from "./windowprefs";
+import { keepExplorer, keptExplorer } from "./explorerFolds";
 
 /**
  * **Which of Explorer's sections are folded** (#1677, spec #1671 B-12): *Workspaces*, the
  * focused workspace's *Repos and branches*, and *Files*. Each folds on its heading, as an
  * editor's explorer does, and stays folded on the next launch.
  *
- * **Kept in the layout file**, beside how the Chats list is drawn (`layout.json`, `regions.ts`),
- * under `explorer.closed`: the sections folded, and nothing when every one is open. It is how one
- * person likes their window on this machine, so it is the machine's and not a project's — a
- * section is a habit, where the view open on a side is about the project in front.
+ * **Kept per project in the layout file** (B-11, #1686), as each project's arrangement is: under
+ * `projects[path].explorer.closed` (`explorerFolds.ts`), the sections folded there, an empty list
+ * when every one is open. **And for the machine**, under the top-level `explorer.closed` that
+ * #1677 wrote: the person's last fold in any project, which is what a project that has none of
+ * its own starts from, as a project with no arrangement starts from the machine's.
  * **Use the default layout opens every section again**, at once and in what the next write
  * carries, without writing the file it has just moved aside.
  */
@@ -58,7 +60,7 @@ export function loadExplorerSections(raw: unknown): {
 
 /** The folded sections as the layout file writes them, or nothing when every one is open. */
 export function explorerSectionsDocument(
-  closed: ReadonlySet<SectionId> = closedSections(),
+  closed: ReadonlySet<SectionId> = machineSections(),
 ): { closed: SectionId[] } | undefined {
   if (closed.size === 0) return undefined;
   return { closed: SECTIONS.filter((one) => closed.has(one)) };
@@ -90,9 +92,25 @@ function startingSections(layout: Reading = atCreation().layout): ReadonlySet<Se
   return closed;
 }
 
-/** The sections folded now. */
-export function closedSections(): ReadonlySet<SectionId> {
+/** The machine's sections folded now: the last fold in any project. */
+function machineSections(): ReadonlySet<SectionId> {
   return changed ?? startingSections();
+}
+
+/** Each project's own folded sections, as last handed out, by what they were read from: the
+ *  same set while nothing changed, so `useSyncExternalStore` draws nothing again. */
+const projectSets = new Map<string, { from: string; closed: ReadonlySet<SectionId> }>();
+
+/** The sections folded now in `project`: its own, else the machine's. */
+export function closedSections(project?: string): ReadonlySet<SectionId> {
+  const own = keptExplorer(project).closed;
+  if (project === undefined || own === undefined) return machineSections();
+  const from = own.join("\n");
+  const was = projectSets.get(project);
+  if (was?.from === from) return was.closed;
+  const closed: ReadonlySet<SectionId> = new Set(own.filter(isSection));
+  projectSets.set(project, { from, closed });
+  return closed;
 }
 
 function become(now: ReadonlySet<SectionId>): void {
@@ -102,14 +120,26 @@ function become(now: ReadonlySet<SectionId>): void {
   for (const draw of drawers) draw();
 }
 
-/** Folds a section, or opens it; tells every listener when that changed anything. */
-export function setSectionOpen(section: SectionId, open: boolean): void {
-  const was = closedSections();
+/**
+ * Folds a section, or opens it, in `project` (B-11): its own sections, and the machine's, which a
+ * project with none of its own starts from. The project's entry is what writes the file then
+ * (`projectViews.ts`), so the listeners here are told only of a fold with no project.
+ */
+export function setSectionOpen(section: SectionId, open: boolean, project?: string): void {
+  const was = closedSections(project);
   if (open !== was.has(section)) return;
   const now = new Set(was);
   if (open) now.delete(section);
   else now.add(section);
-  become(now);
+  if (project === undefined) {
+    become(now);
+    return;
+  }
+  changed = now;
+  sayAboutThisMachine("explorer", undefined);
+  // An empty list is kept: every section open here is this project's, whatever the machine's.
+  keepExplorer(project, { closed: SECTIONS.filter((one) => now.has(one)) });
+  for (const draw of drawers) draw();
 }
 
 /** Calls `listener` whenever a section folds or opens. Answers the way to stop. */
@@ -119,23 +149,27 @@ export function onExplorerSections(listener: (closed: ReadonlySet<SectionId>) =>
 }
 
 /** {@link closedSections}, for a component that redraws when a section folds or opens. */
-export function useClosedSections(): ReadonlySet<SectionId> {
-  return useSyncExternalStore((draw) => {
-    drawers.add(draw);
-    return () => void drawers.delete(draw);
-  }, closedSections);
+export function useClosedSections(project?: string): ReadonlySet<SectionId> {
+  return useSyncExternalStore(
+    (draw) => {
+      drawers.add(draw);
+      return () => void drawers.delete(draw);
+    },
+    () => closedSections(project),
+  );
 }
 
 /** Forgets what this launch folded and read, as a new launch would. For tests. */
 export function forgetExplorerSections(): void {
   changed = undefined;
   started = undefined;
+  projectSets.clear();
 }
 
 // Use the default layout: every section open, drawn at once. Not written: the file was just moved
 // aside, and the next change the person makes writes a new one without them.
 onLayoutMovedAside(() => {
-  if (closedSections().size === 0) return;
   changed = NONE;
+  projectSets.clear();
   for (const draw of drawers) draw();
 });

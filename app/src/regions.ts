@@ -17,6 +17,14 @@ import {
   type SectionId,
 } from "./explorerSections";
 import { forgetGroups } from "./settings/links";
+import {
+  facetsOf,
+  forgetProjectViews,
+  onProjectViews,
+  projectsTouched,
+  touch,
+  type Facet,
+} from "./projectViews";
 import { forgetEntering } from "./settings/entering";
 import { forgetDismissals } from "./dismissals";
 import type { YourEditor } from "./bindings";
@@ -249,6 +257,12 @@ export const VERSION = 2;
  *  (`purlis_core::windowprefs::MOST_PROJECTS`), so the file stays inside its size. */
 export const MOST_PROJECTS = 32;
 
+/** The most bytes the projects' entries take of the file, as written (#1686): the core's own
+ *  bound (`purlis_core::windowprefs::PROJECTS_MOST_BYTES`). With the dismissals' half, the rest
+ *  of the file always has room. A write holds what it sends to it, the projects changed longest
+ *  ago let go first. */
+export const PROJECTS_MOST_BYTES = 24 * 1024;
+
 /** The longest view name kept from the file: an extension's panel key is two short ids. */
 const MOST_VIEW = 200;
 
@@ -272,9 +286,10 @@ type Document = {
   /** The machine's arrangement: what a project with none of its own starts from, and the one
    *  arrangement version 1 had. */
   regions: Arrangement;
-  /** Each project's own (#1673), by its path: only the projects this window arranged, since
-   *  the core keeps the file's others. */
-  projects?: Record<string, { regions: Arrangement }>;
+  /** Each project's own (#1673), and what its views keep (#1686), by its path: only the
+   *  projects this window changed ({@link projectsSent}), since the core keeps the file's
+   *  others. */
+  projects?: Record<string, ProjectEntry>;
   text: TextSizes;
   /** Your editor (`yourEditor.ts`, RC-20), when one is chosen. */
   editor?: YourEditor;
@@ -283,6 +298,10 @@ type Document = {
   /** Explorer's folded sections (`explorerSections.ts`, #1677), when any is. */
   explorer?: { closed: SectionId[] };
 };
+
+/** One project's entry: its own arrangement, once it has one, and what its views keep
+ *  (`projectViews.ts`, B-11). */
+type ProjectEntry = { regions?: Arrangement } & Partial<Record<Facet, unknown>>;
 
 /** A document read field by field, and what had to be put right to read it. */
 export type Loaded = {
@@ -469,6 +488,7 @@ export function forgetThisLaunch(): void {
   forgetChatsListPrefs();
   forgetExplorerSections();
   forgetDismissals();
+  forgetProjectViews();
   forgetGroups();
   forgetEntering();
   clearTimeout(textWrite);
@@ -531,22 +551,48 @@ const asDocument = (regions: Arrangement): Document => {
   const editor = yourEditor();
   const chats = chatsListPrefs();
   const explorer = explorerSectionsDocument();
+  const projects = projectsSent();
   return {
     version: VERSION,
     regions,
-    ...(changedIn.size > 0
-      ? {
-          projects: Object.fromEntries(
-            [...changedIn].map(([project, own]) => [project, { regions: own }]),
-          ),
-        }
-      : {}),
+    ...(projects !== undefined ? { projects } : {}),
     text: textSizes(),
     ...(editor !== undefined ? { editor } : {}),
     ...(isDefaultChatsList(chats) ? {} : { chats }),
     ...(explorer !== undefined ? { explorer } : {}),
   };
 };
+
+/**
+ * **The projects this launch changed, each with its whole entry** (#1673, #1686): its
+ * arrangement — this launch's, else the file's, else none, so it starts from the machine's — and
+ * every facet its views keep. The core keeps every other project's entry as the file has it.
+ *
+ * **Held to {@link MOST_PROJECTS} and {@link PROJECTS_MOST_BYTES}**, as written: the project
+ * changed last is taken first, and the projects changed longest ago are let go once the next
+ * would not fit. Oldest first, as `changedIn` was always sent.
+ */
+function projectsSent(): Record<string, ProjectEntry> | undefined {
+  const started = movedAside ? nothingHeld() : startingLayout();
+  const taken: [string, ProjectEntry][] = [];
+  for (const project of projectsTouched().reverse()) {
+    if (taken.length === MOST_PROJECTS) break;
+    const own = changedIn.get(project) ?? started.projects.get(project);
+    const entry: ProjectEntry = {
+      ...(own !== undefined ? { regions: own } : {}),
+      ...facetsOf(project),
+    };
+    if (Object.keys(entry).length === 0) continue;
+    // Measured whole, as the core measures the map: at most 32 small entries.
+    if (bytesOf(Object.fromEntries([...taken, [project, entry]])) > PROJECTS_MOST_BYTES) break;
+    taken.push([project, entry]);
+  }
+  return taken.length === 0 ? undefined : Object.fromEntries(taken.reverse());
+}
+
+/** `value`'s bytes as the core writes it: pretty, two spaces, UTF-8. */
+const bytesOf = (value: unknown): number =>
+  new TextEncoder().encode(JSON.stringify(value, null, 2)).length;
 
 /**
  * A text size changed: the file is rewritten with it, and with the arrangement as it stands —
@@ -568,6 +614,9 @@ onChatsListPrefs(() => remember(remembered()));
 
 /** One of Explorer's sections was folded or opened (#1677): one change, written at once. */
 onExplorerSections(() => remember(remembered()));
+
+/** What a view keeps for a project changed (B-11, #1686): one change, written at once. */
+onProjectViews(() => remember(remembered()));
 
 /** Every write, in the order the window made it. Tauri runs commands on a thread pool, and two
  *  writes that raced there could land the older one last. */
@@ -603,6 +652,10 @@ export function load(raw: unknown): Loaded {
         own !== null && typeof own === "object"
           ? (own as { regions?: unknown }).regions
           : undefined;
+      // An entry that keeps only what its views keep (B-11) has no arrangement of its own: the
+      // project starts from the machine's, and there is nothing to say.
+      if (list === undefined && own !== null && typeof own === "object" && !Array.isArray(own))
+        continue;
       if (!Array.isArray(list)) {
         said.push(
           `${JSON.stringify(project)} has no "regions" list, so it starts from the machine's`,
@@ -713,6 +766,7 @@ function remember(arrangement: Arrangement, project?: string): void {
     // Last changed last, so the bound lets go of the project arranged longest ago.
     changedIn.delete(project);
     changedIn.set(project, arrangement);
+    touch(project);
     if (changedIn.size > MOST_PROJECTS) changedIn.delete(changedIn.keys().next().value as string);
   }
   const text = JSON.stringify(asDocument(arrangement));
