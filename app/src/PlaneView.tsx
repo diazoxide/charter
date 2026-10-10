@@ -5847,9 +5847,13 @@ export const PlaneView = memo(function PlaneView({
     const asker = chatsByNumber.get(from.chat);
     return { asker: asker === undefined ? undefined : shownName(tabs, asker) };
   };
-  /** The Start fresh row a tab's mark presses: none for a task's own tab, which draws no
-   *  such mark (its row is in the tab's menu, and says why it cannot run). */
-  const freshOf = (id: number) => (taskTabOf(id) === undefined ? by(`tab.fresh:${id}`) : undefined);
+  /** The Start fresh row a tab's mark presses: none for a task's own tab while a task cannot
+   *  start fresh, which then draws no such mark (its row is in the tab's menu, and says why it
+   *  cannot run). Where it can (#1609), its mark presses it as a session's does. */
+  const freshOf = (id: number) => {
+    const row = by(`tab.fresh:${id}`);
+    return taskTabOf(id) === undefined || row?.available ? row : undefined;
+  };
 
   /**
    * The focused workspace's worktrees, as the catalogue names them (charter-app#174).

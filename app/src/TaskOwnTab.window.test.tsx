@@ -13,6 +13,7 @@ import { userEvent } from "@testing-library/user-event";
 import { emit } from "@tauri-apps/api/event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
+import { TASKS_START_FRESH } from "./actions";
 import type { OpenChat } from "./bindings";
 import { setChatsListPrefs } from "./chatsListPrefs";
 import { forgetKeyboard } from "./paneKeyboard";
@@ -114,9 +115,11 @@ type Core = {
   spared?: number[];
   /** The chats the project's instructions changed under, with the files. */
   updated?: { session: number; files: string[] }[];
+  /** What the core says to a fresh start, refusing it (a brief it cannot confirm, #1609). */
+  fresh?: string;
 };
 
-function core(open: Listed[], { running = [], spared = [], updated = [] }: Core = {}) {
+function core(open: Listed[], { running = [], spared = [], updated = [], fresh }: Core = {}) {
   const asked: Asked[] = [];
   mockIPC(
     (cmd, args) => {
@@ -171,6 +174,7 @@ function core(open: Listed[], { running = [], spared = [], updated = [] }: Core 
       if (cmd === "smart_close_offer") return { available: false, why: null, close_first: false };
       if (cmd === "chats_plane_updated") return updated;
       if (cmd === "ask_chat_restart") return null;
+      if (cmd === "start_chat_fresh" && fresh !== undefined) throw fresh;
       if (cmd === "task_ending") {
         // An idle task with nothing below it: the one that is asked about in place.
         const one = open.find((chat) => chat.session === a.session);
@@ -822,32 +826,65 @@ describe("after a relaunch", () => {
 describe("nothing drawn on a task's tab ends it (fix round 1, M2)", () => {
   const changed = { updated: [1, 4].map((session) => ({ session, files: ["CLAUDE.md"] })) };
 
-  it("draws no Start fresh mark on a task's own tab, where a session's tab has one", async () => {
-    const { tree } = await drawn(withTasks(), changed);
-    await toOwnTab(tree, "talk");
+  it.skipIf(TASKS_START_FRESH)(
+    "draws no Start fresh mark on a task's own tab, where a session's tab has one",
+    async () => {
+      const { tree } = await drawn(withTasks(), changed);
+      await toOwnTab(tree, "talk");
 
-    // The session's tab wears the mark: the project's instructions changed under it.
-    await userEvent.click(tab("steward 1"));
-    await waitFor(() =>
-      expect(within(cell("steward 1")).queryByRole("button", { name: /fresh/i })).not.toBeNull(),
-    );
-    // The task's tab does not, though they changed under it too.
-    const said = [...cell("talk").querySelectorAll("button")].map(
-      (button) => button.getAttribute("aria-label") ?? button.textContent ?? "",
-    );
-    expect(said.filter((name) => /\b(fresh|end|close|stop|restart)\b/i.test(name))).toEqual([]);
-  });
+      // The session's tab wears the mark: the project's instructions changed under it.
+      await userEvent.click(tab("steward 1"));
+      await waitFor(() =>
+        expect(within(cell("steward 1")).queryByRole("button", { name: /fresh/i })).not.toBeNull(),
+      );
+      // The task's tab does not, though they changed under it too.
+      const said = [...cell("talk").querySelectorAll("button")].map(
+        (button) => button.getAttribute("aria-label") ?? button.textContent ?? "",
+      );
+      expect(said.filter((name) => /\b(fresh|end|close|stop|restart)\b/i.test(name))).toEqual([]);
+    },
+  );
 
-  it("keeps Start fresh in the tab's menu as a row that cannot run, and says why", async () => {
-    const { tree, asked } = await drawn(withTasks(), changed);
-    await toOwnTab(tree, "talk");
+  it.skipIf(TASKS_START_FRESH)(
+    "keeps Start fresh in the tab's menu as a row that cannot run, and says why",
+    async () => {
+      const { tree, asked } = await drawn(withTasks(), changed);
+      await toOwnTab(tree, "talk");
 
-    fireEvent.contextMenu(tab("talk"));
-    const row = await screen.findByRole("menuitem", { name: /^Start chat .*talk fresh/ });
-    expect(row.getAttribute("aria-disabled")).toBe("true");
-    expect(row.title).toContain("This chat is a task");
-    expect(commandsOf(asked, "start_chat_fresh")).toEqual([]);
-  });
+      fireEvent.contextMenu(tab("talk"));
+      const row = await screen.findByRole("menuitem", { name: /^Start chat .*talk fresh/ });
+      expect(row.getAttribute("aria-disabled")).toBe("true");
+      expect(row.title).toContain("This chat is a task");
+      expect(commandsOf(asked, "start_chat_fresh")).toEqual([]);
+    },
+  );
+
+  // #1609: once the core hands a task its brief again, its Start fresh runs, asked first as a
+  // session's is; a brief the core cannot confirm is refused, and said in the question.
+  it.runIf(TASKS_START_FRESH)(
+    "asks before a task's Start fresh, and says the core's refusal in the question",
+    async () => {
+      const { tree, asked } = await drawn(withTasks(), {
+        ...changed,
+        fresh: "its brief could not be confirmed",
+      });
+      await toOwnTab(tree, "talk");
+
+      fireEvent.contextMenu(tab("talk"));
+      await pick(/^Start chat .*talk fresh/);
+      const question = await screen.findByRole("alertdialog");
+      expect(commandsOf(asked, "start_chat_fresh")).toEqual([]);
+      await userEvent.click(within(question).getByRole("button", { name: "Start fresh" }));
+
+      expect((await within(question).findByRole("alert")).textContent).toContain(
+        "its brief could not be confirmed",
+      );
+      expect(commandsOf(asked, "start_chat_fresh")).toEqual([
+        expect.objectContaining({ plane: PLANE, session: 4 }),
+      ]);
+      expect(ended(asked)).toEqual([]);
+    },
+  );
 
   it("asks before a task's Restart chat, and restarts nothing until the person says so", async () => {
     const { tree, asked } = await drawn(withTasks());
