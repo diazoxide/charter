@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791651100692,
+  "lastUpdate": 1791654809585,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -6174,6 +6174,48 @@ window.BENCHMARK_DATA = {
             "value": 105.857316,
             "unit": "ms",
             "extra": "median of 5 runs: 102.649, 103.119, 105.857, 105.869, 106.088 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "eyehollow@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "dbrownsimple"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "e0808d7e969517d96aacd0c378e3652d60c4c920",
+          "message": "Count Blocked lately's Allow among the window's own commands\n\nThe window-only list gained `allow_blocked_host` (issue 1662), but the\ntest that pins the list's length and names each person's act did not.\nIt now names the command and counts it.\n\nRefs #1662\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nAssisted-by: claude-code\nPurlis-Chat: 01M4AREQXXRGBAEWM0SZ0N0WBN\nPurlis-Persona: steward",
+          "timestamp": "2026-10-10T21:42:59+04:00",
+          "tree_id": "2cae300a4b78bc003a3150908c0ed95e4a3ab940",
+          "url": "https://github.com/purlis/purlis/commit/e0808d7e969517d96aacd0c378e3652d60c4c920"
+        },
+        "date": 1791654809010,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.5062530000000001,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.494, 0.504, 0.506, 0.512, 0.525 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 17.0864145,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.463, 17.081, 17.086, 17.264, 17.381 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 104.760216,
+            "unit": "ms",
+            "extra": "median of 5 runs: 103.115, 104.296, 104.760, 104.800, 107.536 ms"
           }
         ]
       }
