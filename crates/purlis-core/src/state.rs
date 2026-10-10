@@ -942,8 +942,15 @@ impl Chat {
             // A notice that asks nothing (#1691): a prompt it showed stands.
             Said::Item(Item::Told) => {}
             // The harness said the prompt it showed was answered, wherever (#1691).
+            // Only a form's or a link's answer: it says nothing of a permission prompt or a
+            // question the chat waits on, which stands until the chat moves.
             Said::Item(Item::Answered) => {
-                if self.waits_on_its_prompt() {
+                if self.waits_on_its_prompt()
+                    && matches!(
+                        self.prompt,
+                        crate::harness::model::Prompt::Form | crate::harness::model::Prompt::Link
+                    )
+                {
                     self.state = State::Running;
                     self.needs_you = false;
                 }
@@ -2941,6 +2948,15 @@ mod tests {
         assert_eq!(chat.its_prompt(), Some(Prompt::Unsaid));
         assert!(chat.answered());
         assert_eq!(chat.its_prompt(), None, "answered");
+
+        // A form's answer says nothing of a permission prompt the chat waits on: it stands.
+        chat.reported(Event::UserPromptSubmit);
+        chat.reported_from(
+            Event::Notification,
+            notice(Notified::Asks(Prompt::Permission)),
+        );
+        chat.reported_from(Event::Notification, notice(Notified::Answered));
+        assert_eq!(chat.its_prompt(), Some(Prompt::Permission));
     }
 
     #[test]
