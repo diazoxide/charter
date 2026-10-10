@@ -29,6 +29,7 @@ const GLYPHS = [..."✓✔✗✘✕✖×▸▹▶►▾▿▼◂◀◄▴▲⚠�
 const OWN_SVG: Record<string, string> = {
   "FileIcon.tsx": "the icon theme's symbols, rebuilt from checked path data",
   "ChatGauge.tsx": "a gauge drawn to its numbers, not an icon",
+  "editor/imagePreview.ts": "a one-pixel SVG decoded as bytes to ask the webview, never drawn",
 };
 
 /** The one icon package. */
