@@ -871,19 +871,21 @@ function App() {
    * project to the front and opens its Settings there. Never through Settings… (⌘,), which
    * opens at the level that is focused rather than the one the link names.
    */
-  const openSettingsAt = useCallback((group: string, about?: PlaneId) => {
+  const openSettingsAt = useCallback((group: string, about?: PlaneId, setting?: string) => {
     const level = levelOf(group);
+    // The setting itself, where the row names one: the link focuses its control (#1289).
+    const link: SettingsLink = setting === undefined ? { group } : { group, setting };
     if (level === "project" && about !== undefined) {
       setShowing({ at: "plane", plane: about });
-      setSettingsLinkAsk((was) => ({ plane: about, link: { group }, at: (was?.at ?? 0) + 1 }));
+      setSettingsLinkAsk((was) => ({ plane: about, link, at: (was?.at ?? 0) + 1 }));
       return;
     }
     if (level !== "you") return;
     const plane = inFrontNow.current;
     if (plane === undefined) {
-      linkToGroup(settingsPlace("you"), group);
+      linkToGroup(settingsPlace("you"), group, setting);
       showSettingsAlone(setSettingsAlone);
-    } else setSettingsLinkAsk((was) => ({ plane, link: { group }, at: (was?.at ?? 0) + 1 }));
+    } else setSettingsLinkAsk((was) => ({ plane, link, at: (was?.at ?? 0) + 1 }));
   }, []);
 
   /**
