@@ -749,6 +749,21 @@ describe("the hand counts the asks registry's asks (#1690)", () => {
     expect(button).toHaveTextContent("3");
   });
 
+  it("says what its rows are where the registry counts none of them, never a count of nothing", () => {
+    // A chat's row can arrive before the registry is read again: the hand names the row.
+    render(
+      <NeedsYouMenu
+        quiet={[]}
+        items={[needing("/a", 1, "ide", "charter")]}
+        asked={0}
+        onPress={() => {}}
+      />,
+    );
+
+    const button = screen.getByRole("button", { name: "1 chat needs you" });
+    expect(button.querySelector(".needs-you-number")).toBeNull();
+  });
+
   it("lists another ask by its chain and line, with Go to its chat and no answer of its own", async () => {
     const opened: string[] = [];
     render(

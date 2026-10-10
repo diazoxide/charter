@@ -398,17 +398,19 @@ export function NeedsYouMenu({
   }, [asking]);
   // A refusal kept while nobody was there is no chat needing you: the chat was told no and
   // went on. Alone, the hand says what they are; beside chats, it counts things.
+  // What the rows are, where the registry counts none of them: a refusal kept while nobody
+  // was there, or a row the registry has not read yet. Never "0 things".
+  const rowsSaid =
+    away.length === 0
+      ? `${rows} ${rows === 1 ? "chat needs" : "chats need"} you`
+      : chats === 0
+        ? `${rows} ${rows === 1 ? "dispatch was" : "dispatches were"} refused while you were away`
+        : `${rows} things need you`;
   const said = !asking
     ? quietSaid(quiet)
-    : asked !== undefined
-      ? count === 0
-        ? `${away.length} ${away.length === 1 ? "dispatch was" : "dispatches were"} refused while you were away`
-        : `${count} ${count === 1 ? "thing waits" : "things wait"} on you`
-      : away.length === 0
-        ? `${count} ${count === 1 ? "chat needs" : "chats need"} you`
-        : chats === 0
-          ? `${count} ${count === 1 ? "dispatch was" : "dispatches were"} refused while you were away`
-          : `${count} things need you`;
+    : asked !== undefined && count > 0
+      ? `${count} ${count === 1 ? "thing waits" : "things wait"} on you`
+      : rowsSaid;
   /**
    * **The rows as they were when the list was opened** (#1507, #1146). A chat can ask, or a
    * refused chat ask again, at any moment, and the core then says the list anew; drawn at once,
