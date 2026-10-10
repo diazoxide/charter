@@ -410,6 +410,29 @@ describe("a block of the chat's own work is never a dead end (#1342)", () => {
     expect(asked("allow_sandbox_block")).toEqual([]);
   });
 
+  it("names the host a refused lookup was of, and offers no Allow for it", async () => {
+    // #1663: a database client looked its host up itself, past the proxy; the host travels
+    // on the block and is shown, never offered.
+    await aChat();
+    await act(() =>
+      emit("chat-sandbox-blocked", {
+        ...THEIRS,
+        operation: "lookup",
+        kind: "host",
+        said: "a lookup of an internet host by a program that does not go through the sandbox's proxy",
+        offer: "unsandboxed",
+        target: "db.prod.example.com",
+        route: "This program looks its host up itself.",
+      }),
+    );
+    const notice = await screen.findByRole("status", { name: "Sandbox block" });
+    expect(notice).toHaveTextContent(
+      "does not go through the sandbox's proxy: db.prod.example.com. This program looks",
+    );
+    expect(screen.getByText("db.prod.example.com").tagName).toBe("CODE");
+    expect(within(notice).queryByRole("button", { name: "Allow for this chat" })).toBeNull();
+  });
+
   it("restarts a chat owed one only once its turn has ended, even after the Notice is gone", async () => {
     const { asked } = await aChat();
     await act(() => emit("chat-moved", RUNNING));

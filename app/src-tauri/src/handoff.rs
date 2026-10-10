@@ -278,13 +278,21 @@ pub fn answer(
 
 /// What chat `chat` is stopped on for the person, as the chat that asked for it is told: a
 /// permission its harness asked on the hook purlis holds, or another prompt its harness said
-/// it waits on (a question, or a permission on a harness that asks no hook).
+/// it waits on (a question, or a permission on a harness that asks no hook); or a sandbox
+/// block's Notice raised in the turn it ended on, which it was told to wait on (#1663).
 fn task_prompt(held: &Held, chat: u32) -> Option<purlis_core::awareness::Prompt> {
     use purlis_core::awareness::Prompt;
+    let glance = held.board().glance(chat);
     if held.asks_open_for(chat) {
         Some(Prompt::Permission)
-    } else if held.board().glance(chat).waits_on_its_prompt() {
+    } else if glance.waits_on_its_prompt() {
         Some(Prompt::Other)
+    } else if held.chats().blocks().waits_on_a_notice(
+        chat,
+        glance.turns,
+        glance.state == purlis_core::state::State::Waiting,
+    ) {
+        Some(Prompt::SandboxBlock)
     } else {
         None
     }
@@ -11376,6 +11384,38 @@ mod tests {
         // Once: the next turn is told nothing more of the same prompt, and never its words.
         assert_eq!(told(&held), Vec::new());
         assert!(!format!("{waiting:?}").contains("persona where"));
+    }
+
+    #[test]
+    fn the_asking_chat_is_told_once_that_its_task_waits_on_a_sandbox_block() {
+        // #1663: a task's command was refused, a Notice went up on its tab, and the task was
+        // told to wait for the person's answer. The chat that asked for it is told so.
+        use purlis_core::awareness::{Prompt, Tell};
+        let plane = a_plane_with_personas();
+        let host = Pretend::default();
+        let (planes, id, steward) = a_steward_chat(&host, &plane);
+        let held = planes.held(&id).expect("held");
+        let task = a_task_of(&held, &id, steward, "check prod");
+        works(&held, task);
+        working(&held, &id, steward, Tell::Start);
+        let told = |held: &Held| working(held, &id, steward, Tell::Turn).waiting_on_you;
+
+        // The Notice goes up mid-turn: still running, nothing to tell yet.
+        let turn = held.board().glance(task).turns;
+        held.chats().blocks().raised(task, turn);
+        assert!(told(&held).is_empty(), "its turn has not ended");
+
+        // Its turn ends on the block: told once.
+        the_board_hears(&held, task, Event::Stop);
+        assert_eq!(
+            told(&held).iter().map(|one| one.prompt).collect::<Vec<_>>(),
+            [Prompt::SandboxBlock]
+        );
+        assert!(told(&held).is_empty(), "once");
+
+        // A new turn moves it on, and a later end of turn is no block's.
+        rests(&held, task);
+        assert!(told(&held).is_empty());
     }
 
     #[test]

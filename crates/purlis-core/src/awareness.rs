@@ -68,7 +68,12 @@ pub struct Known {
 pub enum Prompt {
     /// Its harness asked the person's permission for a tool call, and purlis holds the ask.
     Permission,
-    /// Its harness said it is waiting on the person, and not for what.
+    /// Its sandbox blocked it, and it waits for the person's answer to the block's Notice
+    /// (#1663).
+    SandboxBlock,
+    /// Its harness said it is waiting on the person, and not for what. A prompt a newer app
+    /// names that this build does not know reads as this one (last, as serde asks).
+    #[serde(other)]
     Other,
 }
 
@@ -686,6 +691,7 @@ fn waiting_line(working: &Working) -> Option<String> {
                 match task.prompt {
                     Prompt::Permission => "for a permission",
                     Prompt::Other => "to answer it",
+                    Prompt::SandboxBlock => "to answer a sandbox block's Notice",
                 }
             )
         })

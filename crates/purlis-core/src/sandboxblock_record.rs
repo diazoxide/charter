@@ -12,8 +12,9 @@
 //! # What is never kept
 //!
 //! A refused path, a command, its arguments or its output. A Block names a host only for a
-//! refused connection, and only what reads as a host ([`crate::sandbox::hosts::Host::parse`]),
-//! so a line a chat wrote cannot put anything else here. What a chat sends is still data: its
+//! refused connection (the host its Notice offered to allow) or a refused lookup (the host a
+//! program said it looked up, never offered), and only what passes the check a grant makes of a
+//! host ([`super::named_host`]), so a line a chat wrote cannot put anything else here. What a chat sends is still data: its
 //! chat's name is what the person called it, and a host it names may be one it never tried.
 //!
 //! # Where and how
@@ -106,9 +107,17 @@ pub struct Entry {
     /// (`host`, `write`, `vault`, `persona-hosts`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub what: Option<String>,
-    /// The host and port (`api.example.com:443`); for an Allow, what it names.
+    /// The host and port (`api.example.com:443`); for an Allow, what it names. For a Block,
+    /// only a refused connection's (`connect` + `host`), checked as a grant checks a host
+    /// ([`super::named_host`]): the host the Notice offered to allow (#1663).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target: Option<String>,
+    /// For a Block of a refused lookup (`lookup` + `host`): the host the program said it
+    /// looked up, checked as a grant checks a host (#1663). **Never one to offer to allow**: a
+    /// program's own printed words named it, so it is untrusted, and allowing it would not let
+    /// that program through. A reader shows it as text and offers nothing on it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub looked_up: Option<String>,
     #[serde(default, skip_serializing_if = "Chat::is_empty")]
     pub chat: Chat,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -139,6 +148,7 @@ impl Entry {
             block: Some(*block),
             what: None,
             target: target.and_then(|named| host_of(block, named)),
+            looked_up: target.and_then(|named| looked_up_of(block, named)),
             chat,
             persona: persona.map(str::to_owned),
             scope: None,
@@ -162,6 +172,7 @@ impl Entry {
             block: None,
             what: Some(what.to_owned()),
             target: Some(target.to_owned()),
+            looked_up: None,
             chat,
             persona: persona.map(str::to_owned),
             scope: Some(scope.to_owned()),
@@ -191,12 +202,20 @@ impl Entry {
 /// Who decides every Allow and removal written today: the person at this machine.
 pub const WHO: &str = "you";
 
-/// The host `named` reads as, for a refused connection; nothing for any other block.
+/// The host `named` is, as a grant would name it ([`super::named_host`]), for a refused
+/// connection; nothing for any other block.
 fn host_of(block: &Block, named: &str) -> Option<String> {
     ((block.operation, block.kind) == (Operation::Connect, Kind::Host))
-        .then(|| crate::sandbox::hosts::Host::parse(named).ok())
+        .then(|| super::named_host(named))
         .flatten()
-        .map(|host| host.to_string())
+}
+
+/// The host `named` is, checked as a grant checks one, for a refused lookup; nothing for any
+/// other block. Shown, never offered (#1663).
+fn looked_up_of(block: &Block, named: &str) -> Option<String> {
+    ((block.operation, block.kind) == (Operation::Lookup, Kind::Host))
+        .then(|| super::named_host(named))
+        .flatten()
 }
 
 /// One machine's record, under a data home.
