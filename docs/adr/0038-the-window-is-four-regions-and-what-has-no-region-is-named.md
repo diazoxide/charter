@@ -319,7 +319,8 @@ too. Memory stays the view the side opens on.
 
 **The title bar's ✋ opens the Inbox**, of the project in front where something waits there, and
 otherwise of the first project along the strip with something waiting. The ✋ is no longer the
-queue's only place: its count is the Inbox's, and its list is opened now only where something
-asks for it (the away summary's dispatches refused while nobody was there), until #1693 and
-#1695 move those into the Inbox and retire the list. ⌘⇧I (Ctrl+Shift+I elsewhere) shows the
+queue's only place: its count is the Inbox's. Its list no longer holds the dispatches refused
+while nobody was there or the chats whose Smart close stopped: since #1693 each is an update in
+the Inbox, answered there, and the away summary's part for the refused dispatches opens the
+Inbox. #1695 retires what is left of the list. ⌘⇧I (Ctrl+Shift+I elsewhere) shows the
 Inbox, and so does its palette row.

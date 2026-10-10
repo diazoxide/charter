@@ -23,6 +23,7 @@ import "./styles.css";
 import {
   commands,
   type Ask,
+  type AwayRefusal,
   type ForgeRow,
   type ForgeWord,
   type FoundFile,
@@ -107,7 +108,6 @@ import type { Needing, OtherAsk, PermissionAsk, Quiet } from "./NeedsYou";
 import { answerAsk, usePermissionAsks } from "./permissionAsks";
 import { answerThrough, useAsks } from "./asks";
 import { useAwayRefusals } from "./dispatchAway";
-import type { AwayItem } from "./AwayRefusals";
 import { useUpdates } from "./Updates";
 import { StripTablist, useTabIds } from "./StripTablist";
 import { noTabs, SETTINGS_TAB_TITLE } from "./tabs";
@@ -1708,33 +1708,22 @@ function App() {
   );
 
   /**
-   * **Every project's dispatches refused while nobody was there** (#1507): items of the same
-   * list, attached to no chat. Allow from now on grants the one pair for the person on this
-   * machine, Never for this pair is their never, and the core's sentence is said for each;
-   * Dismiss says nothing.
+   * **Every project's dispatches refused while nobody was there** (#1507): updates in each
+   * project's Inbox (#1693), attached to no chat. Allow from now on grants the one pair for the
+   * person on this machine, Never for this pair is their never, and the core's sentence is said
+   * for each; Dismiss says nothing.
    */
   const awayRefusals = useAwayRefusals(planes);
-  /** Goes up each time a project's away summary asks the needs-you list open (#1551). */
-  const [needsYouAsked, setNeedsYouAsked] = useState(0);
-  const showNeedsYou = useCallback(() => setNeedsYouAsked((was) => was + 1), []);
-  const away = useMemo<AwayItem[]>(
-    () =>
-      planes.flatMap((plane) =>
-        (awayRefusals.held[plane] ?? []).map((one) => ({
-          ...one,
-          plane,
-          project: calledOn(plane),
-        })),
-      ),
-    [planes, awayRefusals.held],
-  );
+  const { allow: allowAway, dismiss: dismissAway, never: neverAway } = awayRefusals;
+  /** One answer for every project's view, so none is drawn again for a new one. */
   const answerAway = useCallback(
-    (item: AwayItem, how: "allow" | "dismiss" | "never") => {
-      void awayRefusals[how](item.plane, item).then((answer) => {
+    (plane: PlaneId, item: AwayRefusal, how: "allow" | "dismiss" | "never") => {
+      const answering = { allow: allowAway, dismiss: dismissAway, never: neverAway }[how];
+      void answering(plane, item).then((answer) => {
         if (answer !== undefined) setReport({ from: `needs.away.${how}`, ...answer });
       });
     },
-    [awayRefusals],
+    [allowAway, dismissAway, neverAway],
   );
 
   /** And the chats that can be waiting without saying so, for the faint hand (charter-app#52). */
@@ -2008,12 +1997,7 @@ function App() {
           onPress: pressNeeding,
           asks,
           onAnswer: answer,
-          away,
-          onAllowAway: (item: AwayItem) => answerAway(item, "allow"),
-          onDismissAway: (item: AwayItem) => answerAway(item, "dismiss"),
-          onNeverAway: (item: AwayItem) => answerAway(item, "never"),
           onLook: awayRefusals.read,
-          openAsked: needsYouAsked,
           asked: askedCount,
           others: otherAsks,
           // A core that has said nothing of its asks has no Inbox worth opening (it would only
@@ -2154,7 +2138,7 @@ function App() {
           shellAsked={shellAsk?.plane === plane ? shellAsk : undefined}
           fileAsked={fileAsk?.plane === plane ? fileAsk : undefined}
           awayRefused={awayRefusals.held[plane]}
-          onShowNeedsYou={showNeedsYou}
+          onAway={answerAway}
           waiting={registry.held[plane]}
           inboxAsked={inboxAsk?.plane === plane ? inboxAsk.at : undefined}
         />

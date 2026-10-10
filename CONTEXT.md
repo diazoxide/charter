@@ -709,7 +709,11 @@ _Avoid_: queue, alerts, notifications
 
 **Update**:
 Something the person may want to know that waits on nothing: a task finished or failed, a doctor
-finding, a chat that resumed. Dismissable, and never counted on the ✋. Not an **Ask**.
+finding, a chat that resumed, a sandbox change, a dispatch refused while nobody was there, a
+Smart close that stopped. Listed in the **Inbox** after the asks, newest first, and kept a day per
+machine in purlis's data home, never in a project, so it survives a relaunch (#1693). Read and
+dismissed one at a time or all at once (Mark all read, Dismiss all), and never counted on the ✋.
+A task that failed is an update and not an **Ask**. Not an **Ask**.
 _Avoid_: notification, news
 
 **Kill switch**:

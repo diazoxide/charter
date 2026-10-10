@@ -87,6 +87,8 @@ struct World {
     locks: Locks,
     names: Vec<(u32, &'static str)>,
     askers: Vec<(u32, u32)>,
+    /// Chats in the queue only for tasks of theirs that came to nothing (#1693).
+    only_failed: Vec<u32>,
 }
 
 impl World {
@@ -101,6 +103,7 @@ impl World {
             locks: Locks::none(),
             names: Vec::new(),
             askers: Vec::new(),
+            only_failed: Vec::new(),
         }
     }
 
@@ -133,6 +136,7 @@ impl World {
             locks: &self.locks,
             name_of: &name_of,
             asker_of: &asker_of,
+            only_failed: &|session| self.only_failed.contains(&session),
         })
     }
 }
@@ -292,6 +296,26 @@ fn a_chat_in_the_queue_is_a_terminal_prompt_where_it_stopped_on_one_and_a_questi
     );
     assert!(asks.iter().all(|ask| ask.answer == AnswerPath::InItsPane));
     assert_eq!(asks[0].says, "Waiting in its terminal");
+}
+
+#[test]
+fn a_chat_in_the_queue_only_for_tasks_that_came_to_nothing_asks_nothing() {
+    // #1693 (D-1690-6): a failed task is an update in the Inbox, not an ask, so a chat whose
+    // only reason to be in the queue is a failure below it is not counted. One that also waits
+    // on the person's reply still is.
+    let mut world = World::new();
+    world.queue = vec![2, 3, 4];
+    world.at_prompt = vec![4];
+    world.only_failed = vec![2];
+
+    let asks = world.asks();
+
+    assert_eq!(
+        asks.iter()
+            .map(|ask| (ask.session, ask.source))
+            .collect::<Vec<_>>(),
+        [(3, AskSource::Question), (4, AskSource::Terminal)]
+    );
 }
 
 #[test]

@@ -32,7 +32,7 @@
  *
  * - a dispatch refused while nobody was at its chat (#1507) counts when it was last refused
  *   inside a time away, by the time its item keeps (`AwayRefusal.latest`), for as long as its
- *   item stands in the title bar's needs-you list, which is where it is answered (#1551).
+ *   item stands, as an update in the Inbox, which is where it is answered (#1551, #1693).
  *
  * **The seam for what else happened while away.** A part is a kind, a count's words and the
  * places it goes to. Another source joins as another {@link AwayPartKind} with its own items
@@ -68,9 +68,9 @@ export type AwayGo =
   | { to: "chat"; session: number }
   /** A task that has finished: its finished row, under the session that asked for it. */
   | { to: "finished"; task: FinishedTask }
-  /** A dispatch refused while nobody was there: the title bar's needs-you list, where it is
+  /** A dispatch refused while nobody was there: the Inbox, where it is an update and is
    *  answered. */
-  | { to: "needs-you" };
+  | { to: "inbox" };
 
 /** One thing a part counts, and what its line in the part's list says. */
 export type AwayItem = { key: string; says: string; go: AwayGo };
@@ -264,7 +264,7 @@ export function awaySummaryOf({
     .map((item): AwayItem => ({
       key: `refused:${item.asking}:${item.target}:${item.workspace ?? ""}`,
       says: `${clipped(item.asking)} wanted ${clipped(item.target)}`,
-      go: { to: "needs-you" },
+      go: { to: "inbox" },
     }));
   return { done, failed, waiting, refused };
 }

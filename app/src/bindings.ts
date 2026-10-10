@@ -748,6 +748,23 @@ export const commands = {
 	 */
 	forgetSandboxBlock: (plane: PlaneId, session: number, shown: BlockShown) => typedError<boolean, string>(__TAURI_INVOKE("forget_sandbox_block", { plane, session, shown })),
 	/**
+	 *  **A project's updates** (#1693): kept a day on this machine, newest first, dismissed ones
+	 *  left out. None where this machine keeps no data home.
+	 */
+	inboxUpdates: (plane: PlaneId) => typedError<InboxUpdate[], string>(__TAURI_INVOKE("inbox_updates", { plane })),
+	/**
+	 *  **Notes what the window derived from a source** (#1693): each update whose key the project
+	 *  does not keep yet is kept, unread; one it keeps, dismissed or not, is left as it is. One
+	 *  older than a day is not kept. Answers the project's updates as [`inbox_updates`] does.
+	 */
+	noteInboxUpdates: (plane: PlaneId, noted: UpdateNoted[]) => typedError<InboxUpdate[], string>(__TAURI_INVOKE("note_inbox_updates", { plane, noted })),
+	/**
+	 *  **Mark read, or Dismiss** (#1693, I-10): the updates named by `keys`, or every one the
+	 *  project keeps where `keys` is null — Mark all read and Dismiss all. Updates only: no ask is
+	 *  answered here. Answers the project's updates as [`inbox_updates`] does.
+	 */
+	settleInboxUpdates: (plane: PlaneId, keys: string[] | null, how: UpdateSettled) => typedError<InboxUpdate[], string>(__TAURI_INVOKE("settle_inbox_updates", { plane, keys, how })),
+	/**
 	 *  Sends what a pane typed to the session's program. Anything but the terminal's own answer
 	 *  drops a curation prompt still waiting to be typed into it (`Held::operator_input`).
 	 */
@@ -4916,6 +4933,23 @@ export type InForce = {
 	source: string,
 };
 
+/**  One update, as the window draws it. */
+export type InboxUpdate = {
+	/**  Its source's own name for it: what the window notes, settles and matches it by. */
+	key: string,
+	kind: UpdateKind,
+	/**  When it happened, in seconds since 1970. */
+	at: number,
+	/**  The chat it is about, while that number means one. */
+	session: number | null,
+	/**  Who it is about, the session first: names, as data. */
+	chain: string[],
+	/**  What happened, in one line: data, never markup. */
+	says: string,
+	/**  The person has read it. */
+	read: boolean,
+};
+
 /**
  *  What has contributed what to this window — ADR 0041's item 2, and the thing every
  *  later decision about extensions is read off.
@@ -7849,6 +7883,37 @@ export type Unsaid =
  *  be read.
  */
 "not_known";
+
+/**  What kind of thing happened, as the window names it. */
+export type UpdateKind = 
+/**  A task finished: done, cancelled, or ended by the person. */
+"task-done" | 
+/**  A task came to nothing: failed, blocked, ended without a report, or did not start. */
+"task-failed" | 
+/**  The doctor found something. */
+"doctor" | 
+/**  A chat came back: resumed, or started fresh in its place. */
+"resumed" | 
+/**  A chat's sandbox refused something that is no ask. */
+"sandbox" | 
+/**  A dispatch was refused while nobody was at its chat (#1507). */
+"refused-away" | 
+/**  A Smart close stopped without its record (SI-8f). */
+"smart-close";
+
+/**  An update the window derived from its source, to be noted. */
+export type UpdateNoted = {
+	key: string,
+	kind: UpdateKind,
+	/**  When it happened, by its source's own time, in seconds since 1970. */
+	at: number,
+	session: number | null,
+	chain: string[],
+	says: string,
+};
+
+/**  What the person did with updates: Mark read, or Dismiss. */
+export type UpdateSettled = "read" | "dismissed";
 
 /**  One turn of the trend. */
 export type UsageTurn = {

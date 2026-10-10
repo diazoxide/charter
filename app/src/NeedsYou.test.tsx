@@ -841,28 +841,4 @@ describe("the hand opens the Inbox (#1692, I-2)", () => {
     expect(opened).toBe(1);
     expect(screen.queryByRole("menu")).toBeNull();
   });
-
-  it("still opens its list where something asks it open: the dispatches refused while you were away", async () => {
-    const { rerender } = render(
-      <NeedsYouMenu
-        quiet={[]}
-        items={[needing("/a", 3, "ops", "charter")]}
-        asked={1}
-        onPress={() => {}}
-        onInbox={() => {}}
-        openAsked={0}
-      />,
-    );
-    rerender(
-      <NeedsYouMenu
-        quiet={[]}
-        items={[needing("/a", 3, "ops", "charter")]}
-        asked={1}
-        onPress={() => {}}
-        onInbox={() => {}}
-        openAsked={1}
-      />,
-    );
-    expect(await screen.findByRole("menu")).toBeInTheDocument();
-  });
 });

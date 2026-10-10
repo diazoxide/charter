@@ -165,7 +165,7 @@ describe("what a summary counts (#1514)", () => {
       {
         key: "refused:steward:devops:alpha",
         says: "steward wanted devops",
-        go: { to: "needs-you" },
+        go: { to: "inbox" },
       },
     ]);
   });

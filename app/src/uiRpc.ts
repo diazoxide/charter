@@ -4271,6 +4271,23 @@ export type InForce = {
 	source: string,
 };
 
+/**  One update, as the window draws it. */
+export type InboxUpdate = {
+	/**  Its source's own name for it: what the window notes, settles and matches it by. */
+	key: string,
+	kind: UpdateKind,
+	/**  When it happened, in seconds since 1970. */
+	at: number,
+	/**  The chat it is about, while that number means one. */
+	session: number | null,
+	/**  Who it is about, the session first: names, as data. */
+	chain: string[],
+	/**  What happened, in one line: data, never markup. */
+	says: string,
+	/**  The person has read it. */
+	read: boolean,
+};
+
 /**
  *  What has contributed what to this window — ADR 0041's item 2, and the thing every
  *  later decision about extensions is read off.
@@ -7204,6 +7221,37 @@ export type Unsaid =
  *  be read.
  */
 "not_known";
+
+/**  What kind of thing happened, as the window names it. */
+export type UpdateKind = 
+/**  A task finished: done, cancelled, or ended by the person. */
+"task-done" | 
+/**  A task came to nothing: failed, blocked, ended without a report, or did not start. */
+"task-failed" | 
+/**  The doctor found something. */
+"doctor" | 
+/**  A chat came back: resumed, or started fresh in its place. */
+"resumed" | 
+/**  A chat's sandbox refused something that is no ask. */
+"sandbox" | 
+/**  A dispatch was refused while nobody was at its chat (#1507). */
+"refused-away" | 
+/**  A Smart close stopped without its record (SI-8f). */
+"smart-close";
+
+/**  An update the window derived from its source, to be noted. */
+export type UpdateNoted = {
+	key: string,
+	kind: UpdateKind,
+	/**  When it happened, by its source's own time, in seconds since 1970. */
+	at: number,
+	session: number | null,
+	chain: string[],
+	says: string,
+};
+
+/**  What the person did with updates: Mark read, or Dismiss. */
+export type UpdateSettled = "read" | "dismissed";
 
 /**  One turn of the trend. */
 export type UsageTurn = {

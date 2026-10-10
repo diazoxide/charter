@@ -1,12 +1,23 @@
 import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render as renderBare, screen, waitFor, within } from "@testing-library/react";
+import {
+  cleanup,
+  configure,
+  render as renderBare,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
 import type { DoctorReport, DoctorRow } from "./bindings";
 import { forgetThisLaunch } from "./regions";
 import { findStripNamed } from "./test-strips";
+
+// The Inbox lists a doctor finding as an update too (#1693), in the side whether or not it is shown:
+// these tests are about the Notice, so the Inbox's copy is not what they find.
+configure({ defaultIgnore: 'script, style, [data-view="inbox"] *' });
 
 /**
  * **A Notice that carries a fix with a form draws that form** (#1250), against the whole

@@ -35,7 +35,7 @@ import {
  * where it lives (its question, its Notice, its prompt are there, answerable as they always
  * are); a finished task goes where a needs-you item's Go takes it: its chat while that is
  * open, else its finished row under the session that asked, where its report is. A dispatch
- * refused while nobody was at its chat (#1507) opens the title bar's needs-you list, where it
+ * refused while nobody was at its chat (#1507) opens the Inbox, where it is an update and it
  * is answered (#1551). Every line
  * the tasks and their sessions said stays in each session's Activity.
  *
@@ -52,7 +52,7 @@ export function AwaySummary({
   away,
   onShowChat,
   onShowFinished,
-  onShowNeedsYou,
+  onShowInbox,
 }: {
   /** What the project's summary counts now ({@link useAwaySummary}). */
   away: AwayNow;
@@ -60,8 +60,8 @@ export function AwaySummary({
   onShowChat: (session: number) => void;
   /** Goes to a finished task, as a needs-you item's Go does. */
   onShowFinished: (task: FinishedTask) => void;
-  /** Opens the title bar's needs-you list, where a refused dispatch is answered. */
-  onShowNeedsYou?: () => void;
+  /** Opens the Inbox, where a refused dispatch is answered (#1693). */
+  onShowInbox?: () => void;
 }) {
   const { summary, dismiss } = away;
   if (countedAway(summary) === 0) return null;
@@ -70,7 +70,7 @@ export function AwaySummary({
       ? onShowChat(where.session)
       : where.to === "finished"
         ? onShowFinished(where.task)
-        : onShowNeedsYou?.();
+        : onShowInbox?.();
   const parts = awayPartsSaid(summary);
   return (
     <Notice cause="away-summary" label={awaySaid(summary)} onDismiss={dismiss}>
@@ -138,7 +138,7 @@ function AwayPart({
   items: readonly AwayItem[];
   onGo: (where: AwayGo) => void;
   /** Whether every item goes to the one place, so the part is one link whatever it counts:
-   *  the refused dispatches, all answered in the title bar's needs-you list (#1551). */
+   *  the refused dispatches, all answered in the Inbox (#1551, #1693). */
   one?: boolean;
 }) {
   // Held here and opened on the press itself, as the title bar's list is (`NeedsYou.tsx`): a
