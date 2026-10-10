@@ -23,6 +23,8 @@ import { copyFaults, retiredTerms } from "./copy";
  *   and the window shows it word for word. So the literals of every `Err(…)`, `map_err(…)`,
  *   `ok_or(…)` and `ok_or_else(…)` inside a command, in every file of `app/src-tauri/src`, are
  *   copy. A command's file is found by its attribute, not listed, so a new one is read at once.
+ *   So are those of every function of the same file a command calls, and the helpers and
+ *   `const`s of the file that build them, called or passed by name (#1156, 2026-10-10).
  * - **What an `in_window` body calls.** A helper function or a `const` in the same file is read
  *   as if its text were inline. A call this check cannot read (a helper in another module) is
  *   named in `NOT_FOLLOWED` with why it holds no copy, or the check fails.
@@ -187,6 +189,11 @@ type Place = {
   notCopy?: readonly string[];
   /** Read the opener's spans only inside these: a command's body, for its errors. */
   within?: RegExp;
+  /**
+   * And inside every function of the same file a `within` span calls, and every one those call
+   * in turn: where a command's error is built when the command passes it on with `?`.
+   */
+  through?: boolean;
   /** Also read the helpers and `const`s of the same file that a span calls or names. */
   follow?: boolean;
 };
@@ -213,10 +220,25 @@ function rustFiles(dir: string): string[] {
   });
 }
 
+/**
+ * The errors of each command in `file`: in its body and in every function of the same file it
+ * calls, and the helpers and `const`s of the same file that build them (`Err(gone(id))`,
+ * `.map_err(not_kept)`). A call into another module is not followed and need not be named: it
+ * passes on an error the core wrote, which is #1156's own line.
+ */
+const commandErrors = (file: string): Place => ({
+  file,
+  what: "a command's error",
+  within: COMMAND,
+  through: true,
+  opener: ERRORS,
+  follow: true,
+});
+
 /** One place per file that holds a `#[tauri::command]`: the errors of each of its commands. */
 const COMMAND_PLACES: readonly Place[] = rustFiles(COMMANDS_DIR)
   .filter((file) => read(file).includes("#[tauri::command"))
-  .map((file) => ({ file, what: "a command's error", within: COMMAND, opener: ERRORS }));
+  .map(commandErrors);
 
 const PLACES: readonly Place[] = [
   {
@@ -293,6 +315,14 @@ const DISPATCH_PLACE =
   "the CLI's copy, or given a sentence of its own in in_window";
 
 /**
+ * The app's own error text, read since a command's error is followed into the functions of its
+ * file it calls (#1156): the window's words only, so reworded by the file's next owner.
+ */
+const APP_ERROR =
+  "a command's error built in a function the command calls (#1156); the window's words alone, " +
+  "reworded when the file's owner next touches it";
+
+/**
  * **Retired terms in the window's Rust copy, kept for now** (FR-3, #602), as `path: "text"`,
  * each with why: the Rust half of `copy.test.ts`'s `RETIRED_TERM_DEBT`, exactly, so paying one
  * off or adding one is a visible change. Empty is the goal. What is left is the core's sentences
@@ -325,6 +355,13 @@ const RETIRED_TERM_DEBT: Readonly<Record<string, string>> = {
     DISPATCH_PLACE,
   'crates/purlis-core/src/dispatchplace.rs: "purlis could not cut a worktree for this task: \u2026."':
     DISPATCH_PLACE,
+  'app/src-tauri/src/handoff.rs: "\u2026 Its worktree\'s folder was taken back, and git kept the branch \u2026 in \u2026."':
+    APP_ERROR,
+  'app/src-tauri/src/handoff.rs: "\u2026 The worktree cut for it, on the branch \u2026 in \u2026, could not be taken back: \u2026"':
+    APP_ERROR,
+  'app/src-tauri/src/opener.rs: "\u2026 is inside the project \u2026. A project is a plane of its own, and a plane inside another one is a workspace\'s clone \u2014 purlis wrote nothing. Pick a directory outside it."':
+    APP_ERROR,
+  "app/src-tauri/src/personas.rs: \"no persona '\u2026' on this plane\"": APP_ERROR,
 };
 
 /**
@@ -342,17 +379,28 @@ const NOT_FOLLOWED: Readonly<Record<string, string>> = {
 /** Words that read like a call before `(` and are not one. */
 const NOT_CALLS = new Set(["if", "match", "while", "for", "in", "return", "as", "move", "let"]);
 
-/** The helpers `span` calls and the `const`s it names, by how the source spells each. */
+/**
+ * The helpers `span` calls and the `const`s it names, by how the source spells each. A function
+ * an error is mapped through by name (`.map_err(not_kept)`, `.ok_or_else(gone)`) is a call too.
+ */
 function callsIn(masked: string, [from, to]: [number, number]): string[] {
-  const span = masked.slice(from, to);
+  const span = masked.slice(from, to + 1);
   const bare = [...span.matchAll(/(?<![\w.:!])((?:\w+::)*)([a-z_]\w*)\s*\(/g)]
     .filter((one) => !NOT_CALLS.has(one[2]))
     .map((one) => `${one[1]}${one[2]}`);
+  const passed = [...span.matchAll(/\.(?:map_err|ok_or_else)\(\s*((?:\w+::)*)([a-z_]\w*)\s*\)/g)];
+  // The span may be that argument itself, when the opener is `.map_err(` (a command's error).
+  const whole = /^\(\s*((?:\w+::)*)([a-z_]\w*)\s*\)$/.exec(span);
+  if (whole && /\.(?:map_err|ok_or_else)$/.test(masked.slice(Math.max(0, from - 12), from))) {
+    passed.push(whole);
+  }
   const methods = [...span.matchAll(/\bself\.([a-z_]\w*)\s*\(/g)].map((one) => `self.${one[1]}`);
   const consts = [...span.matchAll(/(?<![\w:])((?:\w+::)*)([A-Z][A-Z0-9_]*[A-Z0-9])\b/g)].map(
     (one) => `${one[1]}${one[2]}`,
   );
-  return [...new Set([...bare, ...methods, ...consts])];
+  return [
+    ...new Set([...bare, ...passed.map((one) => `${one[1]}${one[2]}`), ...methods, ...consts]),
+  ];
 }
 
 /**
@@ -393,11 +441,22 @@ function writtenAt(masked: string, call: string, at: number): [number, number][]
 
 /**
  * The spans `place` reads in `masked`, and the calls it could not follow: its opener's spans
- * (inside `within`'s, if it names one), then, if it follows, every helper and `const` of the
- * same file they reach.
+ * (inside `within`'s, if it names one, and the functions those call if it goes `through`), then,
+ * if it follows, every helper and `const` of the same file they reach.
  */
 function spansOf(masked: string, place: Place): { read: [number, number][]; unread: string[] } {
   const outer = place.within ? spans(masked, place.within) : null;
+  if (outer !== null && place.through) {
+    const seen = new Set<string>();
+    for (let next = 0; next < outer.length; next += 1) {
+      for (const call of callsIn(masked, outer[next])) {
+        // A function, not a `const`: its own errors are what reach the window.
+        if (seen.has(call) || /^[A-Z]/.test(call)) continue;
+        seen.add(call);
+        outer.push(...writtenAt(masked, call, outer[next][0]));
+      }
+    }
+  }
   const read = spans(masked, place.opener).filter(
     ([open]) => outer === null || outer.some(([from, to]) => open > from && open < to),
   );
@@ -508,7 +567,7 @@ function faultsOf(place: Place): string[] {
 }
 
 describe("the errors a command answers the window with", () => {
-  const place = { file: "x.rs", what: "a test", within: COMMAND, opener: ERRORS };
+  const place = commandErrors("x.rs");
   const texts = (source: string) => shownIn(source, place).map((one) => one.text);
 
   it("reads Err, map_err, ok_or and ok_or_else inside a command, and nothing else", () => {
@@ -540,6 +599,54 @@ describe("the errors a command answers the window with", () => {
       "a stock phrase: say what happened instead",
       "an exclamation mark: say it plainly",
     ]);
+  });
+
+  it("reads a helper of the same file that builds the error, called or passed by name", () => {
+    const source = `
+      const NOT_KEPT: &str = "purlis did not keep it.";
+      fn gone(id: u32) -> String { format!("Chat {id} is gone.") }
+      fn not_kept(err: std::io::Error) -> String { format!("{} {err}", NOT_KEPT) }
+      fn no_such(name: &str) -> String { said(name) }
+      fn said(name: &str) -> String { format!("{name} is not open.") }
+      fn quiet() -> &'static str { "Not an error, never reached!" }
+      #[tauri::command]
+      fn stop(id: u32, name: String) -> Result<(), String> {
+          let one = find(id).ok_or_else(|| gone(id))?;
+          let two = find(id).ok_or_else(no_such_label)?;
+          write(one).map_err(not_kept)?;
+          if two { return Err(no_such(&name)); }
+          Err(other::sentence(why))
+      }`;
+    expect(texts(source)).toEqual([
+      "purlis did not keep it.",
+      "Chat … is gone.",
+      "… …",
+      "… is not open.",
+    ]);
+  });
+
+  it("reads the errors of a function of the same file the command calls, and of what that calls", () => {
+    const source = `
+      fn revoke(id: &str) -> Result<(), String> {
+          let label = "not an error";
+          find(id).ok_or_else(|| "That grant is no longer there.".to_owned())?;
+          write(id)
+      }
+      fn write(id: &str) -> Result<(), String> { Err(format!("{id} was not written.")) }
+      fn unused() -> Result<(), String> { Err("Not called by a command!".into()) }
+      #[tauri::command]
+      pub fn revoke_grant(id: String) -> Result<(), String> { revoke(&id) }`;
+    expect(texts(source)).toEqual(["That grant is no longer there.", "… was not written."]);
+  });
+
+  it("holds a bad sentence a helper builds for a command's error to the rules", () => {
+    // The mutation: the helper's sentence, not the command's own text, breaks the guide.
+    const source = `
+      fn gone(id: u32) -> String { format!("Chat {id} Is No Longer Open") }
+      #[tauri::command]
+      fn stop(id: u32) -> Result<(), String> { Err(gone(id)) }`;
+    expect(texts(source)).toEqual(["Chat … Is No Longer Open"]);
+    expect(texts(source).flatMap((text) => copyFaults(text, "shown"))).toHaveLength(1);
   });
 
   it("finds every file of the app that holds a command", () => {
@@ -582,6 +689,19 @@ describe("what an in_window body calls", () => {
     expect(texts(source)).toEqual(["'…' is NEVER a repo"]);
     // And the rules see the fault in it.
     expect(copyFaults(texts(source)[0], "shown")).toHaveLength(1);
+  });
+
+  it("holds a bad sentence a helper builds for an in_window arm to the rules", () => {
+    // The mutation: only the helper's text breaks the guide, so only following it finds it.
+    const source = `
+      fn listed(n: usize) -> String { format!("{n} Pieces Were Not Cut") }
+      impl X {
+          pub fn in_window(&self) -> String {
+              match self { Self::A(n) => listed(*n), Self::B => "Nothing was cut.".into() }
+          }
+      }`;
+    expect(texts(source)).toEqual(["… Pieces Were Not Cut", "Nothing was cut."]);
+    expect(texts(source).flatMap((text) => copyFaults(text, "shown"))).toHaveLength(1);
   });
 
   it("names a call into another module it cannot read", () => {

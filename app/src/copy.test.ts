@@ -66,6 +66,12 @@ describe("the copy guide's mechanical rules (docs/ui-copy.md)", () => {
     expect(copyFaults("Show in Files", "shown")).toEqual([]);
   });
 
+  it("takes a path to a Settings group as the labels it names, and reads the rest", () => {
+    expect(copyFaults("in Settings › Project › Dispatch", "shown")).toEqual([]);
+    expect(copyFaults("Lift it in Settings › You › This machine.", "shown")).toEqual([]);
+    expect(copyFaults("Open Settings › You › Editor Before Going", "shown")).toHaveLength(1);
+  });
+
   it("reads a key chord as a key, not as words", () => {
     expect(copyFaults("Find (Ctrl+Shift+F)", "shown")).toEqual([]);
     expect(copyFaults("Close (CmdOrCtrl+Option+W)", "shown")).toEqual([]);
