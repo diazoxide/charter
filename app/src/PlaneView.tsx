@@ -393,6 +393,7 @@ import { oneChatMidTurn, type Ending } from "./QuitWarning";
 import { useTextSizes } from "./textSize";
 import { focusStands } from "./Cockpit";
 import {
+  askSettingsLink,
   landing,
   linkToGroup,
   SETTINGS_ACTION,
@@ -8408,6 +8409,11 @@ function ByHandBanner({ note, onAnswer }: { note: ByHandNote; onAnswer: (open: b
   );
 }
 
+/** What Open file says when no editor is chosen: the words the file tab says it in. */
+const NO_EDITOR = "Choose your editor in Settings first.";
+/** Where an editor is chosen: Settings › You › Editor, its one setting focused (SE-22). */
+const CHOOSE_EDITOR: SettingsLink = { group: "you.editor", setting: "you.editor.yours" };
+
 /** What a chat's start found to say (ADR 0085, V35): its lines, and the branches whose
  *  `AGENTS.md` they name as the operator's and hidden by charter's line (NO-4). */
 type StartNotes = { notes: readonly string[]; agentsMd: readonly TheirAgentsMd[] };
@@ -8450,7 +8456,7 @@ function StartNotice({
   const openFile = (at: TheirAgentsMd) => {
     const editor = yourEditor();
     if (editor === undefined) {
-      setSaid("Choose your editor in Settings first.");
+      setSaid(NO_EDITOR);
       return;
     }
     void commands
@@ -8508,6 +8514,12 @@ function StartNotice({
       at="pane"
       label="What this chat's start found"
       fixes={first === undefined ? undefined : [first, ...rest]}
+      // With no editor chosen, Open file's answer goes where one is chosen (#1244, SE-22).
+      link={
+        said === NO_EDITOR
+          ? { label: "Choose your editor", onPress: () => askSettingsLink(plane, CHOOSE_EDITOR) }
+          : undefined
+      }
       onDismiss={onDismiss}
     >
       {/* Once every named file is moved aside, the lines about it are no longer true. */}
