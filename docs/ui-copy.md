@@ -109,8 +109,8 @@ empty state and error copy follow it.
   names, no protocol names where the effect can be said instead.
 - **A command is written in code font** (`<code>`) where the command line is the way to do
   something: *You can add it later with <code>purlis workspace vision</code>.* Only name
-  commands the `purlis` binary has. A panel's text from Rust is plain text and cannot carry
-  code font, so a command there reads as raw backticks (#1156).
+  commands the `purlis` binary has. A panel's text from Rust carries a command in backticks,
+  and the window draws it in code font (#1156).
 - **Counts are digits, and plurals agree:** *1 secret*, *2 secrets* (`counted` in
   `Vaults.tsx`).
 - **An `aria-label` says what the visible label says**, and an icon-only control's label is the
@@ -148,9 +148,25 @@ Through an expression, both branches of a conditional and the right-hand side of
 `??` count as shown; the condition does not.
 
 Copy written in Rust and sent to the window is held to the same rules by `copy.rust.test.ts`,
-which reads the string literals of named places in the Rust source and builds nothing: purlis's
-own panels' empty states (a headline and a body, not the offer's id), the native menu's and the
-tray's labels, and the core's `in_window` sentences. A format string's `{name}` reads as `…`. A
-new place the window shows Rust copy from is added to its `PLACES`. Copy assembled from parts at
-run time is outside the check. DS-8's audit of every surface reads what the check cannot, and a
-review reads every new string against this page.
+which reads the string literals of named places in the Rust source and builds nothing:
+
+- purlis's own panels' empty states (a headline and a body, not the offer's id);
+- the native menu's and the tray's labels;
+- the core's `in_window` sentences, and what an `in_window` body calls in its own file: a
+  helper function, a `const`, and `self.to_string()`, read as the type's `Display` and its
+  variants' `#[error(…)]` text. A call into another module is either read or named in
+  `NOT_FOLLOWED` with why it holds no copy, or the check fails;
+- the errors of every `#[tauri::command]` in `app/src-tauri/src`: the literals inside its
+  `Err(…)`, `map_err(…)`, `ok_or(…)` and `ok_or_else(…)`. The window shows a command's error
+  word for word. A file is found by its attribute, so a new command is read without a list.
+
+A format string's `{name}` reads as `…`. A new place the window shows Rust copy from is added to
+its `PLACES`. A fault found there that cannot be fixed at once goes in its `KEPT`, with why, and
+on #1156's checklist.
+
+Outside the check: copy assembled from parts at run time, and an error the core writes for the
+terminal that a command passes on as it was said (`map_err(|err| err.to_string())`). That text
+reaches the window, but the source cannot tell it from terminal-only `Display` text. Such an
+error gets an `in_window` of its own when the window needs its words, as `worktree::Refusal`
+has. DS-8's audit of every surface reads what the check cannot, and a review reads every new
+string against this page.
