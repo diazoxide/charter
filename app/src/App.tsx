@@ -1265,6 +1265,7 @@ function App() {
       focusWorkspace: () => undefined,
       pickClone: () => undefined,
       focusBranch: () => undefined,
+      focusRepo: () => undefined,
       newBranch: () => undefined,
       cloneMissing: async () => nowhere(),
       askDropMembership: () => undefined,

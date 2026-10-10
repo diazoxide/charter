@@ -202,6 +202,7 @@ function doing(): Doing & { calls: string[] } {
       return { ok: true as const };
     }),
     pickClone: note("pickClone"),
+    focusRepo: note("focusRepo"),
     focusBranch: vi.fn((cut: Cut) => {
       calls.push(`focusBranch:${cut.repo}/${cut.piece}`);
     }),
@@ -1221,6 +1222,16 @@ describe("the one list of actions", () => {
       expect(by(catalogue(now()), "clone.pick:svc")).toBeUndefined();
     });
 
+    it("offers its own folder's cockpit, which narrows the explorer and changes nothing (#1152)", async () => {
+      const hands = doing();
+      const offers = catalogue(now({ clones: [SVC] }));
+
+      expect(by(offers, "clone.focus:svc")?.title).toBe("Focus on repo svc");
+      await run(offers, "clone.focus:svc", hands);
+
+      expect(hands.calls).toEqual(["focusRepo:svc"]);
+    });
+
     it("offers a new branch in it, which cuts one and starts nothing (GL-1)", async () => {
       // ADR 0072 §4: the action that cuts a piece is "New branch", and it names the repo it
       // will be cut in. The dialog it opens names the branch.
@@ -1234,10 +1245,17 @@ describe("the one list of actions", () => {
       expect(hands.calls).toEqual(["newBranch:svc"]);
     });
 
-    it("lists the new tab, the new branch, the pick, then Read again, and nothing below the line", () => {
-      // Read again is found only while a read stands refused (#1244).
+    it("lists its focus, the new tab, the new branch, the pick, then Read again, and nothing below the line", () => {
+      // Its own folder's cockpit first, as a branch's is (#1152). Read again is found only while
+      // a read stands refused (#1244).
       expect(menuOn({ on: "clone", repo: "svc" })).toEqual({
-        above: ["clone.chat:svc", "clone.branch:svc", "clone.pick:svc", READ_AGAIN],
+        above: [
+          "clone.focus:svc",
+          "clone.chat:svc",
+          "clone.branch:svc",
+          "clone.pick:svc",
+          READ_AGAIN,
+        ],
         below: [],
       });
     });
@@ -2286,8 +2304,9 @@ describe("the palette at fifty chats", () => {
     // workspace's 6. A fixed number, however many workspaces there are.
     // 829 since #1143: each of the 50 branches' own folder copied, revealed and given a shell
     // tab, three rows a branch as its browse and focus rows are.
+    // 839 since #1152: Focus on repo, one row in each of the ten clones.
     // This window has no todos loaded, so no `todo.` rows.
-    expect(offers).toHaveLength(829);
+    expect(offers).toHaveLength(839);
   });
 
   /**

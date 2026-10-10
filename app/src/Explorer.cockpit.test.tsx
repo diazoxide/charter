@@ -382,3 +382,93 @@ describe("the branch cockpit", () => {
     expect(cockpitDrawn()).toBe(true);
   });
 });
+
+/**
+ * **A repo's own folder has a cockpit too, without Merge and Done** (#1152, D-1152-3): the
+ * explorer narrowed to the clone itself — the branch it has checked out and how far that is from
+ * its upstream, the chats working in it, and its files. Merge and Done act on a branch folder
+ * purlis cut, so the header has neither, whatever the catalogue holds.
+ */
+describe("a repo's own folder's cockpit (#1152)", () => {
+  const REPO: Place = { workspace: "alpha", repo: "svc", piece: null };
+  const SVC = "/plane/workspaces/alpha/svc";
+  const REPO_STATE: WorkspaceState = {
+    ...STATE,
+    panels: { ...PANELS, paths: { svc: SVC } },
+    repos: {
+      workspace: "alpha",
+      cache_refused: null,
+      repos: [
+        {
+          name: "svc",
+          branch: "main",
+          unborn: false,
+          detached: null,
+          upstream: "origin/main",
+          ahead: 1,
+          behind: 0,
+          tracked: 0,
+          untracked: 0,
+          unreadable: null,
+          ci: null,
+          change: null,
+          sigil: null,
+          fetched_seconds_ago: null,
+          not_fetched: "nothing has fetched this checkout",
+        },
+      ],
+    },
+  };
+  const drawRepo = (state: WorkspaceState, offers: Catalogued = new Map()) =>
+    render(
+      <ChatsHere.Provider value={fixedChats(nothingKnown)}>
+        <Explorer
+          plane={PLANE}
+          workspace="alpha"
+          state={state}
+          chats={[WORKING, ELSEWHERE]}
+          spot={undefined}
+          onPick={() => {}}
+          onShowChat={() => {}}
+          offers={offers}
+          onPress={() => {}}
+          onReadAgain={() => {}}
+          onOpenFile={() => {}}
+          focus={REPO}
+          onFocus={() => {}}
+        />
+      </ChatsHere.Provider>,
+    );
+
+  it("narrows the explorer to the clone: its branch, its chats, its files, and no Merge or Done", async () => {
+    core({ ahead: 1, behind: 0, base: "origin/main" });
+    const merge = offer("worktree.merge:svc/one", "Merge branch fix/one into svc");
+    drawRepo(REPO_STATE, new Map([[merge.id, merge]]));
+
+    const head = screen.getByRole("region", { name: "Repo svc" });
+    expect(within(head).getByRole("heading", { name: "svc" })).toBeTruthy();
+    await within(head).findByText("on main · 1 ahead, 0 behind origin/main");
+    expect(within(head).queryByRole("button", { name: "Merge" })).toBeNull();
+    expect(within(head).queryByRole("button", { name: "Done" })).toBeNull();
+
+    const crumbs = screen.getByRole("navigation", { name: "Breadcrumb" });
+    expect(within(crumbs).getByText("svc").getAttribute("aria-current")).toBe("location");
+
+    const tree = screen.getByRole("tree", { name: "Chats and files of svc" });
+    const rows = within(tree).getAllByRole("treeitem");
+    // The chat working in the clone itself, and not the one in a branch folder.
+    expect(rows[0].textContent).toContain("steward 4");
+    expect(rows.some((row) => row.textContent?.includes("steward 3"))).toBe(false);
+    await within(tree).findByRole("treeitem", { name: /README\.md/ });
+  });
+
+  it("stands while the workspace holds the repo, and not once it is gone", () => {
+    core({ ahead: 0, behind: 0, base: null });
+    drawRepo(REPO_STATE);
+    expect(screen.queryByRole("region", { name: "Repo svc" })).not.toBeNull();
+    cleanup();
+
+    drawRepo({ ...REPO_STATE, panels: { ...PANELS, repos: [] } });
+    expect(screen.queryByRole("region", { name: "Repo svc" })).toBeNull();
+  });
+});

@@ -653,7 +653,7 @@ export function Explorer({
   );
 
   if (cockpit !== undefined) {
-    const { ref, name } = cockpit;
+    const { ref, name, on } = cockpit;
     return (
       <RovingFocusGroup.Root asChild orientation="vertical" {...stop}>
         <nav
@@ -669,9 +669,14 @@ export function Explorer({
             leave();
           }}
         >
-          <Breadcrumb workspace={workspace} repo={ref.repo} name={name} onLeave={leave} />
+          <Breadcrumb
+            workspace={workspace}
+            repo={ref.repo}
+            name={ref.piece === null ? undefined : name}
+            onLeave={leave}
+          />
           <CockpitHeader
-            name={name}
+            name={on}
             repo={ref.repo}
             piece={ref.piece}
             apart={apart}
@@ -1719,7 +1724,14 @@ export const fileFold = (workspace: string, ref: BranchFolderRef) =>
 
 /** The branch the explorer is focused on, while the workspace still lists it: its name as a
  *  branch, and as the explorer names branches. */
-type Cockpit = { ref: { repo: string; piece: string }; name: string; path: string | undefined };
+/** What the explorer is narrowed to: a branch's folder, or a repo's own (`piece` null, #1152).
+ *  `name` is what its tree is called, and `on` the branch its header names. */
+type Cockpit = {
+  ref: { repo: string; piece: string | null };
+  name: string;
+  on: string;
+  path: string | undefined;
+};
 
 /**
  * The cockpit to draw for `focus` (FM-5), or none: a focus on a branch of this workspace that
@@ -1732,13 +1744,18 @@ function cockpitOf(
 ): Cockpit | undefined {
   if (workspace === undefined || focus === undefined || focus.workspace !== workspace) return;
   const stands = focusStands(state, focus);
-  if (stands === undefined || focus.piece === null) return;
+  if (stands === undefined) return;
+  // A repo's own folder (#1152): named by the repo, its header by the branch it has checked out.
+  if (focus.piece === null)
+    return {
+      ref: { repo: focus.repo, piece: null },
+      name: focus.repo,
+      on: state.repos?.repos.find((one) => one.name === focus.repo)?.branch ?? "",
+      path: state.panels?.paths[focus.repo],
+    };
   const { piece } = stands;
-  return {
-    ref: { repo: focus.repo, piece: focus.piece },
-    name: piece?.branch || focus.piece,
-    path: piece?.path,
-  };
+  const name = piece?.branch || focus.piece;
+  return { ref: { repo: focus.repo, piece: focus.piece }, name, on: name, path: piece?.path };
 }
 
 /** What a branch's row is called: its branch, or the folder's name when the folder has none

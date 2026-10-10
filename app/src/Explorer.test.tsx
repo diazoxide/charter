@@ -656,7 +656,12 @@ describe("a clone row's menu", () => {
       within(menu)
         .getAllByRole("menuitem")
         .map((one) => one.getAttribute("aria-label")),
-    ).toEqual(["New tab in svc", "New branch in svc…", "Start new chats in svc"]);
+    ).toEqual([
+      "Focus on repo svc",
+      "New tab in svc",
+      "New branch in svc…",
+      "Start new chats in svc",
+    ]);
   });
 
   it("hands the catalogue's offer back when a row is pressed", async () => {
@@ -681,7 +686,8 @@ describe("a clone row's menu", () => {
     await screen.findByRole("menu");
     await userEvent.keyboard("{Enter}");
 
-    expect(pressed).toEqual(["clone.chat:svc"]);
+    // The first row, its own folder's cockpit (#1152).
+    expect(pressed).toEqual(["clone.focus:svc"]);
   });
 
   it("marks a picked clone as where the next chat starts, and only it", () => {

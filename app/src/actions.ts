@@ -391,6 +391,7 @@ export type Does =
   /** Focuses the explorer on one branch, which turns it into that branch's cockpit (FM-5): its
    *  state, its chats and its files. It changes nothing on disk. */
   | { verb: "focusBranch"; cut: Cut }
+  | { verb: "focusRepo"; repo: string }
   /** Makes a clone the spot the next chat starts in — the explorer's pick, one level up from a
    *  piece (charter-app#174). It starts nothing: the picker still asks, and the core still
    *  decides whether that directory can be started in. The path is the one the core spelled. */
@@ -881,6 +882,9 @@ export type Doing = {
   declareWorktreeDone: (cut: Cut) => Promise<Ran>;
   /** Focuses the explorer on that branch: its cockpit (FM-5). It starts and writes nothing. */
   focusBranch: (cut: Cut) => void;
+  /** Narrows the explorer to a clone of the focused workspace, its own folder (#1152): the
+   *  branch cockpit without Merge and Done. */
+  focusRepo: (repo: string) => void;
   /** Makes that clone where the next chat starts. It starts nothing, so it answers no `Ran`. */
   pickClone: (repo: string, path: string) => void;
   /** Opens the New branch dialog for that clone. It cuts nothing until it is answered. */
@@ -2095,6 +2099,11 @@ export function catalogue(now: Now): Offer[] {
   // aimed at the clone for that one tab; the second opens the New branch dialog; the third is
   // the explorer's pick. None writes anything by itself, so all three are above the line.
   for (const { repo, path } of now.clones ?? []) {
+    // Its own folder's cockpit first, as a branch's is (#1152): the explorer narrowed to the
+    // clone, which changes nothing, and has no Merge or Done (D-1152-3).
+    offers.push(
+      can(`clone.focus:${repo}`, `Focus on repo ${repo}`, { verb: "focusRepo", repo }, repo),
+    );
     offers.push(
       can(`clone.chat:${repo}`, `New tab in ${repo}`, { verb: "newTabIn", repo, path }, repo),
     );
@@ -2707,6 +2716,9 @@ export function perform(offer: Offer, doing: Doing): Ran | Promise<Ran> {
       return onePerPiece(does.cut, "merging", () => doing.mergeWorktree(does.cut));
     case "declareWorktreeDone":
       return onePerPiece(does.cut, "being marked done", () => doing.declareWorktreeDone(does.cut));
+    case "focusRepo":
+      doing.focusRepo(does.repo);
+      return DID;
     case "focusBranch":
       doing.focusBranch(does.cut);
       return DID;
@@ -4196,6 +4208,7 @@ export function menuOn(what: MenuOn): { above: string[]; below: string[] } {
         // And Read again, found only while a read stands refused (#1244): a tree purlis could not
         // read is said on the repo's own row, which this menu is on.
         above: [
+          `clone.focus:${what.repo}`,
           `clone.chat:${what.repo}`,
           `clone.branch:${what.repo}`,
           `clone.pick:${what.repo}`,
