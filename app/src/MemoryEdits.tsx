@@ -1,4 +1,13 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { Notice } from "./Notice";
 import type { Doing, Ran } from "./actions";
 import { commands, type MemoryScope, type MemoryView, type PlaneId } from "./bindings";
@@ -6,6 +15,7 @@ import { settled } from "./PlaneEdits";
 import {
   DRAFT,
   DRAFT_TITLE,
+  draftOf,
   draftView,
   memoryKey,
   memoryOf,
@@ -29,7 +39,7 @@ import {
 /** The verbs of `Doing` this hook carries out (SI-9b). */
 export type MemoryEditing = Pick<
   Doing,
-  "openMemory" | "editMemory" | "archiveMemory" | "newMemory" | "keepTab"
+  "openMemory" | "editMemory" | "archiveMemory" | "moveMemory" | "newMemory" | "keepTab"
 >;
 
 /** What the Undo line can take back: a Delete (from the archive, under its own slug) or a Move
@@ -161,6 +171,34 @@ export function useMemoryEdits({
     [update],
   );
 
+  /**
+   * **Move, from a row's menu or the palette** (#1190): the tab's own Move — the same core move,
+   * whole, its tab (where one is open) following it, and the same Undo the tab's offers. An edit
+   * in progress is refused rather than moved from under: the tab hides its Move while it edits,
+   * and a move would leave what was typed behind on a name that is gone.
+   */
+  const moveMemory = useCallback(
+    async (ref: MemoryRef, title: string, to: MemoryScope): Promise<Ran> => {
+      if (typeof draftOf(plane, memoryKey(ref)) === "object")
+        return {
+          ok: false,
+          refused: `“${title}” is being edited: save or cancel the edit, then move it.`,
+        };
+      const answer = await settled(commands.memoryMove(plane, ref.scope, ref.slug, to, null));
+      if (answer.status === "error") return { ok: false, refused: answer.error };
+      follow(memoryView(ref), answer.data);
+      wrote();
+      offerUndo({
+        kind: "moved",
+        from: ref,
+        at: { scope: answer.data.scope, slug: answer.data.slug },
+        title: answer.data.title,
+      });
+      return { ok: true };
+    },
+    [follow, offerUndo, plane, wrote],
+  );
+
   const undo = useCallback(async () => {
     // A second press while this line's Undo is on its way sends nothing: the core would refuse
     // it, the memory having moved already.
@@ -227,8 +265,8 @@ export function useMemoryEdits({
   );
 
   const doing = useMemo<MemoryEditing>(
-    () => ({ openMemory, editMemory, archiveMemory, newMemory, keepTab }),
-    [openMemory, editMemory, archiveMemory, newMemory, keepTab],
+    () => ({ openMemory, editMemory, archiveMemory, moveMemory, newMemory, keepTab }),
+    [openMemory, editMemory, archiveMemory, moveMemory, newMemory, keepTab],
   );
 
   const line =
@@ -246,4 +284,46 @@ export function useMemoryEdits({
     );
 
   return { doing, changed, onSaved, undo: line };
+}
+
+/**
+ * **The project's memory stores** (`memory_scopes`, #1190): where a memory's Move rows can move
+ * it. Read when the project is, and again whenever `again` changes — a memory written, or the
+ * workspaces and personas the stores are, changed. **An answer that is not a list is no
+ * answer**, the rule `useVaults` keeps, and neither is a refusal: then there are no Move rows,
+ * and the tab's Move is still there.
+ */
+export function useMemoryStores(plane: PlaneId, again: unknown): readonly MemoryScope[] {
+  const [said, setSaid] = useState<{ plane: PlaneId; stores: readonly MemoryScope[] }>();
+  useEffect(() => {
+    let gone = false;
+    void commands
+      .memoryScopes(plane)
+      .then((answer) => {
+        if (gone || answer.status !== "ok" || !Array.isArray(answer.data)) return;
+        const stores = answer.data;
+        // The same stores read again are the same list: the catalogue is built from it, and a
+        // memory written is no reason to build the whole of it again.
+        setSaid((was) =>
+          was?.plane === plane && JSON.stringify(was.stores) === JSON.stringify(stores)
+            ? was
+            : { plane, stores },
+        );
+      })
+      .catch(() => {});
+    return () => {
+      gone = true;
+    };
+  }, [plane, again]);
+  return said?.plane === plane ? said.stores : NO_STORES;
+}
+
+const NO_STORES: readonly MemoryScope[] = [];
+
+/** The stores a project's window lends the memory lists it draws, for their rows' Move rows. */
+export const MemoryStores = createContext<readonly MemoryScope[]>(NO_STORES);
+
+/** The stores lent, or none in a test or a window that lends none. */
+export function useLentMemoryStores(): readonly MemoryScope[] {
+  return useContext(MemoryStores);
 }

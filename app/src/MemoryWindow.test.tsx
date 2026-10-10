@@ -146,8 +146,11 @@ function inStore(slug: string, inShared: boolean): MemoryView {
 function core({
   gone = [] as string[],
   back,
+  refuseMove,
 }: {
   gone?: string[];
+  /** What the core says to a move out to the shared store, refusing it. */
+  refuseMove?: string;
   /** How a move back out of the shared store is answered: held until it settles, or refused. */
   back?: Promise<void> | string;
 } = {}) {
@@ -211,6 +214,7 @@ function core({
       const slug = String(given.slug);
       const toShared = (given.to as { kind: string }).kind === "shared";
       if (!toShared && typeof back === "string") throw back;
+      if (toShared && refuseMove !== undefined) throw refuseMove;
       if (!toShared && back !== undefined) await back;
       if (toShared) shared.add(slug);
       else shared.delete(slug);
@@ -328,6 +332,8 @@ describe("a persona's memory row", () => {
     ).toEqual([
       "Open memory: Never pkill by name",
       "Edit memory: Never pkill by name",
+      // Its other stores, in a submenu (#1190).
+      "Move to",
       "Delete memory: Never pkill by nameMoves it to the store's archive. Undo puts it back.",
     ]);
   });
@@ -464,6 +470,75 @@ describe("Move, in the window", () => {
         "personas/steward/memory/never-pkill.md",
       ),
     );
+  });
+});
+
+describe("Move, from a memory row's menu (#1190)", () => {
+  async function moveToFromTheRow(slug: string) {
+    fireEvent.contextMenu(await memoryRowIn(slug));
+    const menu = await screen.findByRole("menu");
+    await userEvent.click(within(menu).getByRole("menuitem", { name: "Move to" }));
+    const menus = await screen.findAllByRole("menu");
+    return menus[menus.length - 1];
+  }
+
+  it("lists every store but its own, saying who reads the shared one", async () => {
+    core();
+    render(<App />);
+
+    const sub = await moveToFromTheRow("never-pkill");
+
+    const [shared, ...more] = within(sub).getAllByRole("menuitem");
+    expect(more).toEqual([]);
+    expect(shared).toHaveAccessibleName("shared");
+    expect(shared).toHaveAccessibleDescription(
+      "Persona and shared memory are published with the project.",
+    );
+  });
+
+  it("moves it at the pick, asking nothing, and Undo moves it back", async () => {
+    const { asked } = core();
+    render(<App />);
+    const sub = await moveToFromTheRow("never-pkill");
+
+    await userEvent.click(within(sub).getByRole("menuitem", { name: "shared" }));
+
+    const line = await waitFor(() => {
+      const found = document.querySelector<HTMLElement>('[data-cause="memory-moved"]');
+      if (!found) throw new Error("no Undo line yet");
+      return found;
+    });
+    expect(line).toHaveTextContent("Moved “Never pkill by name” to shared memory");
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(screen.queryByRole("dialog")).toBeNull();
+
+    await userEvent.click(within(line).getByRole("button", { name: "Undo" }));
+
+    await waitFor(() => expect(document.querySelector('[data-cause="memory-moved"]')).toBeNull());
+    expect(asked.filter((one) => one.cmd === "memory_move").map((one) => one.args)).toEqual([
+      expect.objectContaining({
+        scope: { kind: "persona", name: "steward" },
+        slug: "never-pkill",
+        to: { kind: "shared" },
+        restoreAs: null,
+      }),
+      expect.objectContaining({
+        scope: { kind: "shared" },
+        to: { kind: "persona", name: "steward" },
+        restoreAs: "never-pkill",
+      }),
+    ]);
+  });
+
+  it("says a refusal in the core's words, and offers no Undo", async () => {
+    core({ refuseMove: "shared memory already holds never-pkill" });
+    render(<App />);
+    const sub = await moveToFromTheRow("never-pkill");
+
+    await userEvent.click(within(sub).getByRole("menuitem", { name: "shared" }));
+
+    expect(await screen.findByText(/shared memory already holds never-pkill/)).toBeInTheDocument();
+    expect(document.querySelector('[data-cause="memory-moved"]')).toBeNull();
   });
 });
 

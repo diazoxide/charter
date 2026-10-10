@@ -1271,6 +1271,7 @@ function App() {
       openMemory: () => undefined,
       editMemory: () => undefined,
       archiveMemory: async () => nowhere(),
+      moveMemory: async () => nowhere(),
       newMemory: () => undefined,
       keepTab: () => undefined,
       // An extension's action runs in a project, and there is no project here: its rows are

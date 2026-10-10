@@ -1,4 +1,5 @@
 import { useEffect, useId, useMemo, useState } from "react";
+import { useLentMemoryStores } from "./MemoryEdits";
 import {
   Archive,
   ChartColumn,
@@ -271,7 +272,9 @@ function Contributed({
     : undefined;
   // **A memory row's own rows** (SI-9c): Open, Edit and Delete for each memory this panel
   // lists, by the one function a persona's tab makes them with.
-  const memories = useMemo(() => listedMemoryOffers(panel.blocks), [panel.blocks]);
+  // A Move row per store (#1190), from the stores the window lends.
+  const stores = useLentMemoryStores();
+  const memories = useMemo(() => listedMemoryOffers(panel.blocks, stores), [panel.blocks, stores]);
   const lookUp = (id: string) => memories.get(id) ?? offers.get(id);
 
   return (
