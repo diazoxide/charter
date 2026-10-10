@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791664119637,
+  "lastUpdate": 1791665686709,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -6426,6 +6426,48 @@ window.BENCHMARK_DATA = {
             "value": 101.506145,
             "unit": "ms",
             "extra": "median of 5 runs: 100.996, 101.191, 101.506, 102.808, 103.137 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "eyehollow@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "dbrownsimple"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "2b617fc0c76ff57b494ba192f2a1700d4e3763b9",
+          "message": "Bound every side view by its region, so nothing in one makes the window scroll\n\nWith the left side open, the window was 1369 px tall in a 775 px window and the status line's\nclick scrolled it by 377 px. The Chats rows' visually hidden state words (#1675) are placed\nabsolutely, and with no positioned box between them and the page, the words of rows far down\nthe list hung below the window and added to the page's own height. The Chats view is now their\ncontaining block, and every region view is positioned and clips what would hang out of it, so a\nview scrolls inside itself and never grows the window.\n\nA window test holds that every view is positioned and clips, and the status line scenario holds\nthat the window is not scrolled and no bigger than itself when the alerts drawer opens.\n\nRefs #1675, #1676\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nAssisted-by: claude-code\nPurlis-Chat: 01M4AREQXXRGBAEWM0SZ0N0WBN\nPurlis-Persona: steward",
+          "timestamp": "2026-10-11T00:43:50+04:00",
+          "tree_id": "ea9e492bee1230ebf5c03b85f044489facf21189",
+          "url": "https://github.com/purlis/purlis/commit/2b617fc0c76ff57b494ba192f2a1700d4e3763b9"
+        },
+        "date": 1791665685866,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.466246,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.463, 0.466, 0.466, 0.476, 0.480 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.3111725,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.253, 16.276, 16.311, 16.849, 17.006 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 101.7040365,
+            "unit": "ms",
+            "extra": "median of 5 runs: 100.113, 101.148, 101.704, 102.345, 102.359 ms"
           }
         ]
       }
