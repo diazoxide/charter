@@ -212,18 +212,20 @@ pub enum Arming<'a> {
 /// The shim, as the bundle carries it ([`Arming::Session`]) or as `charter plugin install`
 /// writes it ([`Arming::GuardOnly`]).
 pub fn shim(arming: Arming<'_>) -> String {
-    let (binary, variant, hooks, missing) = match arming {
+    let (binary, variant, hooks, missing, state) = match arming {
         Arming::Session => (
             format!("process.env.{} || \"\"", crate::plugin::BINARY_ENV),
             "// The app loads this file for one chat, and names its own `purlis` in the chat's environment.",
             SESSION_HOOKS,
             "refuses",
+            SESSION_STATE,
         ),
         Arming::GuardOnly(path) => (
             serde_json::Value::from(path.display().to_string()).to_string(),
             "// `purlis plugin install` put this here: the guards alone, for opencode started outside the app.",
             GUARD_HOOKS,
             "allows",
+            "",
         ),
     };
     let routes: serde_json::Map<String, serde_json::Value> = TOOLS
@@ -261,7 +263,13 @@ pub fn shim(arming: Arming<'_>) -> String {
             "{{EFFECTFUL}}",
             &serde_json::to_string(&EFFECTFUL).expect("JSON"),
         )
+        .replace("{{STATE}}", state)
         .replace("{{HOOKS}}", hooks)
+        .replace("{{PERMISSION_WORD}}", crate::harness::hooked::WORD)
+        .replace(
+            "{{ASK_SECONDS}}",
+            &crate::harness::hooked::HOOK_TIMEOUT.as_secs().to_string(),
+        )
         .replace(
             "{{NOT_TAKEN}}",
             &serde_json::Value::from(crate::hookwire::NOT_TAKEN).to_string(),
@@ -473,10 +481,110 @@ const SESSION_HOOKS: &str = r#"    // purlis's skills, beside every skills path 
             notification_type: "permission_prompt",
             message: `opencode asks permission to use ${String(props?.permission ?? "a tool")}`,
           }, sid)
+          void asked(props)
+          return
+        }
+        // Answered in opencode's own pane, or anywhere else: the window's ask is withdrawn.
+        case "permission.replied": {
+          settled(props?.requestID ?? props?.permissionID)
+          return
+        }
+        // A question opencode asks the person is a prompt in its terminal too (#1691).
+        case "question.asked": {
+          const sid = rootOf(props?.sessionID)
+          if (!sid) return
+          void run("notification", {
+            hook_event_name: "Notification",
+            session_id: sid,
+            cwd: directory,
+            notification_type: "question",
+            message: "opencode asks you a question",
+          }, sid)
           return
         }
       }
     },"#;
+
+/// What an app chat's shim keeps beside its hooks: opencode's permission asks it handed to
+/// purlis's permission hook, held until the person answers in the window (#1691).
+///
+/// Each ask goes to `purlis hook permissionrequest` as opencode raised it; the hook holds it in
+/// the app, and prints `{"reply": <word>}` once the person answers there, or nothing. The word
+/// goes to opencode's own client, the answer path its TUI uses, for that request alone: the
+/// route of the events it raised (`permission.reply`) where the client has it, else the legacy
+/// one. A `permission.replied` naming the request either way stops its hook. opencode's own prompt is never
+/// held: it asks in the pane at the same time, and the first answer wins. Answered there,
+/// opencode says `permission.replied`, and the hook is stopped, which withdraws the window's
+/// ask. The shim decides nothing: no word but one of opencode's three, and none at all unless
+/// the hook printed one.
+const SESSION_STATE: &str = r#"  // opencode's permission asks held in the window, by request id, and their hooks (#1691).
+  const REPLIES = ["once", "always", "reject"]
+  const holding = new Map()
+  const client = plugin?.client
+
+  const settled = (id) => {
+    const child = holding.get(id)
+    if (!child) return
+    holding.delete(id)
+    try {
+      child.kill(9)
+    } catch {}
+  }
+
+  const reply = async (props, word) => {
+    if (typeof client?.permission?.reply === "function") {
+      return client.permission.reply({ requestID: props.id, reply: word })
+    }
+    if (typeof client?.postSessionIdPermissionsPermissionId === "function") {
+      return client.postSessionIdPermissionsPermissionId({
+        path: { id: props.sessionID, permissionID: props.id },
+        body: { response: word },
+      })
+    }
+  }
+
+  const asked = async (props) => {
+    const id = props?.id
+    if (!BINARY || typeof id !== "string" || typeof props?.sessionID !== "string") return
+    if (holding.has(id)) return
+    let child
+    try {
+      child = spawn([BINARY, "hook", "{{PERMISSION_WORD}}"], {
+        cwd: directory,
+        env: { ...env, PURLIS_SESSION_ID: rootOf(props.sessionID), CHARTER_SESSION_ID: rootOf(props.sessionID) },
+        stdin: new Blob([stringify(props)]),
+        stdout: "pipe",
+        stderr: "ignore",
+      })
+    } catch {
+      return
+    }
+    holding.set(id, child)
+    const timer = setTimeout(() => settled(id), {{ASK_SECONDS}} * 1000)
+    let out = ""
+    try {
+      out = await new Response(child.stdout).text()
+      await child.exited
+    } catch {
+    } finally {
+      clearTimeout(timer)
+    }
+    if (holding.get(id) !== child) return
+    holding.delete(id)
+    let word
+    try {
+      word = parse(out.trim() || "null")?.reply
+    } catch {
+      return
+    }
+    if (typeof word !== "string" || !REPLIES.includes(word)) return
+    try {
+      const sent = reply(props, word)
+      if (sent && typeof sent.catch === "function") sent.catch(() => {})
+    } catch {}
+  }
+
+"#;
 
 /// The hooks the installed guard registers.
 const GUARD_HOOKS: &str = r#"    "tool.execute.before": before,"#;
@@ -677,7 +785,7 @@ export const CharterPlugin = async (plugin, options) => {
     if (why !== null) throw new Error(why)
   }
 
-  return {
+{{STATE}}  return {
 {{HOOKS}}
   }
 }

@@ -51,6 +51,31 @@ pub const MOST_ASK_BYTES: usize = crate::acp::MOST_ASK_BYTES;
 pub enum Source {
     /// Claude Code's `PermissionRequest`.
     ClaudeCode,
+    /// Codex's `PermissionRequest`, armed on the chat's own session flags (#1691).
+    Codex,
+    /// opencode's `permission.asked`, handed on by purlis's shim, which replies on opencode's
+    /// own client with what the hook prints (#1691).
+    Opencode,
+}
+
+impl Source {
+    /// The source of a permission hook run in a chat of `harness`, the registry name the app
+    /// put into the chat's environment ([`crate::hookwire::HARNESS_ENV`]): Claude Code where
+    /// it names none, as a chat started before the variable was set does. A name this does not
+    /// know is no source, and the hook then decides nothing: a decision printed in another
+    /// harness's words is one its harness may misread.
+    ///
+    /// What it picks is only how the ask is read and how the hook prints its answer: a hook
+    /// that names another harness than its own shows the person a different ask, which they
+    /// answer or not, and prints its harness a decision it cannot read.
+    pub fn of_harness(harness: Option<&str>) -> Option<Self> {
+        match harness {
+            None | Some("claude-code") => Some(Self::ClaudeCode),
+            Some("codex") => Some(Self::Codex),
+            Some("opencode") => Some(Self::Opencode),
+            Some(_) => None,
+        }
+    }
 }
 
 /// The ask a permission hook's `payload` is, as the window shows it and the host holds it.
@@ -73,9 +98,14 @@ pub enum Source {
 /// **No option that switches the session's permission mode is ever offered** (D-88o): only
 /// allow and deny for this call, and rules for this session, come from the window. A mode
 /// switch (`bypassPermissions`, `acceptEdits`, any `setMode`) stays in the chat's own pane.
+///
+/// **An opencode command or edit is never allowed from here** (#1691): its ask names the
+/// commands opencode matched (`patterns`), not the line that runs, and an edit only its path.
 pub fn ask(source: Source, payload: &Value) -> Ask {
     let mut ask = match source {
         Source::ClaudeCode => super::asked::claude_permission_request(payload, HOOK_TIMEOUT),
+        Source::Codex => super::asked::codex_permission_request(payload, HOOK_TIMEOUT),
+        Source::Opencode => super::asked::opencode_permission_hooked(payload, HOOK_TIMEOUT),
     };
     // An option whose own words would draw otherwise (a rule's text, a directory's path) says
     // something other than what it grants, so it is not offered either.
@@ -84,7 +114,8 @@ pub fn ask(source: Source, payload: &Value) -> Ask {
             && !switches_the_mode(source, payload, option)
             && !option.label.chars().any(drawn_otherwise)
     });
-    if !shown_in_full(&ask) || !plain_shell_input(&ask, payload) {
+    let opencode_line = source == Source::Opencode && !matches!(ask.action, Action::Tool { .. });
+    if !shown_in_full(&ask) || !plain_shell_input(&ask, payload) || opencode_line {
         ask.options
             .retain(|option| option.kind != ChoiceKind::Allow);
     }
@@ -101,6 +132,9 @@ fn switches_the_mode(source: Source, payload: &Value, option: &Choice) -> bool {
             .and_then(|n| n.parse::<usize>().ok())
             .and_then(|n| payload["permission_suggestions"].get(n))
             .is_some_and(|entry| entry["type"].as_str() == Some("setMode")),
+        // Neither offers a mode: Codex's hook answers allow or deny, opencode's once, always
+        // for the patterns it names, or reject.
+        Source::Codex | Source::Opencode => false,
     }
 }
 
@@ -164,6 +198,9 @@ fn ignorable_beyond_cf(c: char) -> bool {
 /// What the hook prints for the option `chosen` of `payload`'s ask: the harness's own
 /// decision, as one line of JSON. `None` for an option the ask does not offer, and the hook then
 /// prints nothing, so the harness's prompt decides.
+///
+/// For opencode it is `{"reply": <word>}`, opencode's own reply word, which purlis's shim hands
+/// opencode's client (#1691).
 pub fn decision(source: Source, payload: &Value, chosen: &str) -> Option<String> {
     let choice = ask(source, payload)
         .options
@@ -171,6 +208,8 @@ pub fn decision(source: Source, payload: &Value, chosen: &str) -> Option<String>
         .find(|option| option.id == chosen)?;
     let decision = match source {
         Source::ClaudeCode => claude_decision(payload, &choice)?,
+        Source::Codex => codex_decision(&choice),
+        Source::Opencode => return Some(serde_json::json!({ "reply": choice.id }).to_string()),
     };
     Some(
         serde_json::json!({
@@ -181,6 +220,18 @@ pub fn decision(source: Source, payload: &Value, chosen: &str) -> Option<String>
         })
         .to_string(),
     )
+}
+
+/// Codex's `decision` for `choice`: `allow` or `deny` and nothing else, since codex-cli
+/// 0.147.0's schema fails closed on `updatedPermissions` and on `interrupt` (#1691).
+fn codex_decision(choice: &Choice) -> Value {
+    match choice.kind {
+        ChoiceKind::Allow => serde_json::json!({ "behavior": "allow" }),
+        ChoiceKind::Reject | ChoiceKind::Cancel => serde_json::json!({
+            "behavior": "deny",
+            "message": "The operator denied this in purlis's window.",
+        }),
+    }
 }
 
 /// Claude Code's `decision` for `choice`: `allow` or `deny`, and for a suggestion, the

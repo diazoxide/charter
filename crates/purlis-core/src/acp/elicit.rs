@@ -253,6 +253,7 @@ impl Form {
                 session: session.to_owned(),
                 tool_call: String::new(),
             },
+            prompt: crate::harness::model::Prompt::Unsaid,
         }
     }
 

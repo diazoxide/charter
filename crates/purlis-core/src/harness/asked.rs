@@ -211,6 +211,14 @@ pub fn opencode_permission(props: &Value) -> Ask {
     }
 }
 
+/// opencode's `permission.asked` properties, as purlis's shim hands them to its permission hook
+/// (#1691): the same ask, answered on the hook's connection before `hook_timeout`, and the shim
+/// replies on opencode's own client.
+pub fn opencode_permission_hooked(props: &Value, hook_timeout: std::time::Duration) -> Ask {
+    let ask = opencode_permission(props);
+    hooked(ask.action, ask.options, hook_timeout)
+}
+
 /// The label of opencode's always option, naming the `always` patterns it approves for the
 /// rest of the session, which can be broader than the call asked about (`git push *` for
 /// `git push origin main`). Joined and cut like a [`Summary`], credential shapes masked. With no

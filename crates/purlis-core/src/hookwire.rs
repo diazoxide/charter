@@ -223,6 +223,12 @@ impl Report {
                 // Only a `Notification` is a nudge (#1626).
                 idle: event == Event::Notification
                     && field("notification_type").as_deref() == Some(IDLE_NUDGE),
+                // Which prompt it shows, or that it asks nothing (#1691).
+                notified: if event == Event::Notification {
+                    notified(field("notification_type").as_deref())
+                } else {
+                    crate::state::Notified::Unsaid
+                },
                 // The model the session runs on, only where a `SessionStart` names it (#1021):
                 // what a commit's `Assisted-by` then names.
                 model: (event == Event::SessionStart)
@@ -252,6 +258,31 @@ const IN_FLIGHT: [&str; 2] = ["running", "pending"];
 /// opposed to a permission or a question: Claude Code's word, which since 2.1.288 it holds back
 /// while background agents still run.
 const IDLE_NUDGE: &str = "idle_prompt";
+
+/// **What a `Notification`'s `notification_type` says it is** (#1691): the prompt each kind
+/// leaves in the harness's terminal, as Claude Code's hooks reference lists them (2.1.296), a
+/// notice that the form it showed was answered, or a notice that asks nothing. `question` is purlis's own word, which its opencode shim sends
+/// for opencode's question. Any other word, and none, is a prompt of no kind: a notice a later
+/// version adds is shown as a wait rather than hidden.
+fn notified(kind: Option<&str>) -> crate::state::Notified {
+    use crate::harness::model::Prompt;
+    use crate::state::Notified;
+    Notified::Asks(match kind {
+        Some("permission_prompt") => Prompt::Permission,
+        Some("elicitation_dialog") => Prompt::Form,
+        Some("elicitation_url_dialog") => Prompt::Link,
+        Some("agent_needs_input" | "question") => Prompt::Question,
+        Some("quota_auto_resume_stale") => Prompt::Continue,
+        Some("elicitation_complete" | "elicitation_response") => return Notified::Answered,
+        Some(
+            "auth_success"
+            | "agent_completed"
+            | "quota_auto_resume_fired"
+            | "quota_auto_resume_disabled",
+        ) => return Notified::Informs,
+        _ => return Notified::Unsaid,
+    })
+}
 
 /// **Whether a `Stop` payload says helpers of the chat's own are still at work in the
 /// background**, and will wake it when they finish (#1626).
@@ -3920,6 +3951,55 @@ mod tests {
         for kind in [Some("permission_prompt"), Some("elicitation_dialog"), None] {
             assert!(!idle(Event::Notification, kind), "{kind:?} read as idle");
         }
+    }
+
+    #[test]
+    fn a_notification_says_which_prompt_its_terminal_shows_or_that_it_only_informs() {
+        // #1691: Claude Code's `notification_type`, as its hooks reference lists them for
+        // 2.1.296. A word this does not know reads as a prompt of no kind: shown, not hidden.
+        use crate::harness::model::Prompt;
+        use crate::state::Notified;
+        let env = env_of(&[(SOCKET_ENV, "/tmp/s.sock"), (CHAT_ENV, "7")]);
+        let notified = |event: Event, kind: Option<&str>| {
+            let mut payload =
+                serde_json::json!({"session_id": "11111111-2222-4333-8444-555555555555"});
+            if let Some(kind) = kind {
+                payload["notification_type"] = kind.into();
+            }
+            Report::read(event, &payload.to_string(), &env)
+                .expect("a report")
+                .detail
+                .notified
+        };
+        let n = Event::Notification;
+        for (kind, prompt) in [
+            ("permission_prompt", Prompt::Permission),
+            ("elicitation_dialog", Prompt::Form),
+            ("elicitation_url_dialog", Prompt::Link),
+            ("agent_needs_input", Prompt::Question),
+            ("question", Prompt::Question),
+            ("quota_auto_resume_stale", Prompt::Continue),
+        ] {
+            assert_eq!(notified(n, Some(kind)), Notified::Asks(prompt), "{kind}");
+        }
+        for kind in ["elicitation_complete", "elicitation_response"] {
+            assert_eq!(notified(n, Some(kind)), Notified::Answered, "{kind}");
+        }
+        for kind in [
+            "auth_success",
+            "agent_completed",
+            "quota_auto_resume_fired",
+            "quota_auto_resume_disabled",
+        ] {
+            assert_eq!(notified(n, Some(kind)), Notified::Informs, "{kind}");
+        }
+        assert_eq!(notified(n, None), Notified::Unsaid);
+        assert_eq!(notified(n, Some("a_later_kind")), Notified::Unsaid);
+        assert_eq!(notified(n, Some("idle_prompt")), Notified::Unsaid);
+        assert_eq!(
+            notified(Event::Stop, Some("permission_prompt")),
+            Notified::Unsaid
+        );
     }
 
     #[test]

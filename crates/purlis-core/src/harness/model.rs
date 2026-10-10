@@ -69,6 +69,12 @@ pub enum Turn {
 pub enum Item {
     /// A child agent the turn dispatched has finished. The turn that dispatched it goes on.
     ChildEnded,
+    /// The harness told the person something that asks nothing of them (#1691): a sign-in
+    /// done, a form's answer sent, a wait for a usage limit over. No state moves on it.
+    Told,
+    /// The harness said the prompt it showed was answered (#1691): a form's answer sent, or
+    /// a link's work done. The turn goes on.
+    Answered,
 }
 
 /// The harness handed control to the operator: a permission, a question, or a nudge that the
@@ -101,6 +107,49 @@ pub struct Ask {
     pub elicits_secret: bool,
     /// Where the answer goes back: the source's own channel, never keystrokes (04 §5.1).
     pub channel: Channel,
+    /// What the harness's own terminal shows while it waits, where a level-2 nudge said
+    /// (#1691). Unsaid for every other source, whose ask says what it is itself.
+    #[serde(default, skip_serializing_if = "Prompt::is_unsaid")]
+    pub prompt: Prompt,
+}
+
+/// **The prompt a harness shows in its own terminal while it waits on the person** (#1691),
+/// as its nudge names it: what the person finds there when they go to the chat.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Prompt {
+    /// The nudge said no kind, or one purlis does not know: still a prompt.
+    #[default]
+    Unsaid,
+    /// A permission for a tool call, or for a sandboxed command's network request.
+    Permission,
+    /// A form a tool server asks to be filled.
+    Form,
+    /// A link a tool server asks the person to open.
+    Link,
+    /// A question, or another input the session waits on.
+    Question,
+    /// A wait that goes on only once the person presses Enter.
+    Continue,
+}
+
+impl Prompt {
+    /// Whether the nudge named no kind.
+    pub fn is_unsaid(&self) -> bool {
+        *self == Self::Unsaid
+    }
+
+    /// What a row says of a chat stopped on this prompt in its terminal.
+    pub fn says(self) -> &'static str {
+        match self {
+            Self::Unsaid => "Waiting in its terminal",
+            Self::Permission => "Waiting in its terminal: a permission prompt",
+            Self::Form => "Waiting in its terminal: a form to fill",
+            Self::Link => "Waiting in its terminal: a link to open",
+            Self::Question => "Waiting in its terminal: a question",
+            Self::Continue => "Waiting in its terminal: press Enter to continue",
+        }
+    }
 }
 
 /// What an ask is about.
