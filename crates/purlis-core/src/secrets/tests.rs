@@ -656,7 +656,7 @@ fn a_new_identity_record_names_the_purlis_base_and_reads_only_there() {
     registry::save_local(&ctx, &local).unwrap();
     assert_eq!(identity_record(&ctx)["base"], "purlis");
 
-    // Each read is a command of its own: one command reads a kept token once (#1180).
+    // Each read is a command of its own: one command reads a kept token once (#1638).
     let read = || {
         identity::from_keyring(&Ctx::new(tmp.path(), Env::of(&[])), &v, "OP_TEAM_TOKEN").unwrap()
     };
@@ -686,7 +686,7 @@ fn a_record_from_before_the_rename_reads_only_its_charter_item() {
         .to_owned();
     // A record a build from before the rename wrote: no `base`.
     set_base(&ctx, None);
-    // Each read is a command of its own: one command reads a kept token once (#1180).
+    // Each read is a command of its own: one command reads a kept token once (#1638).
     let read = || identity::from_keyring(&Ctx::new(tmp.path(), Env::of(&[])), &v, "OP_TEAM_TOKEN");
 
     plant(&tmp, &[(format!("charter/@identity/{id}"), "old-token")]);

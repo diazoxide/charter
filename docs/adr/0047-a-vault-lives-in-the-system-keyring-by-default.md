@@ -430,14 +430,27 @@ asks the person).
   token it read, for that run only. It is never kept across commands, and the app builds a new
   context for every request it serves, so a replaced or deleted token is read afresh by the
   next run.
-- **A sandboxed chat never reads the Keychain through the command.** In a chat the app started
+- **A sandboxed chat never reads the keyring through the command.** In a chat the app started
   sandboxed, a vault whose values come from the keyring (a `keyring` vault, or one whose token is
-  kept there) is refused rather than read: by `secret exec` when no app takes the run, and by
-  `secret get` and `cp`, which the app does not broker. The sentence says why and how to go on
-  (`secret exec` with the app open). A vault the keyring does not hold runs as it did.
+  kept there) is refused rather than read: by `secret exec` when no app takes the run, by
+  `secret get` and `cp`, which the app does not broker, and, as a backstop where the keyring
+  itself is read, by every other read (`vault verify`, `secret rename`, a listing that runs
+  `op`). The sentence says why and what to run instead. A vault the keyring does not hold runs
+  as it did. On Linux, where the Secret Service answers without asking, it refuses the same way.
+- **A courtesy, not the boundary.** The refusal reads the chat's own environment, which the
+  chat can change. What holds the item is still the store's rule (V90a) and the sandbox; this
+  keeps purlis from raising a question on the chat's behalf and says what to do.
 
 **Not decided here (V16b, #1180).** A chat started without the sandbox, and a terminal, still
-read the Keychain through the command, so each run asks once. Handing those reads to the app
-would make the app run a command outside any sandbox on a chat's word, would hold such chats
-to the persona's vaults for the first time, and needs a route for a terminal that is not the
-window's. Those are the operator's calls.
+read the Keychain through the command, so each run asks once. Two ways to take the command out
+of that path, each the operator's call:
+
+- **The app runs the command**, as it does for a sandboxed chat: for an unsandboxed chat that
+  is a command run outside any sandbox on a chat's word, and it holds such chats to their
+  persona's vaults for the first time.
+- **The app hands the token back** over the socket and the command runs `op` as now: no new
+  run path, but a raw secret then reaches a chat's process, which no sandboxed chat may hold
+  (ADR 0067 §5 class 1), and any process of the person's that can reach the socket could ask.
+
+A terminal has no chat token and `local-ui` is the window's alone (V16a), so either way it
+needs a route of its own.

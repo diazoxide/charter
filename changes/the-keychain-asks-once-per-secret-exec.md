@@ -1,11 +1,11 @@
 ### Security
 
-- **A sandboxed chat never makes the Keychain ask you for a vault.** When the app does not take
-  a sandboxed chat's `purlis secret exec`, a vault whose values come from the keyring (a
-  `keyring` vault, or a 1Password vault whose token purlis keeps there) is refused with a
-  sentence saying why, instead of the command reading the Keychain from inside the chat.
-  `purlis secret get` and `cp` in a sandboxed chat are refused such a vault the same way
-  (#1638).
+- **purlis no longer reads the keyring from inside a sandboxed chat.** A vault whose values come
+  from the keyring (a `keyring` vault, or a 1Password vault whose token purlis keeps there) is
+  read for a sandboxed chat only by the app, through `purlis secret exec`. When the app does not
+  take the run, and for `purlis secret get`, `cp` and every other read in the chat, the command
+  refuses with a sentence saying why and what to run instead, rather than reading the keyring
+  itself and raising a Keychain question on the chat's behalf (#1638).
 
 ### Fixed
 

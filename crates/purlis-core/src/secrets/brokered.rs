@@ -43,7 +43,7 @@
 //! Where no app takes the line (no socket, an app older than the line, or one with nothing that
 //! answers it: [`crate::hookwire::NOTHING_ANSWERS`]) the command runs in this process as it
 //! always has, **except for a vault whose values come from the keyring**, which is refused
-//! instead ([`refused_in_this_chat`], #1180): read here, the Keychain would ask the person for
+//! instead ([`refused_in_this_chat`], #1638): read here, the Keychain would ask the person for
 //! the chat. `secret get` and `cp` are refused it the same way, since the app runs only `exec`.
 //!
 //! **What this guarantees, and what it does not.** The command is the chat's to choose, so a
@@ -165,37 +165,59 @@ fn chat_number(env: &dyn Fn(&str) -> Option<String>) -> Option<u32> {
         .find_map(|n| n.trim().parse::<u32>().ok().filter(|n| *n > 0))
 }
 
-/// What `verb` on `vault` is refused with in this process, or `None` where it may read the vault
-/// itself (#1180, V16b): **a chat the app started sandboxed never reads the keyring through
-/// the command.**
+/// What would read a vault in a chat, for [`refused_in_this_chat`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reader {
+    /// `secret exec`, which the app did not take.
+    Exec,
+    /// `secret get` or `cp`, which the app does not run for a chat.
+    GetOrCp,
+    /// Any other read of the keyring (`vault verify`, `secret rename`, a listing that runs the
+    /// provider): the backstop where the keyring itself is read.
+    Other,
+}
+
+/// What `reader` on `vault` is refused with in this process, or `None` where it may read the
+/// vault itself (#1638): **a chat the app started sandboxed never reads the keyring through the
+/// command.**
 ///
-/// Only for a vault whose values come from the keyring (a `keyring` vault, or one whose token
-/// is kept there). Read here, in the chat, each such read makes the Keychain ask the person
-/// (V90a), and an "Always Allow" given to the command would let the chat read it silently from
-/// then on. So the only way a sandboxed chat reaches one is `secret exec` through the app: where
-/// the app does not take it, or for a verb the app does not broker, nothing is read. Any other
-/// vault is left to its own provider and to the chat's sandbox, as before.
-pub fn refused_in_this_chat(ctx: &Ctx, vault: &registry::Vault, verb: &str) -> Option<String> {
+/// Only for a vault whose values come from the keyring ([`super::keyring::holds_values_of`]).
+/// Read here, in the chat, each such read makes the Keychain ask the person (V90a), and an
+/// "Always Allow" given to the command would let the chat read it silently from then on; the
+/// Secret Service on Linux answers without asking at all. So the only way a sandboxed chat
+/// reaches one is `secret exec` through the app: where the app does not take it, or for
+/// anything else, nothing is read. Any other vault is left to its own provider and to the
+/// chat's sandbox, as before. Resolving every chat's reads in the app is the rest of V16b
+/// (#1180).
+///
+/// **A courtesy, not the boundary.** The mark it reads is the chat's environment, which the
+/// chat can change; what holds the item is the store's own rule (V90a) and the sandbox. This
+/// keeps purlis itself from raising a question on the chat's behalf, and says what to do.
+pub fn refused_in_this_chat(ctx: &Ctx, vault: &registry::Vault, reader: Reader) -> Option<String> {
     let env = |name: &str| ctx.env.get(name);
-    if !crate::sandbox::chat_is_sandboxed_in(&env) {
+    if !crate::sandbox::chat_is_sandboxed_in(&env) || !super::keyring::holds_values_of(ctx, vault) {
         return None;
     }
-    if vault.provider != "keyring" && !super::identity::in_keyring(ctx, vault) {
-        return None;
-    }
-    let why = if verb == "exec" {
-        "the app that started this chat did not take this `secret exec`, so nothing was run"
-    } else {
-        "only `secret exec` is run for a sandboxed chat by the app"
+    let (why, next) = match reader {
+        Reader::Exec => (
+            "the app that started this chat did not take this `secret exec`, so nothing was run",
+            "Run it again while the app that started this chat is open.".to_owned(),
+        ),
+        Reader::GetOrCp | Reader::Other => (
+            "the app runs only `secret exec` for a chat",
+            format!(
+                "Hand the value to a command with `purlis secret exec {} --env NAME=key -- \
+                 <command>`: the app runs that for the chat.",
+                vault.name
+            ),
+        ),
     };
     Some(format!(
         "vault '{}' is read from {}, which a sandboxed chat reaches only through the app, and \
-         {why}. purlis does not read it from inside the chat, where your keyring would be asked \
-         for the chat.\n  Hand the value to a command with `purlis secret exec {} --env \
-         NAME=key -- <command>` while the app that started this chat is open.",
+         {why}. purlis does not read {} from inside a sandboxed chat.\n  {next}",
         vault.name,
         super::keyring::STORE_NAME,
-        vault.name
+        super::keyring::STORE_NAME,
     ))
 }
 
