@@ -145,7 +145,7 @@ import {
 import { isSearch, searchFromFocus, searchTitle, searchView } from "./contentSearch";
 import { opensSearch } from "./searchKey";
 import { BottomBar } from "./BottomBar";
-import { useWorkspaceState, type WorkspaceState } from "./workspaceState";
+import { readRefusedIn, useWorkspaceState, type WorkspaceState } from "./workspaceState";
 import {
   heardFrom,
   lostOnResume,
@@ -1939,6 +1939,9 @@ export const PlaneView = memo(function PlaneView({
    *  personas'. A todo closed in another workspace does not read this one again. */
   const workspaceChanges = usePlaneChanged([plane], panelsOf(ofWorkspace ?? ""));
   const workspaceState = useWorkspaceState(plane, ofWorkspace, rereadWorkspace, workspaceChanges);
+  /** Whether a read of that workspace stands refused, so the catalogue offers Read again
+   *  where the explorer is not on screen to offer it (#1244). */
+  const readRefused = readRefusedIn(workspaceState);
   /** The plane root's own panels — its session records (SI-8d) — while it is focused. */
   const rootChanges = usePlaneChanged([plane], ROOT_PANELS);
   const rootPanels = usePlaneRootPanels(plane, focused === OUTSIDE, rootChanges);
@@ -5217,6 +5220,7 @@ export const PlaneView = memo(function PlaneView({
       renameWorkspace,
       openSettingsTab: windowDoes.openSettingsTab,
       openYourSettings: windowDoes.openYourSettings,
+      readAgain: rereadPanels,
       curate,
       quit: windowDoes.quit,
       ...fileDoing,
@@ -5265,6 +5269,7 @@ export const PlaneView = memo(function PlaneView({
       pickSpot,
       pinTab,
       pinWorkspace,
+      rereadPanels,
       removeWorkspace,
       removeWorktree,
       renameWorkspace,
@@ -5960,6 +5965,7 @@ export const PlaneView = memo(function PlaneView({
             // beside no other — with one removal per piece that is the difference between one
             // offer to throw work away and fifty.
             refused: report?.refused ? report.from : undefined,
+            readRefused,
             // **With no queue, and no Smart closes that stopped** (#1034): their rows are put in
             // as this view reports (`queued`), so a chat that starts asking for you neither
             // rebuilds the catalogue nor redraws the panes.
@@ -6017,6 +6023,7 @@ export const PlaneView = memo(function PlaneView({
       plane,
       projects,
       quiet,
+      readRefused,
       report,
       spot?.path,
       refusals,

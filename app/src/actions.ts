@@ -96,6 +96,9 @@ import {
  */
 export type SettingsWay = { label: string; link: SettingsLink };
 
+/** The row that asks the focused workspace's refused reads again (#1244). */
+export const READ_AGAIN = "workspace.readagain";
+
 /** What running an action answered: one line to say, or a refusal in the words it came in —
  *  with the Settings group that puts it right, where a setting does. */
 export type Ran =
@@ -465,6 +468,7 @@ export type Does =
    *  carries the project in front when there is one, and none when the window has no project;
    *  a Project group carries its project, and a Workspace group its project and workspace. */
   | { verb: "openSettingsGroup"; group: string; plane?: string; workspace?: string }
+  | { verb: "readAgain" }
   /** Opens a new chat for one curation action on one subject, with the action's prompt typed
    *  into it and never sent (ADR 0061). It carries the action's id and nothing of its text: the
    *  core resolves the subject again (`curate`), so what is typed is the core's prompt now. */
@@ -659,6 +663,12 @@ export type Now = {
    * over is which row spoke, and this module matches the ids it wrote itself.
    */
   refused?: string;
+  /**
+   * Whether a read of the focused workspace stands refused (#1244): the workspace, the forge
+   * cache, a repo or a tree purlis could not read. While one does, {@link READ_AGAIN} is a row,
+   * on the refusal line's menu and in the palette, so its way out does not hang on the explorer.
+   */
+  readRefused?: boolean;
   /** The chats asking for you, oldest first. */
   needsYou: readonly number[];
   /**
@@ -904,6 +914,9 @@ export type Doing = {
   openSettingsTab: () => void;
   /** Opens the Settings tab at the You level, or brings forward the one already open. */
   openYourSettings: () => void;
+  /** Asks the focused workspace's reads again — the plane's, git's and the forge cache's —
+   *  after one was refused (#1244): the explorer's Read again. */
+  readAgain: () => void;
   /** Opens a curation chat. The core can refuse — the action gone, a harness that cannot be
    *  typed into — so it answers a `Ran`. */
   curate: (subject: string, action: string) => Promise<Ran>;
@@ -1775,6 +1788,17 @@ export function catalogue(now: Now): Offer[] {
     note: "Your text sizes and your editor, on this machine.",
   });
   offers.push(...settingsGroupRows(now.plane, now.focused === OUTSIDE ? undefined : now.focused));
+
+  // **Read again, while a read of the focused workspace stands refused** (#1244). ADR 0038 keeps
+  // the bottom region unpressable, so its refusals had their way out only on the explorer's
+  // Notices; with the explorer hidden there was nothing to press. The row is the explorer's own
+  // Read again, and it exists only while there is something to read again (D-1244-2), as the
+  // discard row exists only while a removal stands refused.
+  if (now.readRefused === true && now.focused !== undefined && now.focused !== OUTSIDE)
+    offers.push({
+      ...can(READ_AGAIN, "Read the workspace again", { verb: "readAgain" }),
+      note: `What purlis could not read in ${now.focused} is asked again.`,
+    });
 
   // **The plane's personas, one row each** (charter-app#174). What the row opens is the
   // persona's view — its own tab — which is how the persona rows get a menu without a second
@@ -2711,6 +2735,9 @@ export function perform(offer: Offer, doing: Doing): Ran | Promise<Ran> {
       return DID;
     case "openYourSettings":
       doing.openYourSettings();
+      return DID;
+    case "readAgain":
+      doing.readAgain();
       return DID;
     case "openSettingsGroup":
       // Through the window's link into Settings (SE-22), which brings the level's tab forward
@@ -3956,7 +3983,10 @@ export type MenuOn =
   | FileOn
   /** The panes — the centre of the window, where a chat is. Not about any one pane: a split
    *  acts on the pane that has the keyboard, which is what the bar's buttons act on too. */
-  | { on: "pane" };
+  | { on: "pane" }
+  /** A refused read of the focused workspace, on the bottom region's line that says it
+   *  (#1244). */
+  | { on: "refusal" };
 
 /**
  * Which rows a context menu on that item lists, **by catalogue id and in order**.
@@ -4125,9 +4155,18 @@ export function menuOn(what: MenuOn): { above: string[]; below: string[] } {
       // checkout, and nothing in this window writes to its working tree. New branch adds a
       // branch and a folder of its own next to it (charter-app#174, GL-1).
       return {
-        above: [`clone.chat:${what.repo}`, `clone.branch:${what.repo}`, `clone.pick:${what.repo}`],
+        // And Read again, found only while a read stands refused (#1244): a tree purlis could not
+        // read is said on the repo's own row, which this menu is on.
+        above: [
+          `clone.chat:${what.repo}`,
+          `clone.branch:${what.repo}`,
+          `clone.pick:${what.repo}`,
+          READ_AGAIN,
+        ],
         below: [],
       };
+    case "refusal":
+      return { above: [READ_AGAIN], below: [] };
     case "absent":
       // Clone above; taking the repo out of the workspace below the line (#1228).
       return { above: [cloneMissingId(what.repo)], below: [dropMembershipId(what.repo)] };
