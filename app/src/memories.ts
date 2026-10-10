@@ -141,6 +141,36 @@ export function archiveOf(view: ViewRef): MemoryScope | undefined {
   return view.from === null && view.view === ARCHIVE_VIEW ? scopeOfKey(view.key) : undefined;
 }
 
+/**
+ * **The name a numbered archive restores under** (#1191, D-1191-1): the one archiving had to
+ * number it away from, or `undefined` when it was never numbered.
+ *
+ * `archive_one` (memstore.rs) moves a memory into `archive/` under its own name, and adds `-2`
+ * when `archive/` holds that name already, numbering from the name it tried last: the third is
+ * `-2-3`. This is the exact inverse of that, so a `-<n>` the core never writes is left alone:
+ * `release-2026` and `step-3` are names, not numbers. And it is offered only while `held` (the
+ * archive's other names) still holds the name it was numbered away from, which is what tells a
+ * numbered `freeze-2` from a memory its writer called `step-2`.
+ *
+ * The tab asks the core for this name first and falls back to the archived one when the store
+ * already holds it: the core refuses a taken name and moves nothing.
+ */
+export function unnumbered(archived: string, held: readonly string[]): string | undefined {
+  const stem = (name: string) => name.replace(/\.md$/, "");
+  let base = stem(archived);
+  let next: number | undefined;
+  for (;;) {
+    const numbered = /^(.+)-([1-9]\d*)$/.exec(base);
+    if (numbered === null) return undefined;
+    const n = Number(numbered[2]);
+    if (n < 2 || (next !== undefined && n !== next)) return undefined;
+    base = numbered[1];
+    if (n === 2) break;
+    next = n - 1;
+  }
+  return held.some((name) => stem(name) === base) ? base : undefined;
+}
+
 // ---------------------------------------------------------------------------------------------
 // An edit in progress.
 
