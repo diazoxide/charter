@@ -15,8 +15,11 @@
  * one whose muted text vanished into its own background.
  */
 
+/// <reference types="node" />
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { BUILT_IN, tinted, type Theme, type Token } from "./theme";
+import { BUILT_IN, property, tinted, TOKENS, type Theme, type Token } from "./theme";
 import { PALETTE } from "./tint";
 
 /** One channel of an `#rrggbb`, as the sRGB number WCAG's formula wants. */
@@ -31,11 +34,32 @@ function luminance(hex: string): number {
   return 0.2126 * channel(hex, 0) + 0.7152 * channel(hex, 1) + 0.0722 * channel(hex, 2);
 }
 
-/** WCAG contrast ratio, 1 (identical) to 21 (black on white). Alpha is ignored: a token with
- *  alpha is a wash or a glow, and none of the pairs below use one. */
+/** WCAG contrast ratio, 1 (identical) to 21 (black on white). Alpha is ignored here: a pair
+ *  whose background is a wash names what the wash is laid over, and {@link onto} lays it. */
 function contrast(a: string, b: string): number {
   const [light, dark] = [luminance(a), luminance(b)].sort((x, y) => y - x);
   return (light + 0.05) / (dark + 0.05);
+}
+
+/**
+ * `wash` laid over the opaque `under`, as the screen draws it: a token with alpha (a wash, a
+ * glow) is never seen alone, so its contrast is measured as what it makes of what is under it.
+ * An opaque `wash` is itself.
+ */
+function onto(wash: string, under: string): string {
+  const long = (hex: string) =>
+    hex.length <= 5 ? [...hex.slice(1)].map((digit) => digit + digit).join("") : hex.slice(1);
+  const top = long(wash);
+  if (top.length === 6) return wash;
+  const alpha = Number.parseInt(top.slice(6, 8), 16) / 255;
+  const bottom = long(under);
+  const mixed = [0, 2, 4].map((at) => {
+    const value =
+      Number.parseInt(top.slice(at, at + 2), 16) * alpha +
+      Number.parseInt(bottom.slice(at, at + 2), 16) * (1 - alpha);
+    return Math.round(value).toString(16).padStart(2, "0");
+  });
+  return `#${mixed.join("")}`;
 }
 
 /**
@@ -51,8 +75,11 @@ function aaText(px: number, bold = false): number {
  *  a menu row are drawn at it, never larger. */
 const WINDOW_TEXT_PX = 14;
 
-/** Every pair that ends up as something drawn on something, and the floor it has to clear. */
-const PAIRS: [Token, Token, number][] = [
+/**
+ * Every pair that ends up as something drawn on something, and the floor it has to clear. A
+ * fourth token is what the background is laid over, for a background that is a wash.
+ */
+const PAIRS: [Token, Token, number, Token?][] = [
   ["text.primary", "surface.base", 4.5],
   ["text.primary", "surface.sunken", 4.5],
   ["text.primary", "surface.deep", 4.5],
@@ -181,6 +208,20 @@ const PAIRS: [Token, Token, number][] = [
   ["tree.guide", "surface.sunken", 1.2],
   ["border.subtle", "surface.base", 1.2],
   ["border.strong", "surface.base", 1.5],
+  // DS-6 (#629): the pairs App.css draws in one rule that no line above held, found by the
+  // stylesheet check below.
+  // - A persona's mark is its initial, a word in the accent on the accent's surface.
+  ["accent.base", "accent.surface", aaText(WINDOW_TEXT_PX)],
+  // - A checklist's tick (`.dot`, `.box`) is a mark in the accent on a sunken box.
+  ["accent.base", "surface.sunken", 3],
+  // - What an extension runs as you, said inside its approval dialog on the danger wash.
+  ["text.primary", "danger.wash", 4.5, "surface.base"],
+  // - A task that is away draws its words on the terminal's own background.
+  ["text.primary", "terminal.background", 4.5],
+  // - A notice's "and N more" is secondary words on a bar of the hairline's colour.
+  ["text.secondary", "border.subtle", 4.5],
+  // - A count beside a workspace, a branch or a search is secondary words on a count chip.
+  ["text.secondary", "control.count", 4.5],
 ];
 
 /**
@@ -227,12 +268,13 @@ describe.each(DRAWN)("%s keeps a selected row apart", (_name, theme) => {
 });
 
 describe.each(DRAWN)("%s can be read", (_name, theme) => {
-  it.each(PAIRS)("%s on %s clears %s to 1", (front, back, floor) => {
-    const ratio = contrast(theme.values[front], theme.values[back]);
-    expect(
-      Number(ratio.toFixed(2)),
-      `${theme.values[front]} on ${theme.values[back]}`,
-    ).toBeGreaterThanOrEqual(floor);
+  it.each(PAIRS)("%s on %s clears %s to 1", (front, back, floor, under) => {
+    const drawn =
+      under === undefined ? theme.values[back] : onto(theme.values[back], theme.values[under]);
+    const ratio = contrast(theme.values[front], drawn);
+    expect(Number(ratio.toFixed(2)), `${theme.values[front]} on ${drawn}`).toBeGreaterThanOrEqual(
+      floor,
+    );
   });
 
   it("keeps the sixteen ANSI colours off the terminal's own background", () => {
@@ -250,5 +292,62 @@ describe.each(DRAWN)("%s can be read", (_name, theme) => {
       .filter((token) => token.startsWith("terminal.ansi."))
       .filter((token) => contrast(theme.values[token], background) < floor(token));
     expect(lost).toEqual([]);
+  });
+});
+
+/**
+ * **Every pair the stylesheets draw is held above** (DS-6, #629). A rule that sets a token as
+ * its text colour and another as its background draws the one on the other, so the pair is in
+ * {@link PAIRS}, at the floor its use asks for, or this fails naming the rule. It reads one rule
+ * at a time: a colour a rule takes from a parent's background, or a background a `:hover` rule
+ * sets on its own, is held by the lines above by hand, not here.
+ */
+describe("every pair a stylesheet draws", () => {
+  const byProperty = new Map(TOKENS.map((token) => [property(token), token]));
+  const held = new Set(PAIRS.map(([front, back]) => `${front} on ${back}`));
+  const sheets = ["App.css", "styles.css"].map((file) =>
+    readFileSync(join(process.cwd(), "src", file), "utf8").replace(/\/\*[\s\S]*?\*\//g, ""),
+  );
+  const drawn = new Map<string, string>();
+  for (const sheet of sheets)
+    for (const [, selector, body] of sheet.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+      const read = (pattern: RegExp) =>
+        [...body.matchAll(pattern)]
+          .map((hit) => byProperty.get(hit[1]))
+          .filter((token) => token !== undefined);
+      const fronts = read(/(?<![\w-])color:\s*var\((--[\w-]+)\)/g);
+      const backs = read(/(?<![\w-])background(?:-color)?:\s*var\((--[\w-]+)\)/g);
+      for (const front of fronts)
+        for (const back of backs)
+          if (!drawn.has(`${front} on ${back}`))
+            drawn.set(`${front} on ${back}`, selector.trim().split(/\s*,\s*/)[0]);
+    }
+
+  it("is found: the stylesheets draw text on a background", () => {
+    expect(drawn.get("danger.text on danger.surface")).toBeDefined();
+  });
+
+  it("is held to a floor, in every theme and tint", () => {
+    const loose = [...drawn]
+      .filter(([pair]) => !held.has(pair))
+      .map(([pair, rule]) => `${pair} (${rule})`);
+    expect(loose).toEqual([]);
+  });
+});
+
+/**
+ * **Every theme file is a theme the lines above are run on** (DS-6, #629): a colour theme added
+ * to this directory and not to `BUILT_IN` would ship unmeasured. The icon theme is not a colour
+ * theme: it has no tokens.
+ */
+describe("every theme file in this directory", () => {
+  it("is drawn above", () => {
+    const here = join(process.cwd(), "src/theme");
+    const themes = readdirSync(here)
+      .filter((file) => file.endsWith(".json"))
+      .map((file) => JSON.parse(readFileSync(join(here, file), "utf8")) as Record<string, unknown>)
+      .filter((file) => "tokens" in file)
+      .map((file) => String(file.name));
+    expect(themes.sort()).toEqual(Object.keys(BUILT_IN).sort());
   });
 });
