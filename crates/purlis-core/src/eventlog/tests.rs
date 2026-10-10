@@ -1362,7 +1362,7 @@ fn a_drained_line_is_recorded_under_the_chat_and_run_it_ran_in_and_says_it_was_s
         Drained::Rejected {
             chat: 3,
             seq: Some(7),
-            why: crate::hookwire::spool::why::MAC,
+            why: crate::hookwire::spool::Why::Mac,
         },
         Drained::Spool {
             chat: 3,
@@ -1401,6 +1401,108 @@ fn a_drained_line_is_recorded_under_the_chat_and_run_it_ran_in_and_says_it_was_s
     assert_eq!(events[2].body["seq"], 7);
     assert_eq!(events[2].body["why"], "mac");
     assert_eq!(events[3].body["to"], 6);
+}
+
+#[cfg(unix)]
+#[test]
+fn every_rejection_is_written_in_its_own_word() {
+    // #983: the drain's reasons are an enum, and the words `hook.spool.rejected` carries are
+    // what audit readers match on. Each is pinned here, byte for byte.
+    use crate::hookwire::spool::{Drained, Why};
+    let dir = tempfile::tempdir().unwrap();
+    let mut recorder = recorder(dir.path());
+    let words = [
+        (Why::Unreadable, "unreadable"),
+        (Why::NoKey, "no-key"),
+        (Why::AnotherChatsKey, "another-chats-key"),
+        (Why::Mac, "mac"),
+        (Why::NotThisChats, "not-this-chats"),
+        (Why::Repeated, "repeated"),
+        (Why::Unfinished, "unfinished"),
+    ];
+
+    for (why, _) in words {
+        recorder
+            .spooled(
+                Path::new("/plane"),
+                Drained::Rejected {
+                    chat: 4,
+                    seq: None,
+                    why,
+                },
+            )
+            .unwrap();
+    }
+
+    let events = read(dir.path()).unwrap();
+    let written: Vec<&str> = events
+        .iter()
+        .map(|event| event.body["why"].as_str().unwrap())
+        .collect();
+    let want: Vec<&str> = words.iter().map(|(_, word)| *word).collect();
+    assert_eq!(written, want);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_spooled_event_says_spooled_after_what_it_always_said() {
+    // #983: one place marks an event as drained from the spool, and the keys of every such
+    // event stay in the order they were written before.
+    use crate::hookwire::spool::{Drained, Spooled};
+    let refused = |chat| crate::hookwire::CommitRefused {
+        chat,
+        commit_refused: "svc: a key-shaped line".to_owned(),
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let plane = Path::new("/plane");
+    let mut recorder = recorder(dir.path());
+    recorder.knows(
+        plane,
+        3,
+        RunOf {
+            chat: "01J9ZZCHAT00000000000000AA",
+            run: "01J9ZZRUN000000000000000AA",
+        },
+    );
+    for item in [
+        Drained::Line {
+            chat: 3,
+            seq: 1,
+            line: Spooled::Report(report(3, crate::state::Event::SessionStart)),
+        },
+        Drained::Line {
+            chat: 3,
+            seq: 2,
+            line: Spooled::Refused(refused(3)),
+        },
+        Drained::Line {
+            chat: 9,
+            seq: 3,
+            line: Spooled::Report(report(9, crate::state::Event::Stop)),
+        },
+        Drained::Line {
+            chat: 9,
+            seq: 4,
+            line: Spooled::Refused(refused(9)),
+        },
+    ] {
+        recorder.spooled(plane, item).unwrap();
+    }
+
+    let keys: Vec<Vec<String>> = read(dir.path())
+        .unwrap()
+        .iter()
+        .map(|event| event.body.as_object().unwrap().keys().cloned().collect())
+        .collect();
+    assert_eq!(
+        keys,
+        [
+            vec!["started", "spooled"],
+            vec!["spooled"],
+            vec!["spooled", "chat_number"],
+            vec!["spooled", "chat_number"],
+        ]
+    );
 }
 
 #[cfg(unix)]

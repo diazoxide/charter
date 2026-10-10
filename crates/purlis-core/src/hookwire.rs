@@ -1797,7 +1797,43 @@ pub fn tell_saved(
     one_line_with_a_deadline(path, token, saved)
 }
 
-/// Where a hook's line went ([`deliver_report`], [`deliver_tool`], [`deliver_refused`]).
+/// A line a hook delivers, which its chat's spool keeps when the host does not take it
+/// (FD-30): a [`Report`], a [`ToolCall`] or a [`CommitRefused`]. [`deliver`] serves all three.
+///
+/// **Sealed.** The drain reads these three kinds back and no other ([`spool::Spooled`]), so
+/// nothing outside this module can make a fourth kind a hook would spool.
+pub trait SpoolLine: serde::Serialize + sealed::Sealed {
+    /// The number of the chat whose spool the line goes to.
+    fn chat(&self) -> u32;
+}
+
+mod sealed {
+    pub trait Sealed {}
+    impl Sealed for super::Report {}
+    impl Sealed for super::ToolCall {}
+    impl Sealed for super::CommitRefused {}
+}
+
+impl SpoolLine for Report {
+    fn chat(&self) -> u32 {
+        self.chat
+    }
+}
+
+impl SpoolLine for ToolCall {
+    fn chat(&self) -> u32 {
+        self.chat
+    }
+}
+
+impl SpoolLine for CommitRefused {
+    fn chat(&self) -> u32 {
+        self.chat
+    }
+}
+
+/// Where a hook's line went ([`deliver`]: [`deliver_report`], [`deliver_tool`],
+/// [`deliver_refused`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Delivered {
     /// The host said it took the line, once its hearer had recorded it.
@@ -1817,38 +1853,41 @@ struct Taken {
     refused: Option<String>,
 }
 
-/// Delivers a chat's report: taken by the host at `path`, or spooled beside it.
+/// Delivers a chat's report: taken by the host at `path`, or spooled beside it ([`deliver`]).
 #[cfg(unix)]
 pub fn deliver_report(
     path: &std::path::Path,
     token: Option<&ChatToken>,
     report: &Report,
 ) -> io::Result<Delivered> {
-    deliver(path, token, report.chat, report)
+    deliver(path, token, report)
 }
 
-/// Delivers a tool call's line: taken by the host at `path`, or spooled beside it.
+/// Delivers a tool call's line: taken by the host at `path`, or spooled beside it
+/// ([`deliver`]).
 #[cfg(unix)]
 pub fn deliver_tool(
     path: &std::path::Path,
     token: Option<&ChatToken>,
     call: &ToolCall,
 ) -> io::Result<Delivered> {
-    deliver(path, token, call.chat, call)
+    deliver(path, token, call)
 }
 
-/// Delivers a refused commit's line: taken by the host at `path`, or spooled beside it.
+/// Delivers a refused commit's line: taken by the host at `path`, or spooled beside it
+/// ([`deliver`]).
 #[cfg(unix)]
 pub fn deliver_refused(
     path: &std::path::Path,
     token: Option<&ChatToken>,
     refused: &CommitRefused,
 ) -> io::Result<Delivered> {
-    deliver(path, token, refused.chat, refused)
+    deliver(path, token, refused)
 }
 
 /// The line to the host, and an answer from it that it took the line, within
-/// [`A_NOTICE_TAKES_AT_MOST`]; otherwise the line in chat `chat`'s spool ([`spool::append`]).
+/// [`A_NOTICE_TAKES_AT_MOST`]; otherwise the line in its chat's spool ([`spool::append`]). The
+/// one delivery every [`SpoolLine`] kind takes.
 ///
 /// **When this returns `Ok` the line is recorded or durable** (ADR 0075 §7, FD-30): a hook
 /// answers its harness after this, so a host that is down, slow or gone costs the line its
@@ -1858,11 +1897,10 @@ pub fn deliver_refused(
 /// Without a token nothing can be spooled, since a spool line is checked under the token's key,
 /// and the error says the line is lost.
 #[cfg(unix)]
-fn deliver(
+pub fn deliver<L: SpoolLine>(
     path: &std::path::Path,
     token: Option<&ChatToken>,
-    chat: u32,
-    line: &impl serde::Serialize,
+    line: &L,
 ) -> io::Result<Delivered> {
     use std::io::{BufRead, Read, Write};
 
@@ -1898,7 +1936,7 @@ fn deliver(
             format!("{why}, and with no chat token it cannot be spooled, so it is lost"),
         ));
     };
-    spool::append(&spool::dir_for(path), chat, token, line)
+    spool::append(&spool::dir_for(path), line.chat(), token, line)
         .map(Delivered::Spooled)
         .map_err(|spooled| not_spooled(&why, spooled))
 }
@@ -2068,7 +2106,7 @@ pub mod spool;
 pub mod permission;
 #[cfg(not(unix))]
 pub use off_unix::{
-    Asking, Listener, Reading, deliver_refused, deliver_report, send, tell, tell_saved,
+    Asking, Listener, Reading, deliver, deliver_refused, deliver_report, send, tell, tell_saved,
 };
 pub use permission::{PermissionAsked, Permitting, ask_permission};
 
