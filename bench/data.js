@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791649126035,
+  "lastUpdate": 1791651100692,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -6132,6 +6132,48 @@ window.BENCHMARK_DATA = {
             "value": 103.919783,
             "unit": "ms",
             "extra": "median of 5 runs: 102.727, 103.077, 103.920, 103.950, 106.234 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "eyehollow@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "dbrownsimple"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "5261af8971f74df1b3b1fe26951b1d335def65c1",
+          "message": "Draw a hidden view as nothing: the views' display outranked hidden\n\n`.region-view { display: flex }` beats the browser's `[hidden] { display: none }`, so the real\nwindow drew the Explorer view under the Chats view (regions.e2e.ts caught it). App.css says\n`display: none` again for a hidden view, after it, and RegionFrame.test.tsx reads the cascade\nto hold it. keyboard-reach.e2e.ts counts the activity bar among the window's tab lists.\n\nRefs #1673\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nAssisted-by: claude-code\nPurlis-Chat: 01M4AREQXXRGBAEWM0SZ0N0WBN\nPurlis-Persona: steward",
+          "timestamp": "2026-10-10T20:41:00+04:00",
+          "tree_id": "32de7e1e07fc4d8cfaa45894de7dbf62bd702fc7",
+          "url": "https://github.com/purlis/purlis/commit/5261af8971f74df1b3b1fe26951b1d335def65c1"
+        },
+        "date": 1791651099597,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.5257050000000001,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.509, 0.511, 0.526, 0.527, 0.539 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.8208755,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.268, 16.683, 16.821, 17.105, 17.299 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 105.857316,
+            "unit": "ms",
+            "extra": "median of 5 runs: 102.649, 103.119, 105.857, 105.869, 106.088 ms"
           }
         ]
       }
