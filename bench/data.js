@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791671030999,
+  "lastUpdate": 1791672384427,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -6594,6 +6594,48 @@ window.BENCHMARK_DATA = {
             "value": 105.0651485,
             "unit": "ms",
             "extra": "median of 5 runs: 103.857, 104.980, 105.065, 105.352, 105.897 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "eyehollow@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "dbrownsimple"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "441b3dc160e054b5badd8729d604c8c042109369",
+          "message": "Open the stop test unsteered first, and wait out a look's first look in a test\n\nThe reader test opened with its `use` lines before `unsteered!()`, which the\ndirectory's guard refuses. The new-workspace look test wrote its todo while\nthe look could still be taking its first look at the new folder, so on CI\nthe write was in that first look and nothing told it.\n\nRefs #1189, Refs #756\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nAssisted-by: claude-code:claude-opus-5-5\nPurlis-Chat: 01M4AREQXXRGBAEWM0SZ0N0WBN\nPurlis-Persona: steward",
+          "timestamp": "2026-10-11T02:40:34+04:00",
+          "tree_id": "5aa43b889f05ea7c6b0996f7d09c8a74bc9a78e7",
+          "url": "https://github.com/purlis/purlis/commit/441b3dc160e054b5badd8729d604c8c042109369"
+        },
+        "date": 1791672383110,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.2896575,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.273, 0.283, 0.290, 0.294, 0.296 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.520027,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.421, 16.434, 16.520, 16.538, 16.600 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 101.346723,
+            "unit": "ms",
+            "extra": "median of 5 runs: 100.644, 101.300, 101.347, 102.037, 102.061 ms"
           }
         ]
       }
