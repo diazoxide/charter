@@ -175,7 +175,7 @@ import { PersonaMarks, ReloadPersonaMarks, usePersonaMarks } from "./PersonaMark
 import { DispatchGrantNotice } from "./DispatchGrantNotice";
 import { TasksSharingNotice } from "./TasksSharingNotice";
 import { taskChangesTitle, taskChangesView } from "./taskChanges";
-import { useSandboxBlocks, type Blocks } from "./sandboxBlocks";
+import { noticeKey, useSandboxBlocks, type Blocks } from "./sandboxBlocks";
 import { taskBlockGroups, whoseOf, withoutGrouped, type TaskBlockGroup } from "./taskAsks";
 import { TaskBlocksAnswered, TaskBlocksNotice } from "./TaskBlocksNotice";
 import { TaskPromptNotice } from "./TaskPromptNotice";
@@ -9136,7 +9136,7 @@ function ChatNotices({
       />
       {newest !== undefined && (
         <SandboxBlockNotice
-          key={`${newest.operation}:${newest.kind}:${newest.ours ? "ours" : "chat"}:${newest.target ?? ""}`}
+          key={noticeKey(newest)}
           block={newest}
           more={(blocks?.length ?? 1) - 1}
           onDismiss={() => onDismissBlock(newest)}

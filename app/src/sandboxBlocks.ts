@@ -28,9 +28,13 @@ export const AT_MOST_HOSTS = 8;
 /**
  * A block as the window holds it: the core's, and for a block that names its host, every host
  * refused under its operation and kind while it was up, oldest first. Its `target` is the first
- * of them, so the Notice drawing it stays the same Notice as hosts join.
+ * of them. `joined` is when a host last joined it (ms since the epoch), held with the block so
+ * the Notice's guard on a press just after a host joined survives the Notice being drawn again.
  */
-export type HeldBlock = ChatBlocked & { readonly hosts?: readonly string[] };
+export type HeldBlock = ChatBlocked & {
+  readonly hosts?: readonly string[];
+  readonly joined?: number;
+};
 
 /** Each chat's blocks, by session, newest last. */
 export type Blocks = Readonly<Record<number, readonly HeldBlock[]>>;
@@ -52,6 +56,17 @@ export function matched(offer: "host" | "write", target: string): string {
 /** Whether `block` offers Allow on a host its report named: one several may join. */
 const namesAHost = (block: ChatBlocked) =>
   block.offer === "host" && !block.ours && block.target !== null;
+
+/**
+ * **The key of the Notice drawing `block`**: one Notice for a block listing hosts however its
+ * hosts change (the first can be dropped at the bound or answered), so what it holds (the
+ * hosts allowed already, when one joined) is never lost while it is up (#1637).
+ */
+export function noticeKey(block: ChatBlocked): string {
+  const who = block.ours ? "ours" : "chat";
+  const what = namesAHost(block) ? "hosts" : `:${block.target ?? ""}`;
+  return `${block.operation}:${block.kind}:${who}:${what}`;
+}
 
 const same = (one: ChatBlocked, other: ChatBlocked) =>
   one.operation === other.operation &&
@@ -98,21 +113,22 @@ function withoutHostsOf(block: HeldBlock, of: readonly string[]): HeldBlock | un
  * block of its operation and kind that is up, which then offers Allow only at the levels every
  * host it lists may be allowed at (#1343).
  */
-export function blocked(blocks: Blocks, told: ChatBlocked): Blocks {
+export function blocked(blocks: Blocks, told: ChatBlocked, now = Date.now()): Blocks {
   const held = blocks[told.session] ?? [];
   const was = held.find((one) => same(one, told));
   const mine = held.filter((one) => one !== was);
-  let now: HeldBlock = told;
+  let newest: HeldBlock = told;
   const joining = told.target;
   if (was !== undefined && namesAHost(told) && joining !== null) {
     const hosts = hostsOf(was);
     const known = hosts.some((host) => matched("host", host) === matched("host", joining));
-    now = {
+    newest = {
       ...listing(told, known ? hosts : [...hosts, joining].slice(-AT_MOST_HOSTS)),
       levels: was.levels.filter((level) => told.levels.includes(level)),
+      ...(known ? (was.joined === undefined ? {} : { joined: was.joined }) : { joined: now }),
     };
   }
-  return { ...blocks, [told.session]: [...mine, now].slice(-AT_MOST_PER_CHAT) };
+  return { ...blocks, [told.session]: [...mine, newest].slice(-AT_MOST_PER_CHAT) };
 }
 
 /**
