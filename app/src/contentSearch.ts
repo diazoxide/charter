@@ -11,15 +11,16 @@ import type { Place } from "./pieceViews";
 import type { ViewRef } from "./tabs";
 
 /**
- * **⌘⇧F: the Search view tab's model** (FM-8, #1111; #1103, V86 F9/F10). What it searches, how a
- * tab is keyed, and the run it asks the core for — `purlis_core::files::search`, through
- * `search_files`. The window names a project and branches, never a directory.
+ * **⌘⇧F: the Search view's model** (FM-8, #1111; #1103, V86 F9/F10; the left side's view since
+ * #1676, and only there since #1701). What it searches, how a search is keyed, and the run it
+ * asks the core for — `purlis_core::files::search`, through `search_files`. The window names a
+ * project and branches, never a directory.
  *
- * A Search tab is **keyed by its scope and its query**, so the same search asked twice brings the
- * tab already showing it forward. The key is names only — a scope's kind, the branch it was
- * opened on (a workspace, a repo and a piece, none of which can hold a `|` or a `/`), the match
- * options, then the query, last, so it may hold anything. Search tabs are not kept for the next
- * launch: what was typed is the operator's, and is never written to the record.
+ * A search is **keyed by its scope and its query** (a `ViewRef`, the shape it had as a tab), so
+ * the view knows when it is asked something new. The key is names only — a scope's kind, the
+ * branch it was opened on (a workspace, a repo and a piece, none of which can hold a `|` or a
+ * `/`), the match options, then the query, last, so it may hold anything. A search is never
+ * kept for the next launch: what was typed is the operator's, and is never written to the record.
  */
 
 /** How wide a search looks. */
@@ -28,7 +29,7 @@ export type ScopeKind = "branch" | "workspace" | "project" | "open";
 /** How the query matches. */
 export type Matching = { regex: boolean; matchCase: boolean; wholeWord: boolean };
 
-/** One Search tab's question. */
+/** One search's question. */
 export type SearchAsk = {
   kind: ScopeKind;
   /** The branch the tab was opened on, if any: the branch scope's, and the one wider scopes put
@@ -43,7 +44,7 @@ export type SearchAsk = {
 export const SEARCH = "search";
 const PLAIN: Matching = { regex: false, matchCase: false, wholeWord: false };
 
-/** The view a Search tab shows. */
+/** The view reference a search is kept as. */
 export function searchView(ask: SearchAsk): ViewRef {
   const branch = ask.branch
     ? `${ask.branch.workspace}/${ask.branch.repo}/${ask.branch.piece ?? ""}`
@@ -59,13 +60,13 @@ export function searchView(ask: SearchAsk): ViewRef {
   };
 }
 
-/** Whether a view is a Search tab. */
+/** Whether a view reference is a search's. */
 export function isSearch(view: ViewRef): boolean {
   return view.from === null && view.view === SEARCH;
 }
 
-/** The question a Search tab's view asks; `undefined` for any other view, or a key not made by
- *  {@link searchView}. */
+/** The question a search's view reference asks; `undefined` for any other view, or a key not
+ *  made by {@link searchView}. */
 export function searchOf(view: ViewRef): SearchAsk | undefined {
   if (!isSearch(view)) return undefined;
   const parts = view.key.split("|");
@@ -92,7 +93,7 @@ export function searchOf(view: ViewRef): SearchAsk | undefined {
   };
 }
 
-/** What a Search tab is called. */
+/** What a search is called. */
 export function searchTitle(ask: SearchAsk): string {
   const query = ask.query.trim();
   return query === ""
@@ -101,7 +102,7 @@ export function searchTitle(ask: SearchAsk): string {
 }
 
 /**
- * The Search tab ⌘⇧F opens: as narrow as the window's focus — the branch the explorer picked,
+ * The search ⌘⇧F shows: as narrow as the window's focus — the branch the explorer picked,
  * else the workspace in front, else the whole project — with an empty query.
  */
 export function searchFromFocus(
@@ -179,7 +180,7 @@ export type SearchHeard = {
 
 const IDLE: SearchHeard = { files: [], refused: [], unsearched: [], state: "idle" };
 
-/** A Search tab's id, unique in this window for as long as the page is loaded: what the core
+/** A search view's id, unique in this window for as long as the page is loaded: what the core
  *  keeps its run under, and what stops it. */
 let tabs = Date.now() % 1_000_000_000;
 

@@ -1,6 +1,3 @@
-/// <reference types="node" />
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
@@ -403,51 +400,75 @@ describe("the Changes view", () => {
       <ChangesView offers={NO_MENUS} onPress={() => {}} workspace={undefined} state={state()} />,
     );
 
-    expect(screen.getByText("No workspace focused.")).toBeInTheDocument();
+    expect(screen.getByText("No workspace focused")).toBeInTheDocument();
+    // FR-19 (#614): it says what goes here, not only that nothing does.
+    expect(screen.getByTestId("changes-empty")).toHaveTextContent(/Focus a workspace/);
     expect(screen.queryByTestId("repo-svc")).not.toBeInTheDocument();
+  });
+
+  it("says what a workspace with no repos would list here", () => {
+    render(
+      <ChangesView
+        offers={NO_MENUS}
+        onPress={() => {}}
+        workspace="alpha"
+        state={state({ panels: { ...PANELS, repos: [], absent: [] } })}
+      />,
+    );
+
+    expect(screen.getByTestId("changes-empty")).toHaveTextContent("No repos in this workspace");
+    expect(screen.getByTestId("changes-empty")).toHaveTextContent(
+      /the branch it is on, its changes/,
+    );
+    expect(screen.queryByRole("tree")).not.toBeInTheDocument();
   });
 
   // ---------------------------------------------------------------------------------------
   // Columns, a worktree tree, and pipelines that move (M6.6)
   // ---------------------------------------------------------------------------------------
 
-  it("lays the repos out in named columns, one row per repo", () => {
+  it("draws each repo as a tree: its heading with the branch, then its changes, branches and pipeline", () => {
     render(
       <ChangesView
         offers={NO_MENUS}
         onPress={() => {}}
         workspace="alpha"
         state={state({
+          pieces: { svc: [piece("one")], tool: [] },
           repos: {
             workspace: "alpha",
             cache_refused: null,
-            repos: [repo("svc", { tracked: 3 }), repo("tool")],
+            repos: [repo("svc", { tracked: 3, upstream: "origin/main" }), repo("tool")],
           },
         })}
       />,
     );
 
-    // The operator's "add tabs columns": a column question — which of these is dirty — is
-    // answered by reading down, and a screen reader says which column a value is in.
-    expect(screen.getAllByRole("columnheader").map((one) => one.textContent)).toEqual([
-      "Repo",
-      "Branch",
-      "Changes",
-      "Branches",
-      "Pipeline",
+    // An editor's source-control view (#1701), and not a table that scrolls sideways in a side:
+    // one heading per repo, and what is true of it as rows under it.
+    const tree = screen.getByRole("tree", { name: "Repos of alpha" });
+    const headings = within(tree)
+      .getAllByRole("treeitem")
+      .filter((item) => item.getAttribute("aria-level") === "1");
+    expect(headings.map((one) => one.querySelector(".repo")?.textContent)).toEqual(["svc", "tool"]);
+    expect(headings[0].querySelector(".branch")).toHaveTextContent("main");
+    expect(headings[0].querySelector(".upstream")).toHaveTextContent("origin/main");
+    expect(within(tree).queryAllByRole("columnheader")).toEqual([]);
+
+    const under = within(row("svc"))
+      .getAllByRole("treeitem")
+      .map((item) => [item.getAttribute("aria-level"), item.className.split(" ")[0]]);
+    expect(under).toEqual([
+      ["1", "repo-row"],
+      ["2", "changes"],
+      ["2", "worktrees"],
+      ["3", "piece"],
+      ["2", "ci"],
     ]);
-    expect(screen.getAllByRole("rowheader").map((one) => one.textContent)).toEqual(["svc", "tool"]);
-    const cells = within(row("svc")).getAllByRole("cell");
-    expect(cells.map((one) => one.className.split(" ")[0])).toEqual([
-      "branch",
-      "dirt",
-      "worktrees",
-      "ci",
-    ]);
-    expect(cells[1]).toHaveTextContent("3 changed");
+    expect(within(row("svc")).getAllByRole("treeitem")[1]).toHaveTextContent("3 changed");
   });
 
-  it("gives every row the same five columns, whatever charter could read of it", () => {
+  it("draws every repo's rows whatever charter could read of it", () => {
     render(
       <ChangesView
         offers={NO_MENUS}
@@ -464,13 +485,16 @@ describe("the Changes view", () => {
       />,
     );
 
-    // A row one column short draws the next repo's pipeline under this one's worktrees.
-    const width = (tr: HTMLElement) =>
-      [...tr.children].reduce((sum, cell) => sum + Number(cell.getAttribute("colspan") ?? 1), 0);
-    for (const name of ["svc", "tool", "gone", "later"]) expect(width(row(name))).toBe(5);
+    // A repo git has not answered for yet still says so on each of its rows; one nobody
+    // cloned is a heading that says it, with nothing under it to read.
+    expect(row("gone")).toHaveTextContent("not read");
+    expect(screen.getByTestId("ci-gone")).toHaveTextContent("not read");
+    expect(row("tool")).toHaveTextContent("could not read it");
+    expect(within(row("later")).getAllByRole("treeitem")).toHaveLength(1);
+    expect(row("later")).toHaveTextContent("not cloned here");
   });
 
-  it("draws a clone's worktrees as a tree under its row, each with its branch and state", () => {
+  it("draws a clone's worktrees as rows under its Branches row, each with its branch and state", () => {
     render(
       <ChangesView
         offers={NO_MENUS}
@@ -491,8 +515,12 @@ describe("the Changes view", () => {
     );
 
     const tree = screen.getByTestId("worktree-tree-svc");
-    const rows = within(tree).getAllByRole("listitem");
-    expect(rows.map((one) => one.querySelector(".piece")?.textContent)).toEqual([
+    // The shared tree's level (#1682): a `role="group"` under the row it hangs from, whose
+    // guide is the `.tree` style's straight line and never the bottom bar's elbows.
+    expect(tree).toHaveAttribute("role", "group");
+    expect(tree.closest(".tree")).not.toBeNull();
+    const rows = within(tree).getAllByRole("treeitem");
+    expect(rows.map((one) => one.querySelector(".piece-name")?.textContent)).toEqual([
       "one",
       "two",
       "three",
@@ -504,8 +532,61 @@ describe("the Changes view", () => {
     // Stale says stale and nothing else: a directory that is gone is not also "unwired".
     expect(rows[2]).toHaveTextContent("stale");
     expect(rows[2]).not.toHaveTextContent("unwired");
-    // A clone with nothing cut off it has no tree — the row already says "no worktrees".
+    // A clone with nothing cut off it has no rows under Branches — that row says "no branches".
     expect(screen.queryByTestId("worktree-tree-tool")).not.toBeInTheDocument();
+  });
+
+  // ---------------------------------------------------------------------------------------
+  // The keyboard: one stop, the tree's arrows (#1701 line 4)
+  // ---------------------------------------------------------------------------------------
+
+  it("is one Tab stop, on its first row, which is where ⌃⇧G lands", () => {
+    render(
+      <ChangesView
+        offers={NO_MENUS}
+        onPress={() => {}}
+        workspace="alpha"
+        state={state({
+          pieces: { svc: [piece("one")], tool: [] },
+          repos: { workspace: "alpha", cache_refused: null, repos: [repo("svc"), repo("tool")] },
+        })}
+      />,
+    );
+
+    // `giveViewTheKeyboard` focuses the tree's `[tabindex="0"]`: there is exactly one.
+    const tree = screen.getByRole("tree");
+    const stops = tree.querySelectorAll('[tabindex="0"]');
+    expect(stops).toHaveLength(1);
+    expect(stops[0]).toBe(within(row("svc")).getAllByRole("treeitem")[0]);
+  });
+
+  it("steps down the rows, into a repo's rows and back out to its heading", async () => {
+    render(
+      <ChangesView
+        offers={NO_MENUS}
+        onPress={() => {}}
+        workspace="alpha"
+        state={state({
+          pieces: { svc: [piece("one")], tool: [] },
+          repos: { workspace: "alpha", cache_refused: null, repos: [repo("svc"), repo("tool")] },
+        })}
+      />,
+    );
+    const items = within(row("svc")).getAllByRole("treeitem");
+
+    await userEvent.tab();
+    expect(items[0]).toHaveFocus();
+    await userEvent.keyboard("{ArrowDown}");
+    expect(items[1]).toHaveFocus();
+    await userEvent.keyboard("{ArrowLeft}");
+    expect(items[0]).toHaveFocus();
+    await userEvent.keyboard("{ArrowRight}");
+    expect(items[1]).toHaveFocus();
+    await userEvent.keyboard("{End}");
+    expect(screen.getByTestId("ci-tool")).toHaveFocus();
+    // And Tab leaves: the tree is one stop, not one per row.
+    await userEvent.tab();
+    expect(screen.getByRole("tree")).not.toContainElement(document.activeElement as HTMLElement);
   });
 
   it.each([
@@ -613,46 +694,6 @@ describe("the Changes view", () => {
     expect(cell.querySelector(".spinning")).toBeNull();
   });
 
-  /**
-   * **No table cell in the Changes view is ever a flex container.** A `<td>` given `display: flex`
-   * stops being a table-cell, and the column it was laid out in goes with it — which is the whole
-   * reason this region is a table. Everything inside a cell is laid out inline. jsdom lays out
-   * nothing, so this reads the stylesheet, and it is what stops the obvious "just flex the icon
-   * and the text" fix from quietly un-aligning every column.
-   */
-  describe("the Changes view's stylesheet", () => {
-    const css = readFileSync(join(process.cwd(), "src/App.css"), "utf8").replace(
-      /\/\*[\s\S]*?\*\//g,
-      "",
-    );
-    const rules = [...css.matchAll(/([^{}]+)\{([^}]*)\}/g)].map(([, selector, body]) => ({
-      selectors: selector.split(",").map((one) => one.trim()),
-      body,
-    }));
-    // What a cell is, in this region: the row's own cells, and the classes a cell carries.
-    const CELL = /^\.state-bar (?:\.repo-row > (?:td|th)|\.repo|\.branch|\.dirt|\.worktrees|\.ci)$/;
-
-    it("reaches the cells it styles", () => {
-      expect(rules.some(({ selectors }) => selectors.some((one) => CELL.test(one)))).toBe(true);
-    });
-
-    it("never makes a cell a flex or grid container", () => {
-      const flexed = rules
-        .filter(({ body }) => /(?:^|[;\s])display\s*:\s*(?:inline-)?(?:flex|grid)/.test(body))
-        .flatMap(({ selectors }) => selectors.filter((one) => CELL.test(one)));
-      expect(flexed).toEqual([]);
-    });
-
-    it("draws the worktree tree's guides with borders only, like the explorer's", () => {
-      const guides = rules.filter(({ selectors }) =>
-        selectors.some((one) => /\.worktree-tree.*::(?:before|after)/.test(one)),
-      );
-      expect(guides.length).toBeGreaterThan(0);
-      for (const { body } of guides)
-        expect(body).not.toMatch(/(?:^|[;\s])background(?:-color)?\s*:/);
-    });
-  });
-
   // ---------------------------------------------------------------------------------------
   // The rule, as far as a test can hold it (ADR 0038)
   // ---------------------------------------------------------------------------------------
@@ -746,7 +787,7 @@ describe("a repo row's menu", () => {
     const pressed: string[] = [];
     bar((id) => pressed.push(id));
 
-    rightClick(row("tool"));
+    rightClick(within(row("tool")).getByText("tool"));
     await screen.findByRole("menu");
     await userEvent.click(screen.getByRole("menuitem", { name: "New tab in tool" }));
 
@@ -767,9 +808,31 @@ describe("a repo row's menu", () => {
   it("has none on the worktrees under a repo", () => {
     bar();
 
-    rightClick(within(screen.getByTestId("worktree-tree-svc")).getByText("one"));
+    rightClick(within(screen.getByTestId("worktree-tree-svc")).getByRole("treeitem"));
 
     expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("opens on the row the keyboard is on, with Shift+F10", async () => {
+    bar();
+
+    await userEvent.tab();
+    expect(within(row("svc")).getAllByRole("treeitem")[0]).toHaveFocus();
+    await userEvent.keyboard("{Shift>}{F10}{/Shift}");
+
+    expect(
+      within(await screen.findByRole("menu")).getByRole("menuitem", { name: "New tab in svc" }),
+    ).toBeInTheDocument();
+  });
+
+  it("is on a repo's own rows under its heading too", async () => {
+    bar();
+
+    rightClick(screen.getByTestId("ci-svc"));
+
+    expect(
+      within(await screen.findByRole("menu")).getByRole("menuitem", { name: "New tab in svc" }),
+    ).toBeInTheDocument();
   });
 
   it("still leaves nothing in the region to press", () => {
@@ -882,7 +945,7 @@ describe("an extension's repo columns (charter-app#340)", () => {
     ...over,
   });
 
-  it("adds a heading for each column and a cell for each repo its facts file filled", () => {
+  it("adds a row under each repo its facts file filled, named by the column", () => {
     render(
       <ChangesView
         offers={NO_MENUS}
@@ -893,10 +956,14 @@ describe("an extension's repo columns (charter-app#340)", () => {
       />,
     );
 
-    expect(screen.getByRole("columnheader", { name: "PRs" })).toBeInTheDocument();
-    expect(screen.getByTestId("fact-prs-open-svc")).toHaveTextContent("2");
-    // A repo the file did not name has an empty cell, never a borrowed value.
-    expect(screen.getByTestId("fact-prs-open-tool")).toBeEmptyDOMElement();
+    expect(screen.getByTestId("fact-prs-open-svc")).toHaveTextContent("PRs 2");
+    expect(screen.getByTestId("fact-prs-open-svc")).toHaveAttribute("role", "treeitem");
+    expect(within(screen.getByTestId("fact-prs-open-svc")).getByText("PRs")).toHaveAttribute(
+      "title",
+      "From the extension prs",
+    );
+    // A repo the file did not name has no row, never a borrowed value.
+    expect(screen.queryByTestId("fact-prs-open-tool")).not.toBeInTheDocument();
   });
 
   it("dims a stale cell and says how old it is", () => {
@@ -912,12 +979,12 @@ describe("an extension's repo columns (charter-app#340)", () => {
 
     const cell = screen.getByTestId("fact-prs-open-svc");
     expect(cell).toHaveClass("stale");
-    expect(cell).toHaveTextContent("2 · 2h ago");
+    expect(cell).toHaveTextContent("PRs 2 · 2h ago");
   });
 
-  it("draws the five columns it always drew when no extension adds one", () => {
+  it("draws the rows it always drew when no extension adds one", () => {
     render(<ChangesView offers={NO_MENUS} onPress={() => {}} workspace="alpha" state={state()} />);
 
-    expect(screen.getAllByRole("columnheader")).toHaveLength(5);
+    expect(within(row("svc")).getAllByRole("treeitem")).toHaveLength(4);
   });
 });

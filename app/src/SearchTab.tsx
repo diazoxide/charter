@@ -1,8 +1,8 @@
 /**
- * **The Search view tab** (FM-8, #1111; #1103, V86 F9/F10): ⌘⇧F's content search, as a view tab.
- *
- * **And the left side's Search view** (#1676): ⌘⇧F shows the view, which draws this same
- * component in the side, keyed by what it asks just as a tab is (`PlaneView`'s `sideSearch`).
+ * **The left side's Search view** (FM-8, #1111; #1103, V86 F9/F10; #1676): ⌘⇧F's content
+ * search. ⌘⇧F shows the view, which draws this component in the side, keyed by what it asks
+ * (`PlaneView`'s `sideSearch`). It was a view tab until #1676; since #1701 the side is the one
+ * place a search is drawn, and no pane draws one (D-1701-2). The name is the tab's, kept.
  *
  * A query box with its three switches — match case, whole word, regular expression — and where
  * to look: the branch the tab was opened on, its workspace, this project, or every project open
@@ -111,8 +111,8 @@ export function SearchTab({
   if (ask === undefined) {
     return (
       <EmptyState
-        headline="This search tab could not be read"
-        body="Close it and start a new search."
+        headline="This search could not be read"
+        body="Show Search again to start a new one."
         size="panel"
       />
     );
@@ -203,6 +203,7 @@ function SearchBody({
       <Hits
         heard={heard}
         asked={ask.query.trim() !== ""}
+        query={ask.query}
         list={list}
         onBack={() => box.current?.focus()}
         onMore={more}
@@ -311,9 +312,12 @@ function Hits({
   list,
   onBack,
   onMore,
+  query,
 }: {
   heard: SearchHeard;
   asked: boolean;
+  /** What was asked, said back when nothing matched it. */
+  query: string;
   list: React.RefObject<HTMLDivElement | null>;
   onBack: () => void;
   onMore: () => void;
@@ -352,6 +356,10 @@ function Hits({
   if (heard.trouble !== undefined) {
     return <EmptyState headline={heard.trouble} size="panel" testid="search-trouble" />;
   }
+  // **A finished search that found nothing says so, and what to try** (FR-19, #614), where the
+  // hits would be. The status line above still counts it, and still names a branch it could
+  // not search, which is the other reason nothing came back.
+  const nothing = heard.state === "done" && heard.files.length === 0;
 
   /** The hit `n` lines into what is shown: its file and its line's number. */
   const hitAt = (n: number) => {
@@ -492,97 +500,107 @@ function Hits({
           />
         </div>
       )}
-      <div
-        ref={list}
-        className="search-hits"
-        role="listbox"
-        aria-label="Search results"
-        tabIndex={0}
-        aria-activedescendant={lines > 0 ? `search-hit-${at}` : undefined}
-        aria-keyshortcuts="Shift+Enter"
-        onKeyDown={keys}
-      >
-        {shown.map(({ file, project, branch, first }) => {
-          const cut = file.path.lastIndexOf("/");
-          const name = file.path.slice(cut + 1);
-          const folder = cut < 0 ? "" : file.path.slice(0, cut);
-          const where = [folder, placeName(file), projectCalled(file.plane)]
-            .filter((part) => part !== "")
-            .join(" · ");
-          return (
-            <div
-              key={`${file.plane}\u0000${file.workspace}/${file.repo}/${file.piece ?? ""}\u0000${file.path}`}
-              role="group"
-              aria-label={`${name}, ${where}`}
-              className="search-file"
-            >
-              {project !== undefined && (
-                <div className="search-project" aria-hidden="true">
-                  {project}
-                </div>
-              )}
-              {branch !== undefined && (
-                <div className="search-branch" aria-hidden="true">
-                  {branch}
-                </div>
-              )}
-              <div className="search-file-head" aria-hidden="true">
-                <HitIcon file={file} name={name} />
-                <span className="search-file-name">{name}</span>
-                {folder !== "" && <span className="search-file-folder">{folder}</span>}
-                <span className="search-count">{file.count}</span>
-              </div>
-              {file.lines.map((line, i) => {
-                const n = first + i;
-                return (
-                  <div
-                    key={line.number}
-                    id={`search-hit-${n}`}
-                    data-hit={n}
-                    role="option"
-                    aria-selected={n === at}
-                    className={n === at ? "search-line active" : "search-line"}
-                    // A hit dragged onto a chat carries its line (FM-9).
-                    draggable
-                    onDragStart={(event) =>
-                      dragReference(event, {
-                        plane: file.plane,
-                        workspace: file.workspace,
-                        repo: file.repo,
-                        piece: file.piece,
-                        path: file.path,
-                        folder: false,
-                        lines: { first: line.number, last: line.number },
-                      })
-                    }
-                    onClick={() => {
-                      setActive(n);
-                      open(n);
-                    }}
-                  >
-                    <span className="search-line-number">{line.number}</span>
-                    <span className="search-line-text">
-                      {line.clipped && "…"}
-                      {line.parts.map((part, j) =>
-                        part.hit ? (
-                          <mark key={j}>{part.text}</mark>
-                        ) : (
-                          <span key={j}>{part.text}</span>
-                        ),
-                      )}
-                    </span>
+      {nothing ? (
+        <EmptyState
+          mark={Search}
+          headline={`Nothing matches “${query.trim()}”`}
+          body="Search a wider scope, or loosen the match: turn off match case, whole word or the regular expression."
+          size="panel"
+          testid="search-none"
+        />
+      ) : (
+        <div
+          ref={list}
+          className="search-hits"
+          role="listbox"
+          aria-label="Search results"
+          tabIndex={0}
+          aria-activedescendant={lines > 0 ? `search-hit-${at}` : undefined}
+          aria-keyshortcuts="Shift+Enter"
+          onKeyDown={keys}
+        >
+          {shown.map(({ file, project, branch, first }) => {
+            const cut = file.path.lastIndexOf("/");
+            const name = file.path.slice(cut + 1);
+            const folder = cut < 0 ? "" : file.path.slice(0, cut);
+            const where = [folder, placeName(file), projectCalled(file.plane)]
+              .filter((part) => part !== "")
+              .join(" · ");
+            return (
+              <div
+                key={`${file.plane}\u0000${file.workspace}/${file.repo}/${file.piece ?? ""}\u0000${file.path}`}
+                role="group"
+                aria-label={`${name}, ${where}`}
+                className="search-file"
+              >
+                {project !== undefined && (
+                  <div className="search-project" aria-hidden="true">
+                    {project}
                   </div>
-                );
-              })}
-              {file.count > file.lines.length && (
-                <div className="search-file-rest" aria-hidden="true">
-                  {`${file.count - file.lines.length} more in this file`}
+                )}
+                {branch !== undefined && (
+                  <div className="search-branch" aria-hidden="true">
+                    {branch}
+                  </div>
+                )}
+                <div className="search-file-head" aria-hidden="true">
+                  <HitIcon file={file} name={name} />
+                  <span className="search-file-name">{name}</span>
+                  {folder !== "" && <span className="search-file-folder">{folder}</span>}
+                  <span className="search-count">{file.count}</span>
                 </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
+                {file.lines.map((line, i) => {
+                  const n = first + i;
+                  return (
+                    <div
+                      key={line.number}
+                      id={`search-hit-${n}`}
+                      data-hit={n}
+                      role="option"
+                      aria-selected={n === at}
+                      className={n === at ? "search-line active" : "search-line"}
+                      // A hit dragged onto a chat carries its line (FM-9).
+                      draggable
+                      onDragStart={(event) =>
+                        dragReference(event, {
+                          plane: file.plane,
+                          workspace: file.workspace,
+                          repo: file.repo,
+                          piece: file.piece,
+                          path: file.path,
+                          folder: false,
+                          lines: { first: line.number, last: line.number },
+                        })
+                      }
+                      onClick={() => {
+                        setActive(n);
+                        open(n);
+                      }}
+                    >
+                      <span className="search-line-number">{line.number}</span>
+                      <span className="search-line-text">
+                        {line.clipped && "…"}
+                        {line.parts.map((part, j) =>
+                          part.hit ? (
+                            <mark key={j}>{part.text}</mark>
+                          ) : (
+                            <span key={j}>{part.text}</span>
+                          ),
+                        )}
+                      </span>
+                    </div>
+                  );
+                })}
+                {file.count > file.lines.length && (
+                  <div className="search-file-rest" aria-hidden="true">
+                    {`${file.count - file.lines.length} more in this file`}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
       {heard.state === "more" && (
         <button type="button" className="search-more" tabIndex={0} onClick={onMore}>
           Show more
