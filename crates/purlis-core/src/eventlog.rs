@@ -1061,6 +1061,16 @@ pub const SPOOL_REJECTED: &str = "hook.spool.rejected";
 pub const SPOOL_DRAINED: &str = "hook.spool.drained";
 pub const COMMIT_REFUSED: &str = "hook.commit_refused";
 
+/// `body` with `spooled`, the number a drained line had in its chat's spool, when it had one
+/// (FD-30): the one place an event is marked as having come through the spool. Added after
+/// what the body already says, so every event keeps its keys in the order it always had.
+fn spooled_as(mut body: serde_json::Value, seq: Option<u64>) -> serde_json::Value {
+    if let Some(seq) = seq {
+        body["spooled"] = seq.into();
+    }
+    body
+}
+
 /// The kind a tool call's event is recorded under: `hook.<word>` for a word charter answers.
 fn tool_kind(call: &crate::hookwire::ToolCall) -> String {
     match phase(&call.tool_hook) {
@@ -1229,9 +1239,7 @@ impl Recorder {
         if report.event == crate::state::Event::SessionStart {
             body["started"] = started(report.detail.started).into();
         }
-        if let Some(seq) = spooled {
-            body["spooled"] = seq.into();
-        }
+        let body = spooled_as(body, spooled);
         let event = self.append(&under, &format!("hook.{}", report.event.word()), body)?;
         match (report.event, &report.agent) {
             (crate::state::Event::SubagentStop, Some(agent)) => {
@@ -1295,10 +1303,7 @@ impl Recorder {
         let top = self.identity(plane, call.chat)?;
         let under = self.under(top, call.agent.as_deref())?;
         let phase = phase(&call.tool_hook);
-        let mut body = self.tool_body(call);
-        if let Some(seq) = spooled {
-            body["spooled"] = seq.into();
-        }
+        let mut body = spooled_as(self.tool_body(call), spooled);
         if let Some(id) = &call.call {
             let key = (under.run.clone(), id.clone());
             if let Some(phase) = phase
@@ -1377,16 +1382,15 @@ impl Recorder {
                 }
                 (Spooled::Report(report), None) => (
                     format!("hook.{}", report.event.word()),
-                    serde_json::json!({ "spooled": seq }),
+                    spooled_as(serde_json::json!({}), Some(seq)),
                 ),
-                (Spooled::Tool(call), None) => {
-                    let mut body = self.tool_body(&call);
-                    body["spooled"] = seq.into();
-                    (tool_kind(&call), body)
-                }
+                (Spooled::Tool(call), None) => (
+                    tool_kind(&call),
+                    spooled_as(self.tool_body(&call), Some(seq)),
+                ),
                 (Spooled::Refused(_), None) => (
                     COMMIT_REFUSED.to_owned(),
-                    serde_json::json!({ "spooled": seq }),
+                    spooled_as(serde_json::json!({}), Some(seq)),
                 ),
             },
             Drained::Gap { from, to, .. } => (
@@ -1395,7 +1399,7 @@ impl Recorder {
             ),
             Drained::Rejected { seq, why, .. } => (
                 SPOOL_REJECTED.to_owned(),
-                serde_json::json!({ "seq": seq, "why": why }),
+                serde_json::json!({ "seq": seq, "why": why.word() }),
             ),
             Drained::Spool { from, to, .. } => (
                 SPOOL_DRAINED.to_owned(),
@@ -1425,10 +1429,7 @@ impl Recorder {
         spooled: Option<u64>,
     ) -> io::Result<Event> {
         let who = self.identity(plane, number)?;
-        let mut body = serde_json::json!({});
-        if let Some(seq) = spooled {
-            body["spooled"] = seq.into();
-        }
+        let body = spooled_as(serde_json::json!({}), spooled);
         self.log
             .append(Some(&who.chat), Some(&who.run), None, COMMIT_REFUSED, body)
     }

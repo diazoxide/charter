@@ -16,6 +16,34 @@ fn call(chat: u32, id: &str) -> ToolCall {
     }
 }
 
+#[test]
+fn each_reason_keeps_the_word_the_event_log_has_always_written() {
+    // #983: audit readers match on these words, so the enum that replaced the string constants
+    // must say each one byte for byte.
+    let pinned = [
+        (Why::Unreadable, "unreadable"),
+        (Why::NoKey, "no-key"),
+        (Why::AnotherChatsKey, "another-chats-key"),
+        (Why::Mac, "mac"),
+        (Why::NotThisChats, "not-this-chats"),
+        (Why::Repeated, "repeated"),
+        (Why::Unfinished, "unfinished"),
+    ];
+    for (why, word) in pinned {
+        // Every reason is in the table: a new one fails to compile here until it is pinned.
+        match why {
+            Why::Unreadable
+            | Why::NoKey
+            | Why::AnotherChatsKey
+            | Why::Mac
+            | Why::NotThisChats
+            | Why::Repeated
+            | Why::Unfinished => {}
+        }
+        assert_eq!(why.word(), word);
+    }
+}
+
 /// A host's spool directory with chat `chat` issued a token, as a listener issues one.
 fn issued(dir: &Path, chat: u32) -> crate::hookwire::ChatToken {
     ChatTokens::spooling_into(dir.to_path_buf())
@@ -254,7 +282,7 @@ fn a_file_that_is_not_a_line_is_rejected_and_neither_the_drain_nor_the_next_hook
     let unreadable = Drained::Rejected {
         chat: 4,
         seq: None,
-        why: why::UNREADABLE,
+        why: Why::Unreadable,
     };
     assert_eq!(
         items.iter().filter(|item| **item == unreadable).count(),
@@ -287,7 +315,7 @@ fn a_keys_file_that_does_not_read_rejects_its_lines_as_no_key_and_the_drain_fini
         [Drained::Rejected {
             chat: 6,
             seq: Some(1),
-            why: why::NO_KEY
+            why: Why::NoKey
         }]
     );
     assert_eq!(drained(&spool), [], "drained, not stuck");
@@ -419,7 +447,7 @@ fn a_number_a_dead_hook_took_is_a_gap_and_its_file_goes_once_it_is_old() {
     let unfinished = Drained::Rejected {
         chat: 4,
         seq: Some(2),
-        why: why::UNFINISHED,
+        why: Why::Unfinished,
     };
     assert!(items.contains(&unfinished), "{items:?}");
     assert!(part.exists(), "a hook may still be writing it");
@@ -467,7 +495,7 @@ fn a_part_file_under_the_last_number_there_is_stops_its_keys_hooks_and_the_drain
         items.contains(&Drained::Rejected {
             chat: 4,
             seq: Some(u64::MAX),
-            why: why::UNFINISHED,
+            why: Why::Unfinished,
         }),
         "{items:?}"
     );
@@ -513,7 +541,7 @@ fn a_line_in_flight_while_a_drain_runs_is_a_gap_then_and_handed_on_at_the_next()
         Drained::Rejected {
             chat: 4,
             seq: Some(2),
-            why: why::UNFINISHED,
+            why: Why::Unfinished,
         },
     ] {
         assert!(first.contains(&said), "{said:?} is not in {first:?}");
@@ -525,7 +553,7 @@ fn a_line_in_flight_while_a_drain_runs_is_a_gap_then_and_handed_on_at_the_next()
         [Drained::Rejected {
             chat: 4,
             seq: Some(2),
-            why: why::REPEATED,
+            why: Why::Repeated,
         }]
     );
 }
@@ -588,7 +616,7 @@ fn a_line_put_back_after_a_drain_that_stopped_part_way_is_rejected_as_repeated()
         next.contains(&Drained::Rejected {
             chat: 7,
             seq: Some(1),
-            why: why::REPEATED,
+            why: Why::Repeated,
         }),
         "{next:?}"
     );
@@ -648,7 +676,7 @@ fn a_planted_file_under_a_high_number_does_not_make_real_lines_read_as_repeated(
         first.contains(&Drained::Rejected {
             chat: 4,
             seq: Some(900),
-            why: why::MAC,
+            why: Why::Mac,
         }),
         "{first:?}"
     );
@@ -682,7 +710,7 @@ fn a_line_copied_from_the_folder_into_an_older_builds_file_is_handed_on_once() {
         let repeated = Drained::Rejected {
             chat: 4,
             seq: Some(seq),
-            why: why::REPEATED,
+            why: Why::Repeated,
         };
         assert!(
             items.contains(&repeated),
@@ -707,7 +735,7 @@ fn a_line_put_back_after_its_drain_is_rejected_as_repeated() {
         [Drained::Rejected {
             chat: 4,
             seq: Some(1),
-            why: why::REPEATED,
+            why: Why::Repeated,
         }]
     );
 }
@@ -744,7 +772,7 @@ fn a_line_file_is_one_line_under_its_own_key_and_number_or_it_is_rejected() {
     let unreadable = Drained::Rejected {
         chat: 4,
         seq: None,
-        why: why::UNREADABLE,
+        why: Why::Unreadable,
     };
     assert_eq!(
         items.iter().filter(|item| **item == unreadable).count(),
@@ -786,7 +814,7 @@ fn a_link_a_directory_or_a_pipe_under_a_lines_name_is_rejected_and_never_followe
     let unreadable = Drained::Rejected {
         chat: 4,
         seq: None,
-        why: why::UNREADABLE,
+        why: Why::Unreadable,
     };
     assert_eq!(
         items.iter().filter(|item| **item == unreadable).count(),
@@ -908,7 +936,7 @@ fn a_spool_file_an_older_build_left_is_drained_before_the_chats_folder_and_empti
         Drained::Rejected {
             chat: 4,
             seq: None,
-            why: why::UNREADABLE,
+            why: Why::Unreadable,
         },
         Drained::Spool {
             chat: 4,
@@ -1040,7 +1068,7 @@ fn a_spool_that_is_not_what_it_should_be_is_reported_and_the_drain_reads_the_oth
                 all.contains(&Drained::Rejected {
                     chat: 5,
                     seq: None,
-                    why: why::UNREADABLE
+                    why: Why::Unreadable
                 }),
                 "{what} at {}: {all:?}",
                 at.display()
@@ -1183,7 +1211,7 @@ fn a_drain_racing_hooks_and_the_one_after_hand_on_every_line_once() {
             Drained::Line { .. } | Drained::Gap { .. } | Drained::Spool { .. } => {}
             // A number a hook held while a drain looked.
             Drained::Rejected {
-                why: why::UNFINISHED,
+                why: Why::Unfinished,
                 ..
             } => {}
             other => panic!("a drain found {other:?}"),
@@ -1329,7 +1357,7 @@ fn a_key_remembered_twice_is_held_once_and_keeps_what_was_drained_under_it() {
         [Drained::Rejected {
             chat: 4,
             seq: Some(1),
-            why: why::REPEATED,
+            why: Why::Repeated,
         }]
     );
 }
@@ -1435,7 +1463,7 @@ fn the_numbers_a_key_is_missing_are_kept_up_to_a_bound_and_the_lowest_go_first()
         next.contains(&Drained::Rejected {
             chat: 4,
             seq: Some(1),
-            why: why::REPEATED,
+            why: Why::Repeated,
         }),
         "{next:?}"
     );
@@ -1473,7 +1501,7 @@ fn a_chat_that_ends_has_its_spool_drained_and_then_its_keys_dropped() {
         next.contains(&Drained::Rejected {
             chat: 4,
             seq: Some(1),
-            why: why::NO_KEY,
+            why: Why::NoKey,
         }),
         "a line spooled after its chat ended has no key: {next:?}"
     );
@@ -1606,7 +1634,7 @@ fn a_drained_line_put_back_as_an_older_builds_file_is_rejected_at_a_drain_and_at
             [Drained::Rejected {
                 chat: 4,
                 seq: Some(1),
-                why: why::REPEATED,
+                why: Why::Repeated,
             }]
         );
     }
@@ -1684,7 +1712,7 @@ fn a_key_the_spools_lock_kept_out_is_not_recorded_and_its_lines_are_never_handed
         items.contains(&Drained::Rejected {
             chat: 4,
             seq: Some(1),
-            why: why::NO_KEY
+            why: Why::NoKey
         }),
         "{items:?}"
     );
@@ -1842,7 +1870,7 @@ fn an_older_builds_spool_file_past_what_it_could_hold_is_unreadable_and_left() {
         [Drained::Rejected {
             chat: 4,
             seq: None,
-            why: why::UNREADABLE
+            why: Why::Unreadable
         }]
     );
     assert_eq!(
