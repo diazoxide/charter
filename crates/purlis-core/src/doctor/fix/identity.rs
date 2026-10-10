@@ -198,7 +198,12 @@ pub fn apply(root: &Path, name: &str, email: &str) -> Result<Fixed, Invalid> {
         match set_global(key, value) {
             Ok(()) => said.push(format!(
                 "✓ set {key} = {} (global git config)",
-                crate::shown::line(value)
+                // The name as typed, joiners and all (D-1301-4); the email is never joined.
+                if key == "user.name" {
+                    shown_name(value)
+                } else {
+                    crate::shown::line(value)
+                }
             )),
             Err(why) => {
                 said.push(format!("✗ {key} was not set: {}", crate::shown::line(&why)));
@@ -282,41 +287,83 @@ const ZWNJ: char = '\u{200c}';
 const EMOJI_PRESENTATION: char = '\u{fe0f}';
 
 /// Does `name` hold a character [`crate::shown::invisible`] escapes, other than the two joiners
-/// a name of a person may need (#1301, D-1301-1)?
+/// a name of a person may need (#1301, D-1301-1, D-1301-3)?
 ///
 /// **Only in a git identity's name, and only where each joiner does its one job:**
 /// - a ZWJ between two emoji (after the first's variation selector, if it has one), as in a
 ///   ZWJ family emoji;
-/// - a ZWNJ between two letters of the Arabic script, as Persian writes it.
+/// - a ZWNJ between two letters of the Arabic script, as Persian writes it;
+/// - either, after a letter or a virama of the Brahmic scripts (Devanagari to Malayalam) and
+///   before a letter of them: a ZWJ asks for a half form (a Devanagari conjunct, a Malayalam
+///   chillu), a ZWNJ keeps the virama shown.
 ///
-/// Anywhere else (at either end, doubled, between two Latin letters) each is refused like
-/// every other control, zero-width or direction-changing character. Neither joiner can reorder
-/// text or hide a word: each only changes how its two neighbours are drawn. The shared rule,
-/// [`crate::shown::invisible`], is not widened: every other writer keeps it as it is.
+/// Anywhere else (at either end, doubled, between two Latin letters, after a digit or a danda)
+/// each is refused like every other control, zero-width or direction-changing character.
+/// Neither joiner can reorder text or hide a word: each only changes how its two neighbours
+/// are drawn. The shared rule, [`crate::shown::invisible`], is not widened: every other writer
+/// keeps it as it is.
 fn hides_a_character(name: &str) -> bool {
     let chars: Vec<char> = name.chars().collect();
-    chars.iter().enumerate().any(|(at, &c)| {
-        if !crate::shown::invisible(c) {
-            return false;
+    (0..chars.len()).any(|at| crate::shown::invisible(chars[at]) && !joins(&chars, at))
+}
+
+/// Is `chars[at]` a joiner doing its one job between its neighbours ([`hides_a_character`])?
+fn joins(chars: &[char], at: usize) -> bool {
+    let before = at.checked_sub(1).map(|i| chars[i]);
+    let after = chars.get(at + 1).copied();
+    let brahmic =
+        before.is_some_and(|c| brahmic_letter(c) || virama(c)) && after.is_some_and(brahmic_letter);
+    match chars[at] {
+        ZWJ => {
+            let emoji_before = match before {
+                Some(EMOJI_PRESENTATION) => {
+                    at.checked_sub(2).is_some_and(|i| pictographic(chars[i]))
+                }
+                Some(before) => pictographic(before),
+                None => false,
+            };
+            (emoji_before && after.is_some_and(pictographic)) || brahmic
         }
-        let before = at.checked_sub(1).map(|i| chars[i]);
-        let after = chars.get(at + 1).copied();
-        let joins = match c {
-            ZWJ => {
-                let emoji_before = match before {
-                    Some(EMOJI_PRESENTATION) => {
-                        at.checked_sub(2).is_some_and(|i| pictographic(chars[i]))
-                    }
-                    Some(before) => pictographic(before),
-                    None => false,
-                };
-                emoji_before && after.is_some_and(pictographic)
-            }
-            ZWNJ => before.is_some_and(arabic_letter) && after.is_some_and(arabic_letter),
-            _ => false,
-        };
-        !joins
-    })
+        ZWNJ => (before.is_some_and(arabic_letter) && after.is_some_and(arabic_letter)) || brahmic,
+        _ => false,
+    }
+}
+
+/// `name`, which the name check let through, as the confirmation shows it (#1301, D-1301-4):
+/// [`crate::shown::line`], except that a joiner doing its job ([`joins`]) is drawn as itself,
+/// so a joined name echoes back as it was typed. Every other invisible character is escaped.
+fn shown_name(name: &str) -> String {
+    let chars: Vec<char> = name.chars().collect();
+    let mut out = String::with_capacity(name.len());
+    for (at, &c) in chars.iter().enumerate() {
+        if crate::shown::invisible(c) && joins(&chars, at) {
+            out.push(c);
+        } else {
+            out.push_str(&crate::shown::one_line(
+                c.encode_utf8(&mut [0; 4]),
+                crate::shown::NO_CLIP,
+            ));
+        }
+    }
+    if out.chars().count() <= crate::shown::DISPLAY_LIMIT {
+        return out;
+    }
+    let mut clipped: String = out.chars().take(crate::shown::DISPLAY_LIMIT).collect();
+    clipped.push('…');
+    clipped
+}
+
+/// Is `c` a letter of the Brahmic scripts' blocks, Devanagari to Malayalam (U+0900-U+0D7F): a
+/// consonant, a vowel or a vowel sign, never a digit or a danda.
+fn brahmic_letter(c: char) -> bool {
+    c.is_alphabetic() && matches!(c as u32, 0x0900..=0x0d7f)
+}
+
+/// Is `c` a virama of those scripts: each block's U+0x4D, and Malayalam's vertical-bar and
+/// circular viramas.
+fn virama(c: char) -> bool {
+    let cp = c as u32;
+    matches!(cp, 0x0900..=0x0d7f) && (cp & 0x7f == 0x4d || matches!(cp, 0x0d3b | 0x0d3c))
 }
 
 /// Is `c` an emoji a ZWJ sequence is made of: the pictographic blocks (symbols, dingbats,
@@ -459,6 +506,57 @@ mod tests {
         ] {
             assert_eq!(name_refused(name).as_deref(), Some(invisible), "{name:?}");
         }
+    }
+
+    /// #1301 (D-1301-3): the Brahmic scripts join with both joiners too: a ZWJ after a virama
+    /// asks for a half form (a Devanagari conjunct), a ZWNJ after one keeps the virama shown.
+    /// Each passes only between a letter or virama and a letter of those scripts.
+    #[test]
+    fn a_devanagari_conjunct_and_a_hindi_name_with_a_non_joiner_are_names() {
+        for name in [
+            // ksha with a half ka: ka, virama, ZWJ, ssa
+            "\u{0915}\u{094d}\u{200d}\u{0937}",
+            // Hindi: ka, virama, ZWNJ, ssa, then aa
+            "Ra \u{0915}\u{094d}\u{200c}\u{0937}\u{093e}",
+            // Malayalam chillu: na, virama, ZWJ, then ta
+            "\u{0d28}\u{0d4d}\u{200d}\u{0d24}",
+        ] {
+            assert_eq!(name_refused(name), None, "{name:?}");
+        }
+        let invisible = "A name is one line of visible characters: no control, zero-width or \
+                         direction-changing characters.";
+        for name in [
+            // A lone joiner after a virama at the end, or before a Latin letter.
+            "\u{0915}\u{094d}\u{200d}",
+            "\u{0915}\u{094d}\u{200c}a",
+            // Between a Devanagari digit and a letter, and after a danda.
+            "\u{0966}\u{200d}\u{0915}",
+            "\u{0964}\u{200c}\u{0915}",
+            // Every other invisible character between Devanagari letters.
+            "\u{0915}\u{200b}\u{0937}",
+        ] {
+            assert_eq!(name_refused(name).as_deref(), Some(invisible), "{name:?}");
+        }
+    }
+
+    /// #1301 (D-1301-4): the confirmation draws a joiner the name check let through as itself,
+    /// so a joined name echoes back as it was typed, and still escapes every other invisible
+    /// character.
+    #[test]
+    fn a_joined_name_is_shown_as_typed_and_any_other_invisible_character_escaped() {
+        for name in [
+            "\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}",
+            "\u{0645}\u{06cc}\u{200c}\u{062e}\u{0648}\u{0627}\u{0647}\u{0645}",
+            "\u{0915}\u{094d}\u{200d}\u{0937}",
+        ] {
+            assert_eq!(shown_name(name), name);
+        }
+        assert_eq!(shown_name("Ad\u{200d}a"), "Ad\\u200da");
+        assert_eq!(shown_name("a\u{202e}b"), "a\\u202eb");
+        assert_eq!(
+            shown_name(&"\u{0915}".repeat(300)).chars().count(),
+            crate::shown::DISPLAY_LIMIT + 1
+        );
     }
 
     /// #1301: the joiners are a name's only. An email keeps the shared rule.
