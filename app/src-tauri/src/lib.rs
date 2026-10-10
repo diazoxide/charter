@@ -2891,6 +2891,9 @@ pub fn run() {
             } else {
                 Vec::new()
             };
+            // The local project out of the config home a chat's sandbox denies (#1670), after
+            // rename-local named the folders and before any project opens.
+            firstrun::move_the_local_project();
             // From here on this app holds the config home: no rename-local of a later launch,
             // or of a terminal, moves it while the app runs.
             let mut holds_the_config_home = false;
