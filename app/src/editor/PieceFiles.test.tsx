@@ -9,6 +9,7 @@ import { jumpTo } from "../fileJump";
 import { forgetYourEditor, setYourEditor } from "../yourEditor";
 import { SETTINGS_LINK, type SettingsLinkAsk } from "../settings/links";
 import { REVEAL_SAID, type Offer } from "../actions";
+import { forgetLastRead, KEPT, lastRead, readAt } from "./lastRead";
 
 const PLANE = "/plane" as unknown as PlaneId;
 const CUT = { workspace: "alpha", repo: "svc", piece: "fix-it" };
@@ -109,6 +110,7 @@ afterEach(() => {
   cleanup();
   clearMocks();
   forgetYourEditor();
+  forgetLastRead();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -625,6 +627,53 @@ describe("a row of the file tab's tree (FM-10)", () => {
     expect(pressed.map((offer) => offer.does)).toEqual([
       { verb: "copyPath", at: { ...CUT, path: "src" }, absolute: true },
     ]);
+  });
+
+  it("opens your editor from a file's row at the line its preview was read at (#1143)", async () => {
+    core({ "src/lib.rs": { kind: "text", text: "a\nb\nc\n" } });
+    const pressed: Offer[] = [];
+    jumpTo({ plane: PLANE, place: CUT, path: "src/lib.rs", line: 3 });
+    render(
+      <PieceFilesTab
+        plane={PLANE}
+        cut={CUT}
+        onOpenView={() => undefined}
+        onPress={(offer) => pressed.push(offer)}
+      />,
+    );
+    expect(
+      await screen.findByRole("button", { name: "Open in your editor at line 3" }),
+    ).toBeInTheDocument();
+
+    fireEvent.contextMenu(await row("lib.rs"));
+    const menu = await screen.findByRole("menu");
+    await userEvent.click(within(menu).getByRole("menuitem", { name: "Open in your editor" }));
+
+    expect(pressed.map((offer) => offer.does)).toEqual([
+      { verb: "openInEditor", at: { ...CUT, path: "src/lib.rs" }, line: 3 },
+    ]);
+  });
+});
+
+describe("the line last read (#1143)", () => {
+  it("is kept per file of a branch, from the file's own tab too", async () => {
+    core({ "src/lib.rs": { kind: "text", text: "a\nb\nc\n" } });
+    render(<PieceFileTab plane={PLANE} cut={CUT} path="src/lib.rs" line={2} />);
+
+    await waitFor(() => expect(lastRead(PLANE, CUT, "src/lib.rs")).toBe(2));
+    // Another branch's file of that name, and another project's, were not read.
+    expect(lastRead(PLANE, { ...CUT, piece: "other" }, "src/lib.rs")).toBe(1);
+    expect(lastRead("/elsewhere", CUT, "src/lib.rs")).toBe(1);
+  });
+
+  it("forgets the oldest past what it keeps, and line 1 is no line to keep", () => {
+    readAt(PLANE, CUT, "first.rs", 9);
+    for (let i = 0; i < KEPT; i++) readAt(PLANE, CUT, `f${i}.rs`, 5);
+
+    expect(lastRead(PLANE, CUT, "first.rs")).toBe(1);
+    expect(lastRead(PLANE, CUT, `f${KEPT - 1}.rs`)).toBe(5);
+    readAt(PLANE, CUT, "f0.rs", 1);
+    expect(lastRead(PLANE, CUT, "f0.rs")).toBe(1);
   });
 });
 
