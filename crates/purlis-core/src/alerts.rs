@@ -379,13 +379,8 @@ fn gather(ask: &Asking, out: &mut Vec<Alert>) -> Result<(), String> {
         out.push(Alert::FrontDoor { declared });
     }
 
-    let names = crate::workspaces::Plane::open(root)
-        .workspaces()
+    let stale = behind_the_layout(root, ask.active)
         .map_err(|e| format!("workspaces/ could not be listed: {e}"))?;
-    let stale: Vec<String> = names
-        .into_iter()
-        .filter(|ws| Some(ws.as_str()) != ask.active && crate::footer::needs_reinit(root, ws))
-        .collect();
     if !stale.is_empty() {
         out.push(Alert::Reinit { stale });
     }
@@ -405,6 +400,18 @@ fn gather(ask: &Asking, out: &mut Vec<Alert>) -> Result<(), String> {
     // costs this row and nothing else.
     out.extend(plane_root(root, ask.shared));
     Ok(())
+}
+
+/// The workspaces behind the current layout, by name and sorted, leaving out `skip` — the
+/// one reading the `reinit` alert and the doctor's `workspace layout` row both make (#1289),
+/// so the drawer and the doctor never disagree about which workspaces those are. `Err` is a
+/// `workspaces/` that could not be listed.
+pub(crate) fn behind_the_layout(root: &Path, skip: Option<&str>) -> std::io::Result<Vec<String>> {
+    Ok(crate::workspaces::Plane::open(root)
+        .workspaces()?
+        .into_iter()
+        .filter(|ws| Some(ws.as_str()) != skip && crate::footer::needs_reinit(root, ws))
+        .collect())
 }
 
 /// `(cfg.get(name) or {})` — the table, `None` for a falsy value, and charter's raise for a
