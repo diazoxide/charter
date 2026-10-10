@@ -895,23 +895,63 @@ describe("a Notice in a pane", () => {
     const [notice] = seen.notices;
     const frame = seen.frame as Box;
     check("the pane is not a narrow one", frame.width, "below", 40 * seen.rem);
+    // **Scrolled to, in the box under the line** (#1647): the row is at most three fifths of the
+    // pane, so what a way out opened gives way first and scrolls in its own box (#1481). The
+    // choice is measured where that box shows it, and the brief with it, in one frame.
     const parts = await browser.execute(() => {
       const box = (el: Element | null | undefined) => {
         if (!el) return null;
         const { left, right, top, bottom, width, height } = el.getBoundingClientRect();
         return { left, right, top, bottom, width, height };
       };
-      const choice = document.querySelector('[data-raised="pane-notices.e2e"] .dispatch-within');
+      const under = document.querySelector<HTMLElement>(
+        '[data-raised="pane-notices.e2e"] .notice-under-pane',
+      );
+      const choice = document.querySelector<HTMLElement>(
+        '[data-raised="pane-notices.e2e"] .dispatch-within',
+      );
+      if (under && choice)
+        under.scrollTop += choice.getBoundingClientRect().top - under.getBoundingClientRect().top;
       return {
+        under: box(under),
+        underScrolls: under ? under.scrollHeight > under.clientHeight + 1 : false,
+        line: box(document.querySelector('[data-raised="pane-notices.e2e"] .notice-pane')),
+        pre: box(document.querySelector('[data-raised="pane-notices.e2e"] pre')),
         choice: box(choice),
         says: box(choice?.querySelector("p")),
         labels: [...(choice?.querySelectorAll("label") ?? [])].map((label) => box(label)),
       };
     });
 
-    // The Notice still fits its pane, and the choice is inside the box under the line.
+    // The Notice still fits its pane, and the choice is in the box under the line: at its
+    // width, its top shown there, and the rest of it either shown too or scrolled to there.
     inside(notice.box, frame, "the Notice in its pane");
-    inside(parts.choice, notice.under, "the workspace choice under the line");
+    const [under, choice] = [parts.under as Box, parts.choice as Box];
+    check("the workspace choice was not drawn", parts.choice !== null, "is", true);
+    check(
+      "the workspace choice starts left of the box under the line",
+      choice.left,
+      "atLeast",
+      under.left - 1,
+    );
+    check(
+      "the workspace choice runs past the box under the line",
+      choice.right,
+      "atMost",
+      under.right + 1,
+    );
+    check(
+      "the workspace choice starts above the box under the line",
+      choice.top,
+      "atLeast",
+      under.top - 1,
+    );
+    check(
+      "the workspace choice runs past the box under the line, which does not scroll",
+      choice.bottom <= under.bottom + 1 || parts.underScrolls,
+      "is",
+      true,
+    );
     inside(parts.says, parts.choice, "what the choice is about");
     expect(parts.labels).toHaveLength(2);
     for (const [index, label] of parts.labels.entries())
@@ -920,9 +960,13 @@ describe("a Notice in a pane", () => {
     const [narrow, wide] = parts.labels as Box[];
     check("the two choices overlap", overlap(narrow, wide), "is", false);
     // Under every answer, and above the brief.
-    const [line, choice] = [notice.line as Box, parts.choice as Box];
-    check("the choice is beside the answers", choice.top, "atLeast", line.bottom - 1);
-    check("the brief is above the choice", (notice.pre as Box).top, "atLeast", choice.bottom - 1);
+    check(
+      "the choice is beside the answers",
+      choice.top,
+      "atLeast",
+      (parts.line as Box).bottom - 1,
+    );
+    check("the brief is above the choice", (parts.pre as Box).top, "atLeast", choice.bottom - 1);
   });
 });
 
