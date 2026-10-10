@@ -149,7 +149,7 @@ describe("the new-vault dialog", () => {
     );
     expect(within(dialog).queryByLabelText("1Password vault")).not.toBeInTheDocument();
     expect(within(dialog).queryByRole("button", { name: /Create/ })).not.toBeInTheDocument();
-    expect(within(dialog).queryByRole("button", { name: "Test" })).not.toBeInTheDocument();
+    expect(within(dialog).queryByRole("button", { name: "Test sign-in" })).not.toBeInTheDocument();
     expect(create).not.toHaveBeenCalled();
   });
 
@@ -250,7 +250,7 @@ describe("setting up how a 1Password vault signs in", () => {
       "The one item whose fields are this vault's secrets. Empty for charter-team.",
     );
     // No vault chosen yet: there is nothing to test.
-    expect(within(dialog).getByRole("button", { name: "Test" })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "Test sign-in" })).toBeDisabled();
   });
 
   it("has the vault typed where the sign-in may not list them, and says why", async () => {
@@ -281,7 +281,7 @@ describe("setting up how a 1Password vault signs in", () => {
     await userEvent.selectOptions(within(dialog).getByLabelText("1Password vault"), "Engineering");
     expect(within(dialog).queryByRole("button", { name: /Create/ })).not.toBeInTheDocument();
 
-    await userEvent.click(within(dialog).getByRole("button", { name: "Test" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Test sign-in" }));
 
     expect(await within(dialog).findByRole("status")).toHaveTextContent(
       "Signed in. 2 items in that 1Password vault; the item charter-team will be made with the first secret. No value was read.",
@@ -325,14 +325,14 @@ describe("setting up how a 1Password vault signs in", () => {
       const { made, dialog } = draw();
       await giveTheToken(dialog);
       await userEvent.selectOptions(within(dialog).getByLabelText("1Password vault"), "Ops");
-      await userEvent.click(within(dialog).getByRole("button", { name: "Test" }));
+      await userEvent.click(within(dialog).getByRole("button", { name: "Test sign-in" }));
 
       expect(await within(dialog).findByRole("alert")).toHaveTextContent(why);
       expect(within(dialog).queryByRole("status")).not.toBeInTheDocument();
       expect(
         within(dialog).queryByRole("button", { name: "Create vault" }),
       ).not.toBeInTheDocument();
-      expect(within(dialog).getByRole("button", { name: "Test again" })).toBeEnabled();
+      expect(within(dialog).getByRole("button", { name: "Test sign-in again" })).toBeEnabled();
 
       await userEvent.click(within(dialog).getByRole("button", { name: "Create anyway" }));
       await waitFor(() => expect(made).toHaveBeenCalled());
@@ -345,7 +345,7 @@ describe("setting up how a 1Password vault signs in", () => {
     const { dialog } = draw();
     await giveTheToken(dialog);
     await userEvent.selectOptions(within(dialog).getByLabelText("1Password vault"), "Engineering");
-    await userEvent.click(within(dialog).getByRole("button", { name: "Test" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Test sign-in" }));
     await within(dialog).findByRole("button", { name: "Create vault" });
 
     await userEvent.selectOptions(within(dialog).getByLabelText("1Password vault"), "Ops");
@@ -363,7 +363,7 @@ describe("setting up how a 1Password vault signs in", () => {
     const { made, dialog } = draw();
     await giveTheToken(dialog);
     await userEvent.selectOptions(within(dialog).getByLabelText("1Password vault"), "Engineering");
-    await userEvent.click(within(dialog).getByRole("button", { name: "Test" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Test sign-in" }));
     await userEvent.click(await within(dialog).findByRole("button", { name: "Create vault" }));
 
     expect(await within(dialog).findByRole("alert")).toHaveTextContent("already registered");
@@ -408,7 +408,7 @@ describe("setting up how a 1Password vault signs in", () => {
     // digest of what was shown for it, and nothing for the one left unticked.
     await userEvent.click(within(list).getByRole("checkbox", { name: "pulled" }));
     await userEvent.selectOptions(within(dialog).getByLabelText("1Password vault"), "Engineering");
-    await userEvent.click(within(dialog).getByRole("button", { name: "Test" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Test sign-in" }));
     await userEvent.click(await within(dialog).findByRole("button", { name: "Create vault" }));
 
     await waitFor(() => expect(asked.at(-1)?.cmd).toBe("vault_setup_create"));
@@ -514,7 +514,7 @@ describe("setting up how a 1Password vault signs in", () => {
       await within(dialog).findByLabelText("1Password vault"),
       "Engineering",
     );
-    expect(within(dialog).getByRole("button", { name: "Test" })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "Test sign-in" })).toBeDisabled();
   });
 
   it("asks for the test again when the new vault's name changes after it passed", async () => {
@@ -523,15 +523,15 @@ describe("setting up how a 1Password vault signs in", () => {
     const { dialog } = draw();
     await giveTheToken(dialog);
     await userEvent.selectOptions(within(dialog).getByLabelText("1Password vault"), "Engineering");
-    await userEvent.click(within(dialog).getByRole("button", { name: "Test" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Test sign-in" }));
     await within(dialog).findByRole("button", { name: "Create vault" });
 
     await userEvent.type(within(dialog).getByLabelText("Name"), "-2");
 
     expect(within(dialog).queryByRole("button", { name: /Create/ })).not.toBeInTheDocument();
     expect(within(dialog).queryByRole("status")).not.toBeInTheDocument();
-    expect(within(dialog).getByRole("button", { name: "Test" })).toBeEnabled();
-    await userEvent.click(within(dialog).getByRole("button", { name: "Test" }));
+    expect(within(dialog).getByRole("button", { name: "Test sign-in" })).toBeEnabled();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Test sign-in" }));
     await waitFor(() => expect(asked.at(-1)?.args.vault).toBe("team-2"));
   });
 

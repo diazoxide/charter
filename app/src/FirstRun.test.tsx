@@ -138,7 +138,7 @@ function core(answers: (cmd: string, args: Record<string, unknown>) => unknown =
 async function openRepoByPath(path: string) {
   const person = userEvent.setup();
   await person.type(await screen.findByLabelText("Or type the repo's path"), path);
-  await person.click(screen.getByRole("button", { name: "Open" }));
+  await person.click(screen.getByRole("button", { name: "Open repo" }));
   return person;
 }
 

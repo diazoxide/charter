@@ -130,7 +130,7 @@ export function NewPersona({
 
             <SettingActions>
               <button type="submit" tabIndex={0} disabled={!ready}>
-                Create persona
+                {making ? "Creating…" : "Create persona"}
               </button>
               <button type="button" tabIndex={0} disabled={making} onClick={onCancel}>
                 Cancel

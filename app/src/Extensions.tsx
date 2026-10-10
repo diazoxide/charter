@@ -24,6 +24,7 @@ import {
 } from "./theme/theme";
 import { forgetTheirTheme, theirThemeOnce } from "./windowprefs";
 import { AnswerBar } from "./AnswerBar";
+import { EmptyState } from "./EmptyState";
 import { yourEditor } from "./yourEditor";
 
 /**
@@ -101,7 +102,11 @@ export function Extensions({ onClose }: { onClose: () => void }) {
         if (answered.status === "error") setWent(answered.error);
         else setListed(answered.data);
       })
-      .catch(() => undefined);
+      // A call that never reached the core is said, as its refusal is (#630): a dialog left
+      // reading for ever says nothing true.
+      .catch((why: unknown) => {
+        if (!gone) setWent(`purlis could not read the installed extensions: ${String(why)}`);
+      });
     void drawWhatIsInForce({ reread: true });
     return () => {
       gone = true;
@@ -172,7 +177,11 @@ export function Extensions({ onClose }: { onClose: () => void }) {
             Add an extension…
           </button>
 
-          {went && <p className="came-back">{went}</p>}
+          {/* What went wrong, drawn as trouble (#630). Not yet a live region: `Notice.guard`
+              counts every one by file, and that guard is another lane's this round. */}
+          {went && <p className="trouble">{went}</p>}
+
+          {listed === null && !went && <p className="pending">Reading the installed extensions…</p>}
 
           {listed?.unreadable && (
             <p className="came-back">
@@ -201,8 +210,13 @@ export function Extensions({ onClose }: { onClose: () => void }) {
           </ul>
 
           <h3>Installed</h3>
+          {/* A claim, then the way out as the window names it (`docs/ui-copy.md`, #630). */}
           {listed && listed.extensions.length === 0 && (
-            <p className="came-back">None. An extension is a directory you point purlis at.</p>
+            <EmptyState
+              size="panel"
+              headline="No extensions installed yet"
+              body="Add an extension… points purlis at the directory that holds one."
+            />
           )}
           <ul className="extension-rows">
             {(listed?.extensions ?? []).map((row) => (

@@ -249,7 +249,7 @@ describe("what a keyboard reaches in the window's modal surfaces", () => {
       'button "Start"',
       'radio "claude"',
       'radio "steward"',
-      'checkbox "draw purlis\'s footer in this chat"',
+      'checkbox "Draw purlis\'s footer in this chat"',
       // The Name field (charter-app#254): an `<input>`, which every engine puts in the sequence.
       'input "Name"',
       'summary "1 refused"',
@@ -268,7 +268,7 @@ describe("what a keyboard reaches in the window's modal surfaces", () => {
       'button "Cancel"',
       'summary "1 refused"',
       'input "Name"',
-      'checkbox "draw purlis\'s footer in this chat"',
+      'checkbox "Draw purlis\'s footer in this chat"',
       'radio "steward"',
       'radio "claude"',
       'button "Start"',
@@ -301,8 +301,8 @@ describe("what a keyboard reaches in the window's modal surfaces", () => {
       'button "Cancel"',
       'button "Approve and start"',
       'radio "claude"',
-      'radio "none"',
-      'checkbox "draw purlis\'s footer in this chat"',
+      'radio "None"',
+      'checkbox "Draw purlis\'s footer in this chat"',
       'input "Name"',
     ]);
   });
@@ -755,8 +755,8 @@ describe("what a keyboard reaches in the window's modal surfaces", () => {
     expect(await reachableByKeyboard()).toEqual([
       'input "Folder"',
       'button "Browse for the folder"',
-      'input "Repository to adopt"',
-      'button "Browse for the repository to adopt"',
+      'input "Repo to adopt"',
+      'button "Browse for the repo to adopt"',
       'checkbox "Make this repo itself the project"',
       'button "Create project"',
       'input "Repo"',

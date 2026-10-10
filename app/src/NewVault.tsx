@@ -157,7 +157,7 @@ export function NewVault({
 
                 <SettingActions>
                   <button type="submit" tabIndex={0} disabled={!ready}>
-                    Create vault
+                    {making ? "Creating…" : "Create vault"}
                   </button>
                   <button type="button" tabIndex={0} disabled={making} onClick={onCancel}>
                     Cancel

@@ -87,7 +87,11 @@ export function KillSwitch() {
         tabIndex={0}
         className="title-kill-switch"
         data-stopped={stopped ? "yes" : "no"}
-        aria-label={label}
+        // Named by what it shows (WCAG 2.5.3, the copy guide's "an aria-label says what the
+        // visible label says"): the icon alone needs the sentence as its name, but once thrown
+        // the words "Stopped · Re-arm" are the name and the sentence is the `title`, which a
+        // screen reader reads as its description (#630).
+        aria-label={stopped ? undefined : label}
         title={label}
         disabled={busy}
         onClick={press}

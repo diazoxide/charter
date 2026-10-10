@@ -1000,7 +1000,7 @@ describe("how a 1Password vault signs in, from its tab (#1527)", () => {
     // The committed vault bound to the same variable is listed, and starts unticked.
     await userEvent.click(within(dialog).getByRole("checkbox", { name: "edge" }));
 
-    await userEvent.click(within(dialog).getByRole("button", { name: "Test" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Test sign-in" }));
     expect(await within(dialog).findByRole("status")).toHaveTextContent(
       "Signed in. 4 items in that 1Password vault; the item charter-ops is there.",
     );
@@ -1009,7 +1009,7 @@ describe("how a 1Password vault signs in, from its tab (#1527)", () => {
       args: { plane: PLANE, setup: 3, vault: "ops", opVault: null, opItem: null },
     });
 
-    await userEvent.click(within(dialog).getByRole("button", { name: "Store" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Store sign-in" }));
 
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(asked.at(-1)).toEqual({
@@ -1059,9 +1059,9 @@ describe("how a 1Password vault signs in, from its tab (#1527)", () => {
     await userEvent.type(within(dialog).getByLabelText("Service-account token"), GIVEN);
     await userEvent.click(within(dialog).getByRole("button", { name: "Use this token" }));
     await within(dialog).findByText(/purlis has the token for this set-up/);
-    await userEvent.click(within(dialog).getByRole("button", { name: "Test" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Test sign-in" }));
     await within(dialog).findByRole("status");
-    await userEvent.click(within(dialog).getByRole("button", { name: "Store" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Store sign-in" }));
 
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(await screen.findByRole("alert")).toHaveTextContent(
@@ -1101,13 +1101,13 @@ describe("how a 1Password vault signs in, from its tab (#1527)", () => {
     const dialog = screen.getByRole("dialog", { name: "How ops signs in" });
     await userEvent.type(within(dialog).getByLabelText("Service-account token"), GIVEN);
     await userEvent.click(within(dialog).getByRole("button", { name: "Use this token" }));
-    await userEvent.click(await within(dialog).findByRole("button", { name: "Test" }));
+    await userEvent.click(await within(dialog).findByRole("button", { name: "Test sign-in" }));
 
     expect(await within(dialog).findByRole("alert")).toHaveTextContent(
       "purlis could not reach 1Password.",
     );
-    expect(within(dialog).getByRole("button", { name: "Store anyway" })).toBeEnabled();
-    expect(within(dialog).queryByRole("button", { name: "Store" })).not.toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "Store sign-in anyway" })).toBeEnabled();
+    expect(within(dialog).queryByRole("button", { name: "Store sign-in" })).not.toBeInTheDocument();
   });
 
   it("lets go of the token when the change is cancelled", async () => {

@@ -51,3 +51,29 @@ describe("Link to work item", () => {
     );
   });
 });
+
+describe("Link to work item's words (#630)", () => {
+  const dialog = (linking: boolean) =>
+    render(
+      <LinkWorkItem
+        chat="steward 1"
+        linking={linking}
+        onLink={() => undefined}
+        onCancel={() => undefined}
+      />,
+    );
+
+  it("names its act with what it acts on, and says when it is at work", () => {
+    dialog(false);
+    expect(screen.getByRole("button", { name: "Link work item" })).toBeEnabled();
+    cleanup();
+    dialog(true);
+    expect(screen.getByRole("button", { name: "Linking…" })).toBeDisabled();
+  });
+
+  it("says where the link goes without naming the store underneath", () => {
+    dialog(false);
+    expect(screen.queryByText(/work link log/)).not.toBeInTheDocument();
+    expect(screen.getByText(/your other devices see it/)).toBeInTheDocument();
+  });
+});

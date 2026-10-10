@@ -72,6 +72,15 @@ describe("the kill switch", () => {
     );
   });
 
+  it("once thrown, is named by the words it shows, and says the rest as its description (#630)", async () => {
+    core(true);
+    render(<TitleBar />);
+
+    // The visible words are the name (WCAG 2.5.3, label in name): a voice user says what they see.
+    const rearm = await screen.findByRole("button", { name: "Stopped · Re-arm" });
+    expect(rearm.getAttribute("title")).toMatch(/every chat purlis started is stopped/i);
+  });
+
   it("re-arms from the bar, and only then offers the stop again", async () => {
     const sent = core(true);
     render(<TitleBar />);

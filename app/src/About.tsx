@@ -107,7 +107,7 @@ export function AboutCharter() {
                 purlis could not read what this version brought: {trouble}
               </p>
             ) : about === undefined ? (
-              <p className="pending">reading what this version brought…</p>
+              <p className="pending">Reading what this version brought…</p>
             ) : (
               <Said about={about} />
             )}

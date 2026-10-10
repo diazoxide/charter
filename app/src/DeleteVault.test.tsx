@@ -33,7 +33,10 @@ function draw(
     del,
     cancel,
     dialog,
-    button: within(dialog).getByRole("button", { name: "Delete vault" }),
+    // While it runs the act says so (#630).
+    button: within(dialog).getByRole("button", {
+      name: over.deleting ? "Deleting…" : "Delete vault",
+    }),
     box: within(dialog).getByLabelText("Type ops to confirm"),
   };
 }

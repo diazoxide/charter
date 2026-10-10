@@ -56,7 +56,9 @@ export function RemoveFromWorkspace({
     <AlertDialog.Root
       open
       onOpenChange={(open) => {
-        if (!open) onClose();
+        // Not while the core is at work, `NewVault`'s reason: a refusal would land where
+        // nobody is looking (#630).
+        if (!open && !busy) onClose();
       }}
     >
       <AlertDialog.Portal>
@@ -76,7 +78,7 @@ export function RemoveFromWorkspace({
         >
           <AlertDialog.Title>{`Remove ${repo} from ${workspace}?`}</AlertDialog.Title>
           <AlertDialog.Description className="came-back">
-            {`${workspace} stops naming ${repo} in its workspace.json. Nothing is deleted: it is not cloned on this machine.`}
+            {`${workspace} stops naming ${repo}. Nothing is deleted: it is not cloned on this machine.`}
           </AlertDialog.Description>
           {trouble !== null && (
             <p className="trouble" role="alert">
@@ -85,7 +87,7 @@ export function RemoveFromWorkspace({
           )}
           <AnswerBar>
             <AlertDialog.Cancel asChild>
-              <button type="button" tabIndex={0} ref={cancel} onClick={onClose}>
+              <button type="button" tabIndex={0} ref={cancel} disabled={busy} onClick={onClose}>
                 Cancel
               </button>
             </AlertDialog.Cancel>
@@ -96,7 +98,7 @@ export function RemoveFromWorkspace({
               disabled={busy}
               onClick={() => void confirm()}
             >
-              Remove from workspace
+              {busy ? "Removing…" : "Remove from workspace"}
             </button>
           </AnswerBar>
         </AlertDialog.Content>

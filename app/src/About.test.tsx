@@ -10,6 +10,13 @@ afterEach(() => {
 });
 
 describe("About Charter", () => {
+  it("says what it is reading while it reads, in sentence case (#630)", async () => {
+    mockIPC(() => new Promise(() => undefined));
+    render(<AboutCharter />);
+    await userEvent.click(screen.getByTestId("title-about"));
+    expect(await screen.findByText("Reading what this version brought…")).toBeTruthy();
+  });
+
   it("says why what this version brought could not be read, and Read again asks again", async () => {
     let asks = 0;
     mockIPC((cmd) => {

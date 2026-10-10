@@ -22,7 +22,10 @@ function draw(over: { trouble?: string; deleting?: boolean } = {}) {
     del,
     cancel,
     dialog,
-    button: within(dialog).getByRole("button", { name: "Delete persona" }),
+    // While it runs the act says so (#630).
+    button: within(dialog).getByRole("button", {
+      name: over.deleting ? "Deleting…" : "Delete persona",
+    }),
   };
 }
 

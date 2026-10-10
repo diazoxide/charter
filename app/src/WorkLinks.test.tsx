@@ -132,7 +132,7 @@ describe("a chat's work link", () => {
     await fromTheMenu("Link to work item…");
     const dialog = await screen.findByRole("dialog", { name: "Link to work item" });
     await userEvent.type(within(dialog).getByLabelText("Tracker key"), ISSUE);
-    await userEvent.click(within(dialog).getByRole("button", { name: "Link" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Link work item" }));
 
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(asked(asks, "chat_work_link").map((one) => one.args)).toEqual([
@@ -161,7 +161,7 @@ describe("a chat's work link", () => {
     await fromTheMenu("Link to work item…");
     const dialog = await screen.findByRole("dialog", { name: "Link to work item" });
     await userEvent.type(within(dialog).getByLabelText("Tracker key"), ` ${ISSUE} `);
-    await userEvent.click(within(dialog).getByRole("button", { name: "Link" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Link work item" }));
 
     await waitFor(() => expect(asked(asks, "chat_work_link")).toHaveLength(1));
     expect(asked(asks, "chat_work_link")[0].args.item).toBe(` ${ISSUE} `);
@@ -175,7 +175,7 @@ describe("a chat's work link", () => {
     await fromTheMenu("Link to work item…");
     const dialog = await screen.findByRole("dialog", { name: "Link to work item" });
     await userEvent.type(within(dialog).getByLabelText("Tracker key"), "github:x");
-    await userEvent.click(within(dialog).getByRole("button", { name: "Link" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Link work item" }));
 
     expect((await within(dialog).findByRole("alert")).textContent).toBe(refused);
     await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
