@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791668937989,
+  "lastUpdate": 1791671030999,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -6552,6 +6552,48 @@ window.BENCHMARK_DATA = {
             "value": 104.41169149999999,
             "unit": "ms",
             "extra": "median of 5 runs: 102.872, 103.634, 104.412, 104.500, 104.543 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "eyehollow@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "dbrownsimple"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "417c27b6be2b120c58152779b7d6ae9051d00085",
+          "message": "Keep the window's own projects last when the whole layout file must shrink\n\nReview fix for train 44 (#1686). The whole-file guard let go of projects by recents alone,\nso a project another window opened more recently outlived the one in front of the window\nthat wrote; it now lets go of the projects the window did not send first. And a layout that\nwould still pass MAX_BYTES with no project left is not written, so the file on disk stays\nrather than being replaced by one the next launch refuses whole. A window test pins the\nversion 1 to version 2 path with a view's facet.\n\nRefs #1686\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nAssisted-by: claude-code:claude-opus-5-5\nPurlis-Chat: 01M4AREQXXRGBAEWM0SZ0N0WBN\nPurlis-Persona: steward",
+          "timestamp": "2026-10-11T02:08:53+04:00",
+          "tree_id": "913b30a4c076be42ab130091eafed9df10fba0b6",
+          "url": "https://github.com/purlis/purlis/commit/417c27b6be2b120c58152779b7d6ae9051d00085"
+        },
+        "date": 1791671029674,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.5293895,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.504, 0.522, 0.529, 0.530, 0.550 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.9524865,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.267, 16.914, 16.952, 17.065, 17.355 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 105.0651485,
+            "unit": "ms",
+            "extra": "median of 5 runs: 103.857, 104.980, 105.065, 105.352, 105.897 ms"
           }
         ]
       }
