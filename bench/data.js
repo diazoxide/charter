@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791644843301,
+  "lastUpdate": 1791646726191,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -6048,6 +6048,48 @@ window.BENCHMARK_DATA = {
             "value": 101.5374055,
             "unit": "ms",
             "extra": "median of 5 runs: 101.080, 101.457, 101.537, 102.420, 102.666 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "eyehollow@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "dbrownsimple"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "05e53dbbfac5043ed0a8cded2be287697e91d74a",
+          "message": "Read the fresh mark by its words on main: \"project updated since this chat started\"\n\nRefs #1204\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nAssisted-by: claude-code\nPurlis-Chat: 01M4AREQXXRGBAEWM0SZ0N0WBN\nPurlis-Persona: steward",
+          "timestamp": "2026-10-10T19:32:43+04:00",
+          "tree_id": "ec4f506f91e5c75579e80ee9c5273f459a094ad8",
+          "url": "https://github.com/purlis/purlis/commit/05e53dbbfac5043ed0a8cded2be287697e91d74a"
+        },
+        "date": 1791646725628,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.333057,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.319, 0.326, 0.333, 0.337, 0.339 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.4086585,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.349, 16.388, 16.409, 16.631, 16.795 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 101.978328,
+            "unit": "ms",
+            "extra": "median of 5 runs: 101.206, 101.744, 101.978, 102.187, 102.468 ms"
           }
         ]
       }
