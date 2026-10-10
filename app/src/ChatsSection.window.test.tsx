@@ -371,7 +371,7 @@ describe("the Chats section", () => {
     render(<App />);
     const tree = await section();
     // Every workspace's, which the list shows on the person's word (#1655).
-    await userEvent.click(await screen.findByRole("checkbox", { name: "all workspaces" }));
+    await userEvent.click(await screen.findByRole("radio", { name: "All" }));
 
     await waitFor(() =>
       expect(shape(tree)).toEqual(["1 steward 1", "2 drop commons", "3 steward 3", "1 devops 4"]),
@@ -446,7 +446,7 @@ describe("the Chats section", () => {
     ]);
     render(<App />);
     const tree = await section();
-    await userEvent.click(await screen.findByRole("checkbox", { name: "all workspaces" }));
+    await userEvent.click(await screen.findByRole("radio", { name: "All" }));
     await waitFor(() => expect(shape(tree)).toHaveLength(3));
 
     const one = await screen.findByTestId("on-memory-1");
@@ -1348,7 +1348,7 @@ describe("the explorer's one line for a session's tasks (#1490)", () => {
     ]);
     render(<App />);
     const tree = await section();
-    await userEvent.click(await screen.findByRole("checkbox", { name: "all workspaces" }));
+    await userEvent.click(await screen.findByRole("radio", { name: "All" }));
     await waitFor(() => expect(shape(tree)).toEqual(["1 steward 1", "1 devops 2", "2 check prod"]));
     await userEvent.click(within(tree).getByTitle("Fold the chats under devops 2"));
 
@@ -1395,7 +1395,7 @@ describe("the explorer's one line for a session's tasks (#1490)", () => {
     ]);
     render(<App />);
     const tree = await section();
-    await userEvent.click(await screen.findByRole("checkbox", { name: "all workspaces" }));
+    await userEvent.click(await screen.findByRole("radio", { name: "All" }));
     await waitFor(() => expect(shape(tree)).toHaveLength(5));
     move(3, "running", 10);
     move(5, "running", 11);
@@ -1743,16 +1743,16 @@ describe("the Chats section follows the focused workspace", () => {
     await waitFor(() => expect(shape(tree)).toEqual(["1 devops 3"]));
   });
 
-  it("lists every workspace's chats while All workspaces is on, until it is taken off", async () => {
+  it("lists every workspace's chats while All is picked, until Workspace is picked again", async () => {
     core([chat(1, "alpha"), chat(3, "beta", { persona: "devops" })]);
     render(<App />);
     const tree = await section();
     await waitFor(() => expect(shape(tree)).toEqual(["1 steward 1"]));
 
-    await userEvent.click(screen.getByRole("checkbox", { name: "all workspaces" }));
+    await userEvent.click(screen.getByRole("radio", { name: "All" }));
     await waitFor(() => expect(shape(tree)).toEqual(["1 steward 1", "1 devops 3"]));
 
-    await userEvent.click(screen.getByRole("checkbox", { name: "all workspaces" }));
+    await userEvent.click(screen.getByRole("radio", { name: "Workspace" }));
     await waitFor(() => expect(shape(tree)).toEqual(["1 steward 1"]));
   });
 
@@ -1770,7 +1770,7 @@ describe("the Chats section follows the focused workspace", () => {
     await userEvent.click(await inExplorer(/1 task from other places/));
 
     await waitFor(() => expect(row(tree, "check prod")).toHaveFocus());
-    expect(screen.getByRole("checkbox", { name: "all workspaces" })).toBeChecked();
+    expect(screen.getByRole("radio", { name: "All" })).toBeChecked();
   });
 
   it("says a chat in another workspace needs you, with a way to it, and never hides it silently", async () => {
@@ -1781,13 +1781,184 @@ describe("the Chats section follows the focused workspace", () => {
 
     move(3, "waiting", 10, [3]);
 
-    await screen.findByText("1 chat in another workspace needs you.");
+    await screen.findByText("devops 3 needs you, in another workspace.");
     await userEvent.click(
       screen.getByRole("button", { name: "Go to devops 3, which needs you in another workspace" }),
     );
     // Its tab came forward, which focused its workspace: the list follows.
     await waitFor(() => expect(shape(tree)).toEqual(["1 devops 3"]));
-    expect(screen.queryByText("1 chat in another workspace needs you.")).toBeNull();
+    expect(screen.queryByText("devops 3 needs you, in another workspace.")).toBeNull();
+  });
+});
+
+/** The scope switch (#1679), and the scope it is on. */
+const scopeSwitch = () => screen.getByRole("radiogroup", { name: "Show the chats of" });
+const scopeOn = () =>
+  within(scopeSwitch())
+    .getAllByRole("radio")
+    .filter((one) => one.getAttribute("aria-checked") === "true")
+    .map((one) => one.textContent);
+const pickScope = (name: "This tab" | "Workspace" | "All") =>
+  userEvent.click(within(scopeSwitch()).getByRole("radio", { name }));
+
+describe("the Chats view's scope: this tab, the workspace, or all (#1679)", () => {
+  /** Chat 1's tab in front, with its task working in beta; chat 3 in a tab of its own in
+   *  alpha; chat 4 in beta. */
+  const three = () => [
+    chat(1, "alpha"),
+    chat(2, "beta", { persona: "devops", from: by(1, "task") }),
+    chat(3, "alpha", { in_front: false }),
+    chat(4, "beta", { persona: "devops", in_front: false }),
+  ];
+
+  it("lists the focused workspace's chats until another scope is picked", async () => {
+    core(three());
+    render(<App />);
+    const tree = await section();
+
+    expect(scopeOn()).toEqual(["Workspace"]);
+    await waitFor(() => expect(shape(tree)).toEqual(["1 steward 1", "2 devops 2", "1 steward 3"]));
+  });
+
+  it("lists the chats of the tab in front, and follows the tab", async () => {
+    core(three());
+    render(<App />);
+    const tree = await section();
+    await waitFor(() => expect(shape(tree)).toHaveLength(3));
+
+    await pickScope("This tab");
+    expect(scopeOn()).toEqual(["This tab"]);
+    // The session and the task it asked for, wherever that task works.
+    await waitFor(() => expect(shape(tree)).toEqual(["1 steward 1", "2 devops 2"]));
+
+    await userEvent.click(within(strip()).getByRole("tab", { name: /steward 3/ }));
+    await waitFor(() => expect(shape(tree)).toEqual(["1 steward 3"]));
+  });
+
+  it("lists every workspace's chats on All", async () => {
+    core(three());
+    render(<App />);
+    const tree = await section();
+    await waitFor(() => expect(shape(tree)).toHaveLength(3));
+
+    await pickScope("All");
+    await waitFor(() =>
+      expect(shape(tree)).toEqual(["1 steward 1", "2 devops 2", "1 steward 3", "1 devops 4"]),
+    );
+    await pickScope("Workspace");
+    await waitFor(() => expect(shape(tree)).toEqual(["1 steward 1", "2 devops 2", "1 steward 3"]));
+  });
+
+  it("remembers the scope picked for the project when the window opens it again", async () => {
+    core(three());
+    const { unmount } = render(<App />);
+    await section();
+    await pickScope("All");
+    unmount();
+    forgetThisLaunch();
+
+    render(<App />);
+    const tree = await section();
+    expect(scopeOn()).toEqual(["All"]);
+    await waitFor(() => expect(shape(tree)).toHaveLength(4));
+  });
+
+  it("picks the next scope on a single arrow", async () => {
+    // One Tab stop, as `Window.keyboard.test.tsx` walks it.
+    core(three());
+    render(<App />);
+    const tree = await section();
+    await waitFor(() => expect(shape(tree)).toHaveLength(3));
+    const radios = within(scopeSwitch()).getAllByRole("radio");
+
+    act(() => radios[1].focus());
+    await userEvent.keyboard("{ArrowLeft}");
+
+    await waitFor(() => expect(scopeOn()).toEqual(["This tab"]));
+    await waitFor(() => expect(shape(tree)).toEqual(["1 steward 1", "2 devops 2"]));
+  });
+
+  it("names a chat outside this tab that needs you at the top, with a way to it", async () => {
+    const { move } = core(three());
+    render(<App />);
+    const tree = await section();
+    await waitFor(() => expect(shape(tree)).toHaveLength(3));
+    await pickScope("This tab");
+    await waitFor(() => expect(shape(tree)).toEqual(["1 steward 1", "2 devops 2"]));
+
+    move(3, "waiting", 10, [3]);
+
+    await screen.findByText("steward 3 needs you, outside this tab.");
+    await userEvent.click(
+      screen.getByRole("button", { name: "Go to steward 3, which needs you outside this tab" }),
+    );
+    // Its tab came forward: the list is that tab's, and nothing is hidden that needs you.
+    await waitFor(() => expect(shape(tree)).toEqual(["1 steward 3"]));
+    expect(screen.queryByText(/needs you, outside this tab/)).toBeNull();
+  });
+
+  it("names a chat in another workspace that needs you, by its name", async () => {
+    const { move } = core(three());
+    render(<App />);
+    const tree = await section();
+    await waitFor(() => expect(shape(tree)).toHaveLength(3));
+
+    move(4, "waiting", 10, [4]);
+    move(2, "waiting", 11, [4, 2]);
+
+    // Chat 2 is listed under the chat that asked it, so only chat 4 is hidden.
+    await screen.findByText("devops 4 needs you, in another workspace.");
+    expect(
+      screen.getByRole("button", { name: "Go to devops 4, which needs you in another workspace" }),
+    ).toBeTruthy();
+  });
+
+  it("names both what the filter hides and what the scope leaves out, Go going to the first", async () => {
+    const { move } = core(three());
+    render(<App />);
+    const tree = await section();
+    await waitFor(() => expect(shape(tree)).toHaveLength(3));
+    move(4, "waiting", 10, [4]);
+    move(3, "waiting", 11, [4, 3]);
+
+    act(() =>
+      screen
+        .getByRole("searchbox", { name: "Filter chats by name, persona, workspace or state" })
+        .focus(),
+    );
+    await userEvent.keyboard("devops");
+
+    await waitFor(() =>
+      expect(document.querySelector(".chats-hidden")?.textContent).toBe(
+        "steward 3 needs you, and the filter hides it. The filter hides 1 of 3 chats." +
+          " devops 4 needs you, in another workspace.",
+      ),
+    );
+    expect(
+      screen.getByRole("button", { name: "Go to steward 3, which needs you and the filter hides" }),
+    ).toBeTruthy();
+  });
+
+  it("names on All only what the filter hides", async () => {
+    const { move } = core(three());
+    render(<App />);
+    const tree = await section();
+    await pickScope("All");
+    await waitFor(() => expect(shape(tree)).toHaveLength(4));
+    move(4, "waiting", 10, [4]);
+
+    // Typed with the keyboard brought to the box: jsdom lays nothing out for a pointer.
+    act(() =>
+      screen
+        .getByRole("searchbox", { name: "Filter chats by name, persona, workspace or state" })
+        .focus(),
+    );
+    await userEvent.keyboard("steward");
+
+    await screen.findByText(/devops 4 needs you, and the filter hides it\./);
+    expect(
+      screen.getByRole("button", { name: "Go to devops 4, which needs you and the filter hides" }),
+    ).toBeTruthy();
   });
 });
 

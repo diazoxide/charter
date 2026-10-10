@@ -13,6 +13,7 @@ import {
 } from "react";
 import * as RovingFocusGroup from "@radix-ui/react-roving-focus";
 import * as Popover from "@radix-ui/react-popover";
+import * as RadioGroup from "@radix-ui/react-radio-group";
 import { ChevronDown, ChevronRight, Hand, MessagesSquare, SquareTerminal } from "lucide-react";
 import {
   besideId,
@@ -43,7 +44,8 @@ import {
   type Rank,
 } from "./chatsList";
 import { useChatsListPrefs } from "./chatsListPrefs";
-import { inScope } from "./chatsScope";
+import { inScope, inTab, keepScope, keptScope, SCOPES, type Scope } from "./chatsScope";
+import { useArrowPick } from "./settings/components";
 import { keepFolds, keptFolds } from "./chatFolds";
 import {
   ASKED_BY_YOU,
@@ -102,9 +104,14 @@ const CHIPS: readonly { rank: Rank; says: string }[] = [
 
 /** A chip's id in the chips' roving focus. */
 const chipId = (rank: Rank) => `chats-chip:${rank}`;
-/** The chip that shows every workspace's chats (#1655), in the chips' roving focus. */
-const EVERYWHERE_CHIP = "chats-chip:everywhere";
-const CHIP_IDS = [...CHIPS.map((chip) => chipId(chip.rank)), EVERYWHERE_CHIP];
+const CHIP_IDS = CHIPS.map((chip) => chipId(chip.rank));
+
+/** Where a chat that needs you is, that the scope leaves out, as the line under the filter
+ *  says it (#1679). */
+const OUTSIDE_SCOPE: Record<Exclude<Scope, "all">, { one: string; many: string }> = {
+  tab: { one: "outside this tab", many: "outside this tab" },
+  workspace: { one: "in another workspace", many: "in other workspaces" },
+};
 
 /** What the list is drawn from that the chats' own moves change: held still while the pointer
  *  or the keyboard is in the list. */
@@ -160,16 +167,54 @@ function byKeyboard(target: Element): boolean {
 }
 
 /**
+ * **The scope switch** (#1679): This tab, Workspace or All, at the top of the view beside its
+ * title. A radio group drawn as one row of segments, as Settings' level switcher is (Radix's,
+ * with the settings set's arrow repair, `useArrowPick`). A pick is drawn at once and kept, with
+ * no button: it writes nothing a second pick does not undo.
+ */
+function ScopeSwitch({ scope, onPick }: { scope: Scope; onPick: (to: Scope) => void }) {
+  const { arrowing, listen } = useArrowPick();
+  return (
+    <RadioGroup.Root
+      className="chats-scope"
+      aria-label="Show the chats of"
+      orientation="horizontal"
+      value={scope}
+      onValueChange={(to) => {
+        const one = SCOPES.find((each) => each.scope === to);
+        if (one !== undefined) onPick(one.scope);
+      }}
+      {...listen}
+    >
+      {SCOPES.map((one) => (
+        <RadioGroup.Item
+          key={one.scope}
+          className="chats-scope-item"
+          value={one.scope}
+          onFocus={() => {
+            if (arrowing.current && one.scope !== scope) onPick(one.scope);
+          }}
+        >
+          {one.says}
+        </RadioGroup.Item>
+      ))}
+    </RadioGroup.Root>
+  );
+}
+
+/**
  * **The running chats of the focused workspace, in one tree** (#1447, #1655), in the left
  * region above the explorer. The explorer answers what is running at each place in this
  * workspace; this answers who is doing what, and which chat started which.
  *
  * **It follows the workspace in the strip** (#1655, ADR 0038's 2026-10-10 amendment): a tree is
  * listed where its top row works, with every task below it wherever that task works
- * (`chatsScope.ts`), and a chat started at the plane root is the root's. The **all workspaces**
- * chip lists every workspace's chats again, for as long as the window runs. A chat in another
- * workspace that needs you is never left out silently: the line under the filter says so and
- * goes to it, as it does for one the filter hides, and the title bar's queue lists it as ever.
+ * (`chatsScope.ts`), and a chat started at the plane root is the root's. **A switch at the top
+ * picks the scope** (#1679): This tab lists the chats of the tab in front, as the tab's chip
+ * counts them; Workspace, the default, the focused workspace's; All, every workspace's. The pick
+ * is kept for the project. A chat the scope leaves out that needs you is never left out
+ * silently: the line under the filter names it and goes to it, as it does for one the filter
+ * hides, and the title bar's queue lists it as ever.
  *
  * **A row is a way to the chat.** Pressing one, or Enter on it, shows its chat (`onOpen`, the
  * one way a row opens): a task has no tab of its own, and is shown inside the tab of the
@@ -232,6 +277,7 @@ function byKeyboard(target: Element): boolean {
 export function ChatsSection({
   rows: every,
   here,
+  tab,
   front,
   onOpen,
   offers = NO_OFFERS,
@@ -255,6 +301,9 @@ export function ChatsSection({
   /** The workspace in the strip, by the word a row says for where it works: the rows listed
    *  are the trees that started there (#1655). Left out, every workspace's. */
   here?: string;
+  /** The tab in front and its chats, as the window reads them (`tabChats.chatsOfTabs`): what
+   *  This tab lists (#1679). Left out, This tab lists none. */
+  tab?: { id: number; chats: readonly ChatRow[] };
   /** The chat in front, whose row is the current one. */
   front?: number;
   /** A row was pressed: go to that chat. A task is shown inside its session's tab (#1486).
@@ -303,13 +352,23 @@ export function ChatsSection({
 }) {
   const prefs = useChatsListPrefs();
   const chats = useChatsHere();
-  /** Whether every workspace's chats are listed (#1655): the person's own choice, for as long
-   *  as the window runs. */
-  const [everywhere, setEverywhere] = useState(false);
-  const scoped = !everywhere && here !== undefined;
+  /** Which chats are listed (#1679): the person's own pick, kept for the project. */
+  const [picked, setPicked] = useState<Scope>(() => keptScope(chats.plane));
+  const pick = (to: Scope) => {
+    setPicked(to);
+    keepScope(chats.plane, to);
+  };
+  /** The scope the list is drawn in: every chat where the caller names no workspace. */
+  const scope: Scope = here === undefined ? "all" : picked;
+  const tabChats = tab?.chats;
   const rows = useMemo(
-    () => (!scoped || here === undefined ? every : inScope(every, here)),
-    [every, here, scoped],
+    () =>
+      scope === "all" || here === undefined
+        ? every
+        : scope === "tab"
+          ? inTab(every, new Set((tabChats ?? []).map((row) => row.session)))
+          : inScope(every, here),
+    [every, here, scope, tabChats],
   );
   const [text, setText] = useState("");
   const [ranks, setRanks] = useState<readonly Rank[]>([]);
@@ -410,12 +469,14 @@ export function ChatsSection({
   const resting = over || inside;
   const [held, setHeld] = useState<Moving | null>(null);
   const moving: Moving = { order, live, asked, listed };
-  // **A workspace focused, or the chip pressed, is the person's doing** (#1655): its rows are
-  // theirs to see at once, as a filter's are, and not held as the last workspace's were.
-  const scope = scoped ? here : null;
-  const [heldScope, setHeldScope] = useState(scope);
-  if (heldScope !== scope) {
-    setHeldScope(scope);
+  // **A workspace focused, a tab brought forward or a scope picked is the person's doing**
+  // (#1655, #1679): its rows are theirs to see at once, as a filter's are, and not held as the
+  // last ones were.
+  const listing =
+    scope === "all" ? null : scope === "tab" ? `tab:${tab?.id ?? ""}` : `workspace:${here}`;
+  const [heldScope, setHeldScope] = useState(listing);
+  if (heldScope !== listing) {
+    setHeldScope(listing);
     setHeld(resting ? moving : null);
   } else if (resting && held === null) setHeld(moving);
   if (!resting && held !== null) setHeld(null);
@@ -630,18 +691,24 @@ export function ChatsSection({
     [offers, press],
   );
   const section = useRef<HTMLElement>(null);
-  // **A row asked for in another workspace lists every workspace** (#1655), once for each
-  // asking, so the row can be shown: the chip says it is on, and the person takes it off.
+  // **A row asked for outside the scope widens it** (#1655, #1679), once for each asking, to
+  // the narrowest scope that lists it, so the row can be shown: the switch says so, and the
+  // person picks again. It is not the person's pick, so it is not kept.
   const [widenedFor, setWidenedFor] = useState<number>();
   if (
     reveal !== undefined &&
     reveal.at !== widenedFor &&
-    scoped &&
+    scope !== "all" &&
+    here !== undefined &&
     !byNumber.has(reveal.asker) &&
     everyByNumber.has(reveal.asker)
   ) {
     setWidenedFor(reveal.at);
-    setEverywhere(true);
+    setPicked(
+      scope === "tab" && inScope(every, here).some((row) => row.session === reveal.asker)
+        ? "workspace"
+        : "all",
+    );
   }
   useRevealedTask(section, reveal, rows, {
     fold,
@@ -679,34 +746,40 @@ export function ChatsSection({
     setSaid(undefined);
   };
   const hidden = steady.length - base.length;
-  /** Where the Go button goes: a chat the filter hides that needs you, else one in another
-   *  workspace that does (#1655). */
+  /** Where a chat the scope leaves out is, as the line says it (#1679). */
+  const outside = scope === "all" ? undefined : OUTSIDE_SCOPE[scope];
+  /** The first chat the scope leaves out that needs you, the longest waiting. */
+  const firstOutside =
+    elsewhereNeeding.length > 0 ? everyByNumber.get(elsewhereNeeding[0]) : undefined;
+  /** Where the Go button goes: a chat the filter hides that needs you, else one the scope
+   *  leaves out that does (#1655, #1679). */
+  /** The first chat the filter hides that needs you, the longest waiting. */
+  const filteredFirst = hiddenNeeding.length > 0 ? byNumber.get(hiddenNeeding[0]) : undefined;
   const hiddenFirst =
-    hiddenNeeding.length > 0
-      ? { row: byNumber.get(hiddenNeeding[0]), why: "which needs you and the filter hides" }
-      : elsewhereNeeding.length > 0
-        ? {
-            row: everyByNumber.get(elsewhereNeeding[0]),
-            why: "which needs you in another workspace",
-          }
+    filteredFirst !== undefined
+      ? { row: filteredFirst, why: "which needs you and the filter hides" }
+      : firstOutside !== undefined && outside !== undefined
+        ? { row: firstOutside, why: `which needs you ${outside.one}` }
         : undefined;
   const goesTo = hiddenFirst?.row;
-  /** What the line says of the workspaces not listed: only a chat there that needs you. */
+  /** What the line says of the chats the scope leaves out: only one that needs you, by its
+   *  name, whatever the scope (#1679). */
   const elsewhere =
-    elsewhereNeeding.length === 0
+    firstOutside === undefined || outside === undefined
       ? ""
       : elsewhereNeeding.length === 1
-        ? "1 chat in another workspace needs you."
-        : `${elsewhereNeeding.length} chats in other workspaces need you.`;
+        ? `${firstOutside.name} needs you, ${outside.one}.`
+        : `${firstOutside.name} and ${elsewhereNeeding.length - 1} more need you, ${outside.many}.`;
   /** What the line under the filter says of it. A chat that needs the person comes first. */
   const hides = !filtering
     ? elsewhere
     : [
-        hiddenNeeding.length === 0
+        // Named, as the scope's are (#1679): the first is the one Go goes to.
+        filteredFirst === undefined
           ? ""
           : hiddenNeeding.length === 1
-            ? "1 chat the filter hides needs you."
-            : `${hiddenNeeding.length} chats the filter hides need you.`,
+            ? `${filteredFirst.name} needs you, and the filter hides it.`
+            : `${filteredFirst.name} and ${hiddenNeeding.length - 1} more need you, and the filter hides them.`,
         base.length === 0
           ? "No chat matches the filter."
           : hidden === 0
@@ -725,10 +798,13 @@ export function ChatsSection({
     >
       {/* The title and the filter stay at the top of the section while its rows scroll. */}
       <div className="chats-head">
-        <h2 className="sidebar-title" id="chats-title">
-          <MessagesSquare className="node-icon" aria-hidden="true" />
-          Chats
-        </h2>
+        <div className="chats-top">
+          <h2 className="sidebar-title" id="chats-title">
+            <MessagesSquare className="node-icon" aria-hidden="true" />
+            Chats
+          </h2>
+          {here !== undefined && every.length > 0 && <ScopeSwitch scope={picked} onPick={pick} />}
+        </div>
         {every.length > 0 && (
           <>
             <div className="chats-filter" role="search" aria-label="Filter the chats">
@@ -780,19 +856,6 @@ export function ChatsSection({
                       {chip.says}
                     </label>
                   ))}
-                  {/* Every workspace's chats (#1655): off, the list follows the strip. */}
-                  {here !== undefined && (
-                    <label className="chats-chip" data-on={everywhere || undefined}>
-                      <RovingFocusGroup.Item asChild tabStopId={EVERYWHERE_CHIP}>
-                        <input
-                          type="checkbox"
-                          checked={everywhere}
-                          onChange={() => setEverywhere((was) => !was)}
-                        />
-                      </RovingFocusGroup.Item>
-                      all workspaces
-                    </label>
-                  )}
                 </div>
               </RovingFocusGroup.Root>
             </div>
@@ -834,7 +897,9 @@ export function ChatsSection({
         <p className="empty">
           {every.length === 0
             ? "No chats are running in this project."
-            : "No chats are running here. All workspaces lists the others."}
+            : scope === "tab"
+              ? "No chat runs in this tab. Workspace lists the others."
+              : "No chats are running here. All lists the others."}
         </p>
       ) : (
         <div

@@ -1,5 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { afterEach } from "vitest";
+import { forgetKeptScopes } from "./chatsScope";
 import { forgetExtensionThemes } from "./Extensions";
 import { forgetExtensionsOn } from "./extensionsOn";
 import { forgetProjectThemes } from "./projectTheme";
@@ -16,6 +17,9 @@ afterEach(() => {
   // A reload keeps the window's session storage (the Chats list's folds, `chatFolds.ts`); a
   // new window, as every test's is, starts without it.
   globalThis.sessionStorage?.clear();
+  // The Chats view's scope is kept per project on this machine (#1679); every test's machine is
+  // a new one.
+  forgetKeptScopes();
 });
 
 // jsdom has no ResizeObserver, and the panes and their splits watch their own size with one.

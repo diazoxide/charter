@@ -214,3 +214,31 @@ other places, turns the chip on so that row can be shown. **No chat that needs t
 left out silently.** The line under the filter says how many in other workspaces need you,
 with a button that goes to the first one, as it does for the ones a filter hides. The title
 bar's needs-you queue still lists every chat.
+
+## Amendment, 2026-10-10: three scopes in place of the chip
+
+The operator accepted B-15 of the sidebar grill on 2026-10-10 (#1671, #1679): the Chats view
+switches between **This tab**, **Workspace** and **All**. The switch replaces the **all
+workspaces** chip of the amendment above; there is one control, not two. It sits at the end of
+the view's title line, a radio group drawn as one row of segments, one Tab stop with the arrows
+between its three.
+
+- **This tab** lists the chats of the tab in front, the set its chip counts and its menu lists
+  (`tabChats.ts`), nested as the whole list nests them. A task in a tab of its own heads its
+  tab's list.
+- **Workspace**, the default, is the amendment above: the trees that started in the focused
+  workspace.
+- **All** lists every workspace's chats.
+
+The pick is **kept for each project on this machine**, so it is there after a relaunch. It is
+how one person looks at one project, like the folds, and is kept in the window's web storage
+(local storage, where the folds use the session's, since a scope names no chat and outlives a
+launch) rather than in `layout.json`, which has no per-project place for a view's state until
+the views land in its next version (#1673). A row asked for outside the scope widens the scope
+to the narrowest that lists it, and that is not kept, because the person did not pick it.
+
+**In every scope, a chat the scope leaves out that needs the person is named at the top**: the
+line under the filter says its name, how many more there are, and where they are ("outside this
+tab", "in another workspace"), with a Go button to the one that has waited longest. A chat the
+filter hides that needs the person is named the same way, first, and Go goes to it. The title
+bar's needs-you queue still lists every chat.
