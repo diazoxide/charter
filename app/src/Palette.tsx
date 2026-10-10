@@ -661,6 +661,14 @@ export function Palette({
                   {why}
                 </p>
               ))}
+              {/* Said while the core looks (`docs/ui-copy.md`, #630): a group with nothing in it
+                  yet reads as one that found nothing. No live role: the scope line above is the
+                  group's status, and it says where they are found. */}
+              {fileRows.length === 0 && found.looking && (
+                <p className="pending" aria-busy="true">
+                  Finding files…
+                </p>
+              )}
               {query.trim() !== "" && fileRows.length === 0 && !found.looking && (
                 <p className="none" role="status">
                   No file matches what you typed.

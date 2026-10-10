@@ -343,7 +343,7 @@ describe("the Brief panel", () => {
     const { dialog } = await opened();
     await waitFor(() => expect(box(dialog).textContent).toBe(BRIEF));
 
-    await user.click(within(dialog).getByRole("button", { name: "Copy" }));
+    await user.click(within(dialog).getByRole("button", { name: "Copy brief" }));
 
     expect(await navigator.clipboard.readText()).toBe(BRIEF);
     expect(within(dialog).getByRole("status")).toHaveTextContent("Copied, as it was sent.");
@@ -359,12 +359,12 @@ describe("the Brief panel", () => {
     // No character that draws as nothing reaches the panel's text.
     expect(dialog.textContent).not.toMatch(/[\u200B-\u200F\u202A-\u202E\u2066-\u2069]/);
     expect(within(dialog).getByText(/holds characters that draw as nothing/)).toBeInTheDocument();
-    // Two copies, each by name, and no plain "Copy" to guess at.
-    expect(within(dialog).queryByRole("button", { name: "Copy" })).toBeNull();
+    // Two copies, each by name, and no plain "Copy brief" to guess at.
+    expect(within(dialog).queryByRole("button", { name: "Copy brief" })).toBeNull();
     const shown = within(dialog).getByRole("button", { name: "Copy as shown" });
     const sent = within(dialog).getByRole("button", { name: "Copy as sent" });
     // The one nearest Close, so the first reached from it, is what was read.
-    await userEvent.tab({ shift: true });
+    await userEvent.tab();
     expect(shown).toHaveFocus();
 
     await user.click(shown);
@@ -388,7 +388,7 @@ describe("the Brief panel", () => {
     const { dialog: empty } = await opened(brief({ kept: "missing", brief: "" }));
     expect(await within(empty).findByText(/dispatch record holds no brief/)).toBeInTheDocument();
     expect(empty.querySelector("pre")).toBeNull();
-    expect(within(empty).queryByRole("button", { name: "Copy" })).toBeNull();
+    expect(within(empty).queryByRole("button", { name: "Copy brief" })).toBeNull();
     expect(within(empty).getByRole("button", { name: "Close" })).toBeInTheDocument();
   });
 
@@ -418,9 +418,11 @@ describe("the Brief panel", () => {
 
     expect(dialog).toHaveAccessibleName("Brief of read the logs");
     expect(within(dialog).getByRole("button", { name: "Close" })).toHaveFocus();
-    // Shift+Tab from Close is Copy, then the brief's own box.
+    // The answer bar's order (#630): Close first, then Copy brief at the edge. Tab from Close
+    // is Copy brief; Shift+Tab is the brief's own box.
+    await userEvent.tab();
+    expect(within(dialog).getByRole("button", { name: "Copy brief" })).toHaveFocus();
     await userEvent.tab({ shift: true });
-    expect(within(dialog).getByRole("button", { name: "Copy" })).toHaveFocus();
     await userEvent.tab({ shift: true });
     expect(box(dialog)).toHaveFocus();
 

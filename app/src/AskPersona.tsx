@@ -116,6 +116,8 @@ export function AskPersona({
         <Dialog.Content
           ref={content}
           className="warning ask-persona"
+          // Its rows' help says what each box is for; the dialog has no one sentence to read.
+          aria-describedby={undefined}
           // A click outside answers nothing, as in every dialog here (`docs/ui-primitives.md`).
           onInteractOutside={(e) => e.preventDefault()}
           onOpenAutoFocus={(e) => {
@@ -130,7 +132,7 @@ export function AskPersona({
         >
           <Dialog.Title>Ask {persona}</Dialog.Title>
           <p className="where">
-            from <code>{chat}</code>
+            From <code>{chat}</code>
           </p>
 
           <form
@@ -147,7 +149,7 @@ export function AskPersona({
                   ids={ids}
                   kind="text"
                   value={name}
-                  placeholder="check the queue"
+                  placeholder="Check the queue"
                   onChange={setName}
                 />
               )}

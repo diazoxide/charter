@@ -492,9 +492,9 @@ describe("what a keyboard reaches in the window's modal surfaces", () => {
 
     expect(await reachableByKeyboard()).toEqual([
       'radio "stable"',
-      'button "Install 0.2.0"',
-      'button "Check now"',
       'button "Close"',
+      'button "Check now"',
+      'button "Install 0.2.0"',
     ]);
   });
 
@@ -519,8 +519,8 @@ describe("what a keyboard reaches in the window's modal surfaces", () => {
 
     expect(await reachableByKeyboard()).toEqual([
       'radio "stable"',
-      'button "Restart to update"',
       'button "Close"',
+      'button "Restart to update"',
     ]);
 
     await userEvent.click(screen.getByRole("button", { name: "Restart to update" }));

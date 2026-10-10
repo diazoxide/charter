@@ -398,7 +398,20 @@ export function UpdateItem({
                 left `Install`, `Restart to update` and `Check now` in the middle — where Radix's
                 focus scope does nothing and WebKit will not tab to a `<button>` whose
                 `tabindex` is not written down. Installing an update was a mouse-only act. */}
+            {/* The answer bar's order (`docs/design-system.md`, #1719): the way out first, then
+                Check now, and the act that moves things on (Install, Restart to update) last,
+                at the trailing edge. */}
             <AnswerBar>
+              <Dialog.Close asChild>
+                <button type="button" tabIndex={0}>
+                  Close
+                </button>
+              </Dialog.Close>
+              {state.kind !== "installing" && state.kind !== "installed" && (
+                <button type="button" tabIndex={0} onClick={check}>
+                  Check now
+                </button>
+              )}
               {state.kind === "offered" && (
                 <button type="button" tabIndex={0} onClick={install}>
                   Install {state.offer.version}
@@ -409,16 +422,6 @@ export function UpdateItem({
                   Restart to update
                 </button>
               )}
-              {state.kind !== "installing" && state.kind !== "installed" && (
-                <button type="button" tabIndex={0} onClick={check}>
-                  Check now
-                </button>
-              )}
-              <Dialog.Close asChild>
-                <button type="button" tabIndex={0}>
-                  Close
-                </button>
-              </Dialog.Close>
             </AnswerBar>
           </Dialog.Content>
         </Dialog.Portal>
@@ -437,26 +440,62 @@ export function UpdateItem({
   );
 }
 
-/** The plane's pin report: once when the project opens, and again whenever it is opened. */
-export function usePin(plane: PlaneId): { pin?: PinReport; again: () => void } {
+/**
+ * The project's pin report: once when the project opens, and again whenever it is opened.
+ *
+ * **A read that fails is kept, not swallowed** (#1719): `trouble` is the core's sentence, so the
+ * pin item can say the pin was not read rather than draw nothing, which reads as "no drift".
+ * The next read that answers drops it.
+ */
+export function usePin(plane: PlaneId): {
+  pin?: PinReport;
+  trouble?: string;
+  again: () => void;
+} {
   const [pin, setPin] = useState<PinReport>();
+  const [trouble, setTrouble] = useState<string>();
   const ask = useCallback(() => {
     void commands
       .planePin(plane)
       .then((answer) => {
-        if (answer.status === "ok" && answer.data && typeof answer.data.drift === "boolean")
+        if (answer.status === "error") {
+          setTrouble(answer.error);
+          return;
+        }
+        if (answer.data && typeof answer.data.drift === "boolean") {
           setPin(answer.data);
+          setTrouble(undefined);
+        }
       })
-      .catch(() => {});
+      .catch((err: unknown) => setTrouble(String(err)));
   }, [plane]);
   useEffect(() => ask(), [ask]);
-  return { pin, again: ask };
+  return { pin, trouble, again: ask };
 }
 
-/** The pin item: nothing unless `charter version` says the pin drifts. */
-export function PinItem({ pin, again }: { pin?: PinReport; again: () => void }) {
-  if (!pin?.drift) return null;
-  const label = `The plane pins purlis ${pin.pinned ?? "(unreadable)"}; this purlis is ${pin.brought}`;
+/**
+ * The pin item: nothing unless `charter version` says the pin drifts, or the pin could not be
+ * read (`trouble`), which it says rather than hiding.
+ *
+ * **Named by its words** ("Pin 9.0.0", WCAG 2.5.3, as the kill switch is); the sentence that
+ * says both versions is its `title`, read as its description.
+ */
+export function PinItem({
+  pin,
+  trouble,
+  again,
+}: {
+  pin?: PinReport;
+  trouble?: string;
+  again: () => void;
+}) {
+  const unread = trouble !== undefined && !pin?.drift;
+  if (!pin?.drift && !unread) return null;
+  const shown = unread ? "Pin unread" : `Pin ${pin?.pinned ?? "(unreadable)"}`;
+  const said = unread ? [`purlis could not read the project's pin: ${trouble}`] : (pin?.said ?? []);
+  const label = unread
+    ? `purlis could not read the project's pin: ${trouble}`
+    : `The project pins purlis ${pin?.pinned ?? "(unreadable)"}; this purlis is ${pin?.brought}`;
   return (
     <Dialog.Root onOpenChange={(now) => now && again()}>
       <Dialog.Trigger asChild>
@@ -467,10 +506,9 @@ export function PinItem({ pin, again }: { pin?: PinReport; again: () => void }) 
           // down (`docs/ui-primitives.md`, charter-app#189).
           tabIndex={0}
           data-testid="status-pin"
-          aria-label={label}
           title={label}
         >
-          <Pin aria-hidden="true" /> pin {pin.pinned}
+          <Pin aria-hidden="true" /> {shown}
         </button>
       </Dialog.Trigger>
       <Dialog.Portal>
@@ -478,7 +516,7 @@ export function PinItem({ pin, again }: { pin?: PinReport; again: () => void }) 
         <Dialog.Content className="warning update" aria-describedby="pin-said">
           <Dialog.Title>The project&apos;s pin</Dialog.Title>
           <div id="pin-said">
-            {pin.said.map((line) => (
+            {said.map((line) => (
               <p key={line} className="honest">
                 {line}
               </p>

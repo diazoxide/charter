@@ -73,13 +73,20 @@ export function RelaunchAsk({
           </ul>
           <AnswerBar>
             <Alert.Cancel asChild>
-              <button ref={reopen} tabIndex={0}>
+              <button type="button" ref={reopen} tabIndex={0}>
                 Reopen all sessions
               </button>
             </Alert.Cancel>
             {/* Not the primitive's `Action`: an `Action` also closes the dialog, and closing
                 is this dialog's "Reopen all" — one press would send both answers. */}
-            <button tabIndex={0} onClick={() => onAnswer("StartFresh")}>
+            {/* `ends-it`: starting fresh clears the record of what was open, and that cannot be
+                taken back (`docs/design-system.md`, the answer bar). */}
+            <button
+              type="button"
+              className="ends-it"
+              tabIndex={0}
+              onClick={() => onAnswer("StartFresh")}
+            >
               Start fresh
             </button>
           </AnswerBar>

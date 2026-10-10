@@ -275,7 +275,7 @@ export function BriefPanel({
           aria-describedby={undefined}
           onOpenAutoFocus={(event) => {
             // Close has the keyboard from the start, whether or not the brief has been read
-            // yet: Escape and Enter both close, and Shift+Tab is Copy and the brief's box.
+            // yet: Escape and Enter both close, Tab is Copy brief, and Shift+Tab the brief's box.
             event.preventDefault();
             close.current?.focus();
           }}
@@ -290,7 +290,7 @@ export function BriefPanel({
               {trouble}
             </p>
           ) : said === undefined ? (
-            <p className="pending">reading the brief…</p>
+            <p className="pending">Reading the brief…</p>
           ) : (
             <>
               <Facts said={said} />
@@ -345,24 +345,24 @@ export function BriefPanel({
                     ? "purlis could not put the brief on the clipboard."
                     : ""}
             </span>
+            {/* The answer bar's order (#630, `docs/design-system.md`): the way out first, the
+                copies after it at the trailing edge. */}
+            <Dialog.Close asChild>
+              <button type="button" tabIndex={0} ref={close}>
+                Close
+              </button>
+            </Dialog.Close>
             {said !== undefined &&
               said.kept !== "missing" &&
               (said.inert === null ? (
                 <button type="button" tabIndex={0} onClick={() => copy(said.brief, "sent")}>
-                  Copy
+                  Copy brief
                 </button>
               ) : (
                 // What is pasted is what was read, unless the person asks for the other by
-                // name: the brief as sent holds characters this panel would not draw.
+                // name: the brief as sent holds characters this panel would not draw. As shown
+                // stands next to Close, so it is the first one Tab reaches from it.
                 <>
-                  <button
-                    type="button"
-                    tabIndex={0}
-                    title="The brief exactly as it was sent, with the characters this panel wrote out as codes."
-                    onClick={() => copy(said.brief, "sent")}
-                  >
-                    Copy as sent
-                  </button>
                   <button
                     type="button"
                     tabIndex={0}
@@ -371,13 +371,16 @@ export function BriefPanel({
                   >
                     Copy as shown
                   </button>
+                  <button
+                    type="button"
+                    tabIndex={0}
+                    title="The brief exactly as it was sent, with the characters this panel wrote out as codes."
+                    onClick={() => copy(said.brief, "sent")}
+                  >
+                    Copy as sent
+                  </button>
                 </>
               ))}
-            <Dialog.Close asChild>
-              <button type="button" tabIndex={0} ref={close}>
-                Close
-              </button>
-            </Dialog.Close>
           </AnswerBar>
         </Dialog.Content>
       </Dialog.Portal>
