@@ -50,12 +50,25 @@ pub const LAYOUT: &str = "layout.json";
 /// `docs/design-system.md` has given it since M6.
 pub const THEME: &str = "theme.json";
 
-/// The one version of the layout format charter writes and reads.
+/// The version of the layout format purlis writes: 2, where each project keeps its own
+/// arrangement and the left side its open view (#1673).
 ///
-/// Any other version is not in force: the window draws the default and says so. A layout is a
-/// preference, so there is nothing an old version could hold that is worth guessing at — and a
-/// newer charter's format read by an older one is exactly the case a version exists to catch.
-pub const LAYOUT_VERSION: u64 = 1;
+/// A newer purlis's format read by an older one is exactly the case a version exists to catch,
+/// so any version but [`LAYOUT_READS`] is not in force: the window draws the default and says
+/// so.
+pub const LAYOUT_VERSION: u64 = 2;
+
+/// The versions purlis reads: version 1 too, which the window moves forward field by field
+/// (`app/src/regions.ts`), so an upgrade keeps every arrangement a person saved.
+pub const LAYOUT_READS: &[u64] = &[1, 2];
+
+/// The layout's field for each project's own arrangement (#1673), by the project's path.
+pub const PROJECTS: &str = "projects";
+
+/// The most projects whose arrangements the file keeps. A project's is a few hundred bytes, so
+/// this many stays well inside the half of [`MAX_BYTES`] the dismissals leave; past it, the
+/// projects opened longest ago lose theirs first and are drawn from the machine's arrangement.
+pub const MOST_PROJECTS: usize = 32;
 
 /// The most either file may be.
 ///
@@ -251,10 +264,13 @@ fn layout_problem(document: &serde_json::Value) -> Option<String> {
                  \"version\": {LAYOUT_VERSION}"
             ));
         }
-        Some(found) if found.as_u64() == Some(LAYOUT_VERSION) => {}
+        Some(found)
+            if found
+                .as_u64()
+                .is_some_and(|one| LAYOUT_READS.contains(&one)) => {}
         Some(found) => {
             return Some(format!(
-                "is version {found}, and this purlis reads version {LAYOUT_VERSION}"
+                "is version {found}, and this purlis reads versions 1 and {LAYOUT_VERSION}"
             ));
         }
     }
@@ -308,11 +324,12 @@ pub fn write_layout(config_root: &Path, text: &str) -> io::Result<()> {
                 ));
             }
         };
+    let mut was = on_disk.and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok());
     // **The dismissals are the file's, never the window's** (NO-2): a window holds what it read
     // at its launch, and another window may have dismissed since. [`set_dismissed`] writes them.
-    let kept = on_disk
-        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
-        .and_then(|mut was| was.get_mut(DISMISSED).map(serde_json::Value::take));
+    let kept = was
+        .as_mut()
+        .and_then(|was| was.get_mut(DISMISSED).map(serde_json::Value::take));
     let object = document
         .as_object_mut()
         .expect("layout_problem refuses a document that is not an object");
@@ -320,7 +337,51 @@ pub fn write_layout(config_root: &Path, text: &str) -> io::Result<()> {
         Some(dismissed) => object.insert(DISMISSED.to_owned(), dismissed),
         None => object.remove(DISMISSED),
     };
+    keep_other_projects(
+        config_root,
+        object,
+        was.as_mut().and_then(|was| was.get_mut(PROJECTS)),
+    );
     write_document(config_root, &document)
+}
+
+/// **A window sends only the projects it arranged, and the file keeps everyone else's**
+/// (#1673): another window may have arranged its own project since this one launched, and the
+/// whole map written back by one would take that away. So the projects on disk that `object`
+/// does not name are kept, and the file is held to [`MOST_PROJECTS`]: the ones opened longest
+/// ago (the machine store's recents) are let go first, and never one the window just sent.
+fn keep_other_projects(
+    config_root: &Path,
+    object: &mut serde_json::Map<String, serde_json::Value>,
+    on_disk: Option<&mut serde_json::Value>,
+) {
+    let Some(serde_json::Value::Object(on_disk)) = on_disk.map(serde_json::Value::take) else {
+        return;
+    };
+    let sent = object
+        .entry(PROJECTS.to_owned())
+        .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+    let Some(sent) = sent.as_object_mut() else {
+        // Not a map: the window's to explain, and nothing of the file's is merged into it.
+        return;
+    };
+    let mut others: Vec<String> = Vec::new();
+    for (project, held) in on_disk {
+        if !sent.contains_key(&project) {
+            others.push(project.clone());
+            sent.insert(project, held);
+        }
+    }
+    if sent.len() <= MOST_PROJECTS {
+        return;
+    }
+    let store = crate::machine::read(config_root).store;
+    let opened = |one: &str| store.recent(Path::new(one)).map_or(0, |entry| entry.opened);
+    others.sort_by_key(|one| std::cmp::Reverse(opened(one)));
+    while sent.len() > MOST_PROJECTS {
+        let Some(oldest) = others.pop() else { break };
+        sent.remove(&oldest);
+    }
 }
 
 fn write_document(config_root: &Path, document: &serde_json::Value) -> io::Result<()> {
@@ -629,8 +690,103 @@ mod tests {
         let home = home();
         put(home.path(), LAYOUT, r#"{"regions":[]}"#);
         assert!(trouble(&read_layout(home.path())).contains("says no version"));
-        put(home.path(), LAYOUT, r#"{"version":2,"regions":[]}"#);
-        assert!(trouble(&read_layout(home.path())).contains("is version 2"));
+        put(home.path(), LAYOUT, r#"{"version":3,"regions":[]}"#);
+        assert!(trouble(&read_layout(home.path())).contains("is version 3"));
+    }
+
+    #[test]
+    fn a_layout_of_either_version_this_purlis_reads_is_handed_to_the_window() {
+        // Version 1 is what every purlis before #1673 wrote: the window moves it forward, so
+        // the core hands it over as it is rather than refusing an upgrade's own file.
+        let home = home();
+        for version in LAYOUT_READS {
+            put(
+                home.path(),
+                LAYOUT,
+                &format!(r#"{{"version":{version},"regions":[]}}"#),
+            );
+            let reading = read_layout(home.path());
+            assert_eq!(reading.trouble, None, "version {version}");
+            assert_eq!(reading.document.expect("in force")["version"], *version);
+        }
+    }
+
+    // ---------------------------------------------------------------- projects (#1673)
+
+    fn projects_in(home: &Path) -> serde_json::Value {
+        read_layout(home).document.expect("in force")[PROJECTS].clone()
+    }
+
+    #[test]
+    fn two_windows_arranging_different_projects_both_keep_theirs() {
+        // Each window sends only the projects it arranged; the file keeps the others'.
+        let home = home();
+        write_layout(
+            home.path(),
+            r#"{"version":2,"regions":[],"projects":{"/one":{"regions":[]}}}"#,
+        )
+        .unwrap();
+        write_layout(
+            home.path(),
+            r#"{"version":2,"regions":[],"projects":{"/two":{"regions":[]}}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            projects_in(home.path()),
+            serde_json::json!({ "/one": { "regions": [] }, "/two": { "regions": [] } })
+        );
+    }
+
+    #[test]
+    fn a_project_the_window_sends_replaces_what_the_file_held_for_it() {
+        let home = home();
+        let one = |view: &str| {
+            format!(
+                r#"{{"version":2,"regions":[],"projects":{{"/one":{{"regions":[{{"id":"navigation","view":"{view}"}}]}}}}}}"#
+            )
+        };
+        write_layout(home.path(), &one("chats")).unwrap();
+        write_layout(home.path(), &one("explorer")).unwrap();
+        assert_eq!(
+            projects_in(home.path())["/one"]["regions"][0]["view"],
+            "explorer"
+        );
+    }
+
+    #[test]
+    fn the_projects_kept_are_bounded_and_the_ones_just_sent_are_never_let_go() {
+        let home = home();
+        let many: serde_json::Map<String, serde_json::Value> = (0..MOST_PROJECTS)
+            .map(|at| (format!("/old/{at}"), serde_json::json!({ "regions": [] })))
+            .collect();
+        write_layout(
+            home.path(),
+            &serde_json::json!({ "version": 2, "regions": [], "projects": many }).to_string(),
+        )
+        .unwrap();
+        write_layout(
+            home.path(),
+            r#"{"version":2,"regions":[],"projects":{"/new":{"regions":[]}}}"#,
+        )
+        .unwrap();
+        let projects = projects_in(home.path());
+        let kept = projects.as_object().expect("a map");
+        assert_eq!(kept.len(), MOST_PROJECTS);
+        assert!(kept.contains_key("/new"));
+    }
+
+    #[test]
+    fn a_version_1_file_on_disk_takes_the_windows_version_2_write() {
+        let home = home();
+        put(home.path(), LAYOUT, A_LAYOUT);
+        write_layout(
+            home.path(),
+            r#"{"version":2,"regions":[{"id":"navigation","side":"right","order":0,"collapsed":false}]}"#,
+        )
+        .unwrap();
+        let document = read_layout(home.path()).document.expect("in force");
+        assert_eq!(document["version"], 2);
+        assert_eq!(document["regions"][0]["id"], "navigation");
     }
 
     #[test]

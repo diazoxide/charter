@@ -1693,8 +1693,12 @@ describe("a handoff is a session of its own (#1492, V100-69)", () => {
     const { tree } = await drawn(moved());
 
     expect(row(tree, "steward 1").querySelector(".line.two")).toBeNull();
-    expect(row(tree, "steward 1").getAttribute("title")).toBe("handed off to drop commons · alpha");
-    expect(row(tree, "drop commons").getAttribute("title")).toBe("alpha · from steward 1");
+    expect(row(tree, "steward 1").getAttribute("title")).toBe(
+      "handed off to drop commons · alpha\nruns on claude",
+    );
+    expect(row(tree, "drop commons").getAttribute("title")).toBe(
+      "alpha · from steward 1\nruns on claude",
+    );
   });
 });
 
@@ -1742,8 +1746,8 @@ describe("a chat the person asked for from a tab (#1492, V100-70)", () => {
     act(() => setChatsListPrefs({ lines: 1 }));
     const { tree } = await drawn(asked());
 
-    expect(row(tree, "talk").getAttribute("title")).toBe("asked by you");
-    expect(row(tree, "sweep").getAttribute("title")).toBeNull();
+    expect(row(tree, "talk").getAttribute("title")).toBe("asked by you\nruns on claude");
+    expect(row(tree, "sweep").getAttribute("title")).toBe("runs on claude");
   });
 });
 

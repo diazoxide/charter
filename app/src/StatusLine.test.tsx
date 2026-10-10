@@ -252,7 +252,7 @@ describe("the region toggles", () => {
     draw({
       regions: {
         placed: [
-          { id: "explorer", side: "left", order: 0, collapsed: false },
+          { id: "navigation", side: "left", order: 0, collapsed: false },
           { id: "aside", side: "right", order: 0, collapsed: true },
         ],
         onToggle,
@@ -262,7 +262,7 @@ describe("the region toggles", () => {
     const first = line.firstElementChild;
     expect(first?.className).toBe("regions-doing");
     const buttons = within(first as HTMLElement).getAllByRole("button");
-    expect(buttons.map((b) => b.getAttribute("aria-label"))).toEqual(["Explorer", "Attention"]);
+    expect(buttons.map((b) => b.getAttribute("aria-label"))).toEqual(["Navigation", "Attention"]);
   });
 });
 

@@ -540,7 +540,8 @@ describe("what a screen reader is told of the line (#1493)", () => {
     expect(row("devops 2")).toHaveAccessibleDescription("read 3 files");
 
     tell(2, null);
-    expect(row("devops 2")).not.toHaveAccessibleDescription();
+    // Nothing doing: what is left is the row's hover, what it runs on (#1673).
+    expect(row("devops 2")).toHaveAccessibleDescription("runs on claude");
   });
 });
 

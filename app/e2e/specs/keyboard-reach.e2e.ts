@@ -79,13 +79,14 @@ describe("the window's keyboard reach", () => {
         ["title bar", ".title-bar"],
         ["workspaces", '[data-strip="Workspaces"]'],
         ["chats", '[data-strip="Tabs"]'],
-        ["explorer", 'nav[aria-label="Explorer"]'],
+        // The left side's open view (#1673): its other view is hidden, and not a stop.
+        ["navigation", ".region-view:not([hidden])"],
         ["panes", ".panes"],
         ["attention", '[data-testid="panels"]'],
         ["status line", ".status-line"],
       ];
       const stops = [...document.querySelectorAll<HTMLElement>("[tabindex]")].filter(
-        (el) => el.tabIndex >= 0 && !el.hasAttribute("disabled"),
+        (el) => el.tabIndex >= 0 && !el.hasAttribute("disabled") && el.closest("[hidden]") === null,
       );
       // The regions in the order the TAB SEQUENCE first enters each one…
       const tabbed = stops

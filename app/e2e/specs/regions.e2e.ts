@@ -337,21 +337,27 @@ describe("the right-hand region", () => {
   });
 });
 
+/**
+ * A view of the left side that is drawn: put away, the side keeps its views mounted and hidden
+ * (#1673), so it is the shown one that comes and goes, not the explorer's element.
+ */
+const A_VIEW_SHOWN = '.region-views:not([hidden]) > [role="tabpanel"]:not([hidden])';
+
 describe("putting a region away", () => {
   it("takes it off the window and brings it back, and never takes the panes", async () => {
     await untilTheStripIsRead();
     await $('[data-testid="explorer"]').waitForExist({ timeout: 20_000 });
 
-    await (await $('button[aria-pressed="true"][aria-label="Explorer"]')).click();
-    await browser.waitUntil(async () => !(await $('[data-testid="explorer"]').isExisting()), {
+    await (await $('button[aria-pressed="true"][aria-label="Navigation"]')).click();
+    await browser.waitUntil(async () => !(await $(A_VIEW_SHOWN).isExisting()), {
       timeout: 20_000,
-      timeoutMsg: "the explorer did not go away when it was put away",
+      timeoutMsg: "the left side's views did not go away when it was put away",
     });
     // The centre cannot be put away: the terminal panes are the product.
     await expect(await $('[data-strip="Tabs"]')).toBeExisting();
 
-    await (await $('button[aria-pressed="false"][aria-label="Explorer"]')).click();
-    await $('[data-testid="explorer"]').waitForExist({ timeout: 20_000 });
+    await (await $('button[aria-pressed="false"][aria-label="Navigation"]')).click();
+    await $(A_VIEW_SHOWN).waitForExist({ timeout: 20_000 });
   });
 
   it("leaves the slot in the group, collapsed rather than removed", async () => {
@@ -362,18 +368,82 @@ describe("putting a region away", () => {
     await untilTheStripIsRead();
     await $('[data-testid="explorer"]').waitForExist({ timeout: 20_000 });
 
-    await (await $('button[aria-pressed="true"][aria-label="Explorer"]')).click();
-    await browser.waitUntil(async () => !(await $('[data-testid="explorer"]').isExisting()), {
+    await (await $('button[aria-pressed="true"][aria-label="Navigation"]')).click();
+    await browser.waitUntil(async () => !(await $(A_VIEW_SHOWN).isExisting()), {
       timeout: 20_000,
-      timeoutMsg: "the explorer did not go away when it was put away",
+      timeoutMsg: "the left side's views did not go away when it was put away",
     });
 
     const slot = await $('[data-panel][id="region-left"]');
     await expect(slot).toBeExisting();
     expect((await slot.getSize("width")) as number).toBe(0);
 
-    await (await $('button[aria-pressed="false"][aria-label="Explorer"]')).click();
-    await $('[data-testid="explorer"]').waitForExist({ timeout: 20_000 });
+    await (await $('button[aria-pressed="false"][aria-label="Navigation"]')).click();
+    await $(A_VIEW_SHOWN).waitForExist({ timeout: 20_000 });
+  });
+});
+
+/**
+ * **The left side's activity bar** (#1673, ADR 0038 as amended 2026-10-10), in the real window:
+ * the icons switch the side between its views, a press of the open one puts the side away and
+ * leaves the bar, and nothing the side draws ever lies over the terminals. What a press decides
+ * and what the keys do are `FourRegions.test.tsx`'s; only a window that lays out can say where
+ * things are. It leaves the side on Chats and out, as it found it.
+ */
+describe("the left side's activity bar", () => {
+  const BAR = '[role="tablist"][aria-label="Navigation"]';
+  const tab = (name: string) => $(`${BAR} [role="tab"][aria-label="${name}"]`);
+  const box = (selector: string) =>
+    browser.execute((where: string) => {
+      const found = document.querySelector(where)?.getBoundingClientRect();
+      return found ? { left: found.left, right: found.right, width: found.width } : null;
+    }, selector);
+
+  it("switches the side between Chats and Explorer, one view at a time", async () => {
+    await untilTheStripIsRead();
+    await (await tab("Chats")).waitForExist({ timeout: 20_000 });
+    await expect(await $('[data-testid="chats-section"]')).toBeDisplayed();
+    await expect(await $('nav[aria-label="Explorer"]')).not.toBeDisplayed();
+
+    await (await tab("Explorer")).click();
+    await $('nav[aria-label="Explorer"]').waitForDisplayed({ timeout: 20_000 });
+    await expect(await $('[data-testid="chats-section"]')).not.toBeDisplayed();
+    await expect(await tab("Explorer")).toHaveAttribute("aria-selected", "true");
+
+    await (await tab("Chats")).click();
+    await $('[data-testid="chats-section"]').waitForDisplayed({ timeout: 20_000 });
+  });
+
+  it("puts the side away on a press of the open view, keeps the bar, and brings it back", async () => {
+    await untilTheStripIsRead();
+    await $('[data-testid="chats-section"]').waitForDisplayed({ timeout: 20_000 });
+
+    await (await tab("Chats")).click();
+    const slot = await $('[data-panel][id="region-left"]');
+    await browser.waitUntil(async () => ((await slot.getSize("width")) as number) === 0, {
+      timeout: 20_000,
+      timeoutMsg: "the left slot did not go to nothing when its open view was pressed",
+    });
+    await expect(await $(BAR)).toBeDisplayed();
+    // Hidden, never unmounted: the list is still in the document.
+    await expect(await $('[data-testid="chats-section"]')).toBeExisting();
+
+    await (await tab("Chats")).click();
+    await $('[data-testid="chats-section"]').waitForDisplayed({ timeout: 20_000 });
+    expect((await slot.getSize("width")) as number).toBeGreaterThan(0);
+  });
+
+  it("stands at the window's edge, and nothing on the left lies over the terminals", async () => {
+    await untilTheStripIsRead();
+    await $('[data-testid="chats-section"]').waitForDisplayed({ timeout: 20_000 });
+
+    const bar = await box(".activity-bar[data-side='left']");
+    const slot = await box('[data-panel][id="region-left"]');
+    const centre = await box('[data-panel][id="region-centre"]');
+    expect(bar).not.toBeNull();
+    expect(bar?.left ?? -1).toBeLessThanOrEqual(1);
+    expect(bar?.right ?? Infinity).toBeLessThanOrEqual((slot?.left ?? 0) + 1);
+    expect(slot?.right ?? Infinity).toBeLessThanOrEqual((centre?.left ?? 0) + 1);
   });
 });
 
@@ -440,13 +510,13 @@ describe("the layout as data", () => {
     });
     const dragged = (await slot.getSize("width")) as number;
 
-    await (await $('button[aria-pressed="true"][aria-label="Explorer"]')).click();
-    await browser.waitUntil(async () => !(await $('[data-testid="explorer"]').isExisting()), {
+    await (await $('button[aria-pressed="true"][aria-label="Navigation"]')).click();
+    await browser.waitUntil(async () => !(await $(A_VIEW_SHOWN).isExisting()), {
       timeout: 20_000,
-      timeoutMsg: "the explorer did not go away when it was put away",
+      timeoutMsg: "the left side's views did not go away when it was put away",
     });
-    await (await $('button[aria-pressed="false"][aria-label="Explorer"]')).click();
-    await $('[data-testid="explorer"]').waitForExist({ timeout: 20_000 });
+    await (await $('button[aria-pressed="false"][aria-label="Navigation"]')).click();
+    await $(A_VIEW_SHOWN).waitForExist({ timeout: 20_000 });
 
     await browser.waitUntil(
       async () => Math.abs(((await slot.getSize("width")) as number) - dragged) <= 2,

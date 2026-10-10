@@ -13,7 +13,8 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
 import { forgetThisLaunch } from "./regions";
 import { GLOBAL } from "./windowprefs";
-import { findStripNamed, stripNamed } from "./test-strips";
+import { onAMac } from "./tabKeys";
+import { findStripNamed, showTheExplorer, stripNamed } from "./test-strips";
 
 /**
  * **The window is four regions** (ADR 0038), against the whole app, because three of
@@ -198,11 +199,9 @@ describe("the four regions", () => {
     core();
     render(<App />);
 
-    // **By role and not by label alone** (charter-app#193): the explorer's own `nav` and the
-    // status line's toggle for it are now two elements named `Explorer`, which is correct —
-    // one is the region, the other is the way to put it away, and a person looking for either
-    // is looking for that word. The region is the landmark, so that is what this asks for.
-    expect(await screen.findByRole("navigation", { name: "Explorer" })).toBeInTheDocument();
+    // The left side opens on its Chats view (#1673, B-2), with the Explorer one press away.
+    expect(await screen.findByRole("tabpanel", { name: "Chats" })).toBeInTheDocument();
+    expect(await showTheExplorer()).toBeInTheDocument();
     expect(await screen.findByTestId("panels")).toBeInTheDocument();
     expect(await screen.findByLabelText("Repository state")).toBeInTheDocument();
     expect(stripNamed("Tabs")).toBeInTheDocument();
@@ -239,6 +238,7 @@ describe("the four regions", () => {
     const { asked } = core();
     render(<App />);
     await screen.findByTestId("clone-svc");
+    await showTheExplorer();
 
     await userEvent.click(await screen.findByRole("treeitem", { name: /^two/ }));
     await openAChat();
@@ -252,6 +252,7 @@ describe("the four regions", () => {
     const { asked } = core();
     render(<App />);
     const clone = await screen.findByTestId("clone-svc");
+    await showTheExplorer();
     const heading = within(clone).getByRole("treeitem", { name: /^svc/ });
 
     fireEvent.contextMenu(heading);
@@ -302,6 +303,7 @@ describe("the four regions", () => {
   it("cuts a new branch from a repo's menu, and new chats start on it (GL-1)", async () => {
     const { asked } = core();
     render(<App />);
+    await showTheExplorer();
     const heading = within(await screen.findByTestId("clone-svc")).getByRole("treeitem", {
       name: /^svc/,
     });
@@ -371,6 +373,7 @@ describe("the four regions", () => {
     const { asked } = core();
     render(<App />);
     await screen.findByTestId("clone-svc");
+    await showTheExplorer();
     await userEvent.click(await screen.findByRole("treeitem", { name: /^two/ }));
 
     await focus("beta");
@@ -385,6 +388,7 @@ describe("the four regions", () => {
     const { asked } = core();
     render(<App />);
     await screen.findByTestId("clone-svc");
+    await showTheExplorer();
     await userEvent.click(await screen.findByRole("treeitem", { name: /^two/ }));
 
     await focus("beta");
@@ -402,6 +406,7 @@ describe("the four regions", () => {
 
     render(<App />);
     await screen.findByTestId("clone-svc");
+    await showTheExplorer();
     await userEvent.click(await screen.findByRole("treeitem", { name: /^two/ }));
 
     cut = [piece("one")];
@@ -425,15 +430,18 @@ describe("the four regions", () => {
   it("puts a region away and brings it back", async () => {
     core();
     render(<App />);
-    await screen.findByRole("navigation", { name: "Explorer" });
+    await screen.findByRole("tabpanel", { name: "Chats" });
+    const chats = screen.getByTestId("chats-section");
 
-    await userEvent.click(screen.getByRole("button", { name: "Explorer", pressed: true }));
-    expect(screen.queryByTestId("explorer")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Navigation", pressed: true }));
+    expect(screen.queryByRole("tabpanel", { name: "Chats" })).not.toBeInTheDocument();
     // The centre is still there: a window with no panes is not a state a button can reach.
     expect(stripNamed("Tabs")).toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole("button", { name: "Explorer", pressed: false }));
-    expect(await screen.findByTestId("explorer")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Navigation", pressed: false }));
+    expect(await screen.findByRole("tabpanel", { name: "Chats" })).toBeInTheDocument();
+    // Hidden while it was away, never unmounted (#1673): the same list came back.
+    expect(screen.getByTestId("chats-section")).toBe(chats);
   });
 
   it("can put the bottom bar and the right-hand side away too", async () => {
@@ -461,14 +469,14 @@ describe("the four regions", () => {
     // the whole risk in that instruction, and it is what this line asserts.
     core();
     render(<App />);
-    await screen.findByRole("navigation", { name: "Explorer" });
+    await screen.findByRole("tabpanel", { name: "Chats" });
 
     expect(
       within(screen.getByTestId("status-line"))
         .getAllByRole("button")
         .filter((one) => one.getAttribute("aria-pressed") !== null)
         .map((one) => one.getAttribute("aria-label")),
-    ).toEqual(["Explorer", "Attention", "State"]);
+    ).toEqual(["Navigation", "Attention", "State"]);
     expect(document.querySelector("header.bar .regions-doing")).toBeNull();
   });
 
@@ -478,6 +486,7 @@ describe("the four regions", () => {
     render(<App />);
     await screen.findByTestId("clone-svc");
     await openAChat();
+    await showTheExplorer();
 
     await userEvent.click(await screen.findByRole("treeitem", { name: /^one/ }));
     await focus("beta");
@@ -485,6 +494,113 @@ describe("the four regions", () => {
 
     expect(asked.filter((one) => one.cmd === "close_session")).toEqual([]);
     expect(screen.getAllByTestId("pane")).toHaveLength(1);
+  });
+});
+
+/**
+ * **The left side's activity bar, in the window** (#1673, ADR 0038 as amended 2026-10-10): what
+ * a person presses and sees. The bar's own rules are `RegionFrame.test.tsx`'s; the press's are
+ * `regions.test.ts`'s.
+ */
+describe("the left side's activity bar", () => {
+  const bar = () => screen.getByRole("tablist", { name: "Navigation" });
+  const tab = (name: string) => within(bar()).getByRole("tab", { name });
+  /** The chord with the platform's command key: ⌘ on a Mac, Ctrl elsewhere. */
+  const chord = (key: string, shift = false) =>
+    fireEvent.keyDown(document.body, {
+      key,
+      shiftKey: shift,
+      ...(onAMac() ? { metaKey: true } : { ctrlKey: true }),
+    });
+
+  it("switches the side between Chats and Explorer, one at a time", async () => {
+    core();
+    render(<App />);
+    await screen.findByRole("tabpanel", { name: "Chats" });
+    expect(tab("Chats")).toHaveAttribute("aria-selected", "true");
+    expect(screen.queryByRole("navigation", { name: "Explorer" })).toBeNull();
+
+    await userEvent.click(tab("Explorer"));
+
+    expect(await screen.findByRole("navigation", { name: "Explorer" })).toBeInTheDocument();
+    expect(screen.queryByRole("tabpanel", { name: "Chats" })).toBeNull();
+    expect(tab("Explorer")).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("puts the side away on a press of the open view, keeps the bar, and brings it back", async () => {
+    core();
+    render(<App />);
+    await screen.findByRole("tabpanel", { name: "Chats" });
+    const chats = screen.getByTestId("chats-section");
+
+    await userEvent.click(tab("Chats"));
+
+    expect(screen.queryByRole("tabpanel")).toBeNull();
+    expect(bar()).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Navigation", pressed: false })).toBeInTheDocument();
+
+    await userEvent.click(tab("Chats"));
+
+    expect(await screen.findByRole("tabpanel", { name: "Chats" })).toBeInTheDocument();
+    expect(screen.getByTestId("chats-section")).toBe(chats);
+  });
+
+  it("counts the chats that need you on the Chats tab, while the side is away too", async () => {
+    core([7]);
+    render(<App />);
+    await screen.findByRole("button", { name: "1 chat needs you" });
+    await waitFor(() => expect(tab("Chats")).toHaveAccessibleDescription("1 chat needs you"));
+    expect(tab("Chats").querySelector('.activity-count[data-tone="needs-you"]')).toHaveTextContent(
+      "1",
+    );
+
+    await userEvent.click(tab("Chats"));
+
+    expect(screen.queryByRole("tabpanel")).toBeNull();
+    expect(tab("Chats")).toHaveAccessibleDescription("1 chat needs you");
+  });
+
+  it("draws no count when nothing needs you", async () => {
+    core();
+    render(<App />);
+    await screen.findByRole("tabpanel", { name: "Chats" });
+
+    expect(tab("Chats").querySelector(".activity-count")).toBeNull();
+  });
+
+  it("answers its keys: the side away and back, then Explorer and Chats shown", async () => {
+    core();
+    render(<App />);
+    await screen.findByRole("tabpanel", { name: "Chats" });
+
+    chord("b");
+    await waitFor(() => expect(screen.queryByRole("tabpanel")).toBeNull());
+    chord("b");
+    expect(await screen.findByRole("tabpanel", { name: "Chats" })).toBeInTheDocument();
+
+    chord("E", true);
+    expect(await screen.findByRole("navigation", { name: "Explorer" })).toBeInTheDocument();
+    // The key gives the view the keyboard, as an editor's does.
+    await waitFor(() =>
+      expect(document.activeElement?.closest('[role="tabpanel"]')).toHaveAccessibleName("Explorer"),
+    );
+
+    chord("C", true);
+    expect(await screen.findByRole("tabpanel", { name: "Chats" })).toBeInTheDocument();
+  });
+
+  it("comes back as it was left when the project is opened again", async () => {
+    core();
+    const { unmount } = render(<App />);
+    await screen.findByRole("tabpanel", { name: "Chats" });
+    await userEvent.click(tab("Explorer"));
+    await screen.findByRole("navigation", { name: "Explorer" });
+    unmount();
+
+    core();
+    render(<App />);
+
+    expect(await screen.findByRole("navigation", { name: "Explorer" })).toBeInTheDocument();
   });
 });
 
@@ -555,27 +671,34 @@ describe("the window the stored arrangement asks for", () => {
     render(<App />);
     await screen.findByTestId("panels");
 
-    expect(screen.queryByTestId("explorer")).not.toBeInTheDocument();
+    // Its views are hidden, and still mounted (#1673): collapsing never unmounts a view.
+    expect(screen.queryByRole("navigation", { name: "Explorer" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("tabpanel")).not.toBeInTheDocument();
+    expect(screen.getByTestId("explorer")).toBeInTheDocument();
     expect(screen.getByTestId("region-left")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Explorer", pressed: false })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Navigation", pressed: false })).toBeInTheDocument();
   });
 
   it("writes what the operator did back where the next launch will read it", async () => {
     const { asked } = core();
     render(<App />);
-    await screen.findByRole("navigation", { name: "Explorer" });
+    await screen.findByRole("tabpanel", { name: "Chats" });
 
-    await userEvent.click(screen.getByRole("button", { name: "Explorer", pressed: true }));
+    await userEvent.click(screen.getByRole("button", { name: "Navigation", pressed: true }));
 
     await vi.waitFor(() => expect(asked.some((one) => one.cmd === "write_layout")).toBe(true));
     const written = asked.filter((one) => one.cmd === "write_layout").at(-1);
+    const arrangement = [
+      { id: "navigation", side: "left", order: 0, collapsed: true },
+      { id: "aside", side: "right", order: 0, collapsed: false },
+      { id: "bottom", side: "bottom", order: 0, collapsed: false },
+    ];
     expect(JSON.parse(String(written?.args.text))).toEqual({
-      version: 1,
-      regions: [
-        { id: "explorer", side: "left", order: 0, collapsed: true },
-        { id: "aside", side: "right", order: 0, collapsed: false },
-        { id: "bottom", side: "bottom", order: 0, collapsed: false },
-      ],
+      version: 2,
+      // The machine's, which a project with none of its own starts from, and the project's own
+      // (#1673).
+      regions: arrangement,
+      projects: { [PLANE]: { regions: arrangement } },
       // The machine's text sizes share the file (charter-app#283), written as they stand.
       text: { window: 14, terminal: 13 },
     });
@@ -655,7 +778,7 @@ describe("the status line", () => {
     render(<App />);
     await screen.findByLabelText("Repository state");
 
-    for (const name of ["Explorer", "Attention", "State"]) {
+    for (const name of ["Navigation", "Attention", "State"]) {
       await userEvent.click(screen.getByRole("button", { name, pressed: true }));
     }
 

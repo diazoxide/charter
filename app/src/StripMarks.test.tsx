@@ -150,7 +150,7 @@ describe("a pinned mark", () => {
 
 describe("a region toggle", () => {
   it.each([
-    ["explorer", "Explorer", "lucide-folder-tree"],
+    ["navigation", "Navigation", "lucide-compass"],
     ["aside", "Attention", "lucide-bell-ring"],
     ["bottom", "State", "lucide-activity"],
   ] as const)("%s is named %s exactly, and marked by what it is", (id, name, mark) => {
@@ -159,7 +159,7 @@ describe("a region toggle", () => {
     // **The name survived losing the words** (charter-app#193). These are icon-only on the
     // status line now — *"just small icons without texts, texts only with tooltips"* — and
     // the whole risk in that sentence is the name going with the text. `regions.e2e.ts`
-    // presses `button[aria-label="Explorer"]` and a screen reader reads the same string, so
+    // presses `button[aria-label="Navigation"]` and a screen reader reads the same string, so
     // this asks for the button BY the name and then holds that there is no text under it.
     const button = screen.getByRole("button", { name });
     expect(button.getAttribute("aria-label")).toBe(name);
@@ -170,16 +170,16 @@ describe("a region toggle", () => {
   it("says what pressing it does in the tooltip, which the name cannot", () => {
     // The name has to be the name of the thing, because that is what a person looks for. What
     // the press DOES is the `title`, and with the words gone it is the only prose left.
-    const { rerender } = render(<RegionToggle id="explorer" shown onToggle={() => {}} />);
-    expect(screen.getByRole("button", { name: "Explorer" })).toHaveAttribute(
+    const { rerender } = render(<RegionToggle id="navigation" shown onToggle={() => {}} />);
+    expect(screen.getByRole("button", { name: "Navigation" })).toHaveAttribute(
       "title",
-      "Put the Explorer region away",
+      "Put the Navigation region away",
     );
 
-    rerender(<RegionToggle id="explorer" shown={false} onToggle={() => {}} />);
-    expect(screen.getByRole("button", { name: "Explorer" })).toHaveAttribute(
+    rerender(<RegionToggle id="navigation" shown={false} onToggle={() => {}} />);
+    expect(screen.getByRole("button", { name: "Navigation" })).toHaveAttribute(
       "title",
-      "Bring the Explorer region back",
+      "Bring the Navigation region back",
     );
   });
 });

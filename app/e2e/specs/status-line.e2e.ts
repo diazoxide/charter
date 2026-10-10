@@ -322,11 +322,11 @@ describe("the status line", () => {
       };
     });
 
-    expect(found.named).toEqual(["Explorer", "Attention", "State"]);
+    expect(found.named).toEqual(["Navigation", "Attention", "State"]);
     expect(found.worded).toEqual([]);
     expect(found.marked).toBe(3);
     expect(found.told).toEqual([
-      "Put the Explorer region away",
+      "Put the Navigation region away",
       "Put the Attention region away",
       "Put the State region away",
     ]);
@@ -339,7 +339,7 @@ describe("the status line", () => {
     await untilTheStripIsRead();
     await $('[data-testid="explorer"]').waitForExist({ timeout: 20_000 });
 
-    const names = ["Explorer", "Attention", "State"];
+    const names = ["Navigation", "Attention", "State"];
     for (const name of names)
       await (await $(`button[aria-pressed="true"][aria-label="${name}"]`)).click();
     await browser.waitUntil(async () => !(await $('[data-testid="bottom-bar"]').isExisting()), {

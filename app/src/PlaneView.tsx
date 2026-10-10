@@ -180,8 +180,10 @@ import { TaskBlocksAnswered, TaskBlocksNotice } from "./TaskBlocksNotice";
 import { TaskPromptNotice } from "./TaskPromptNotice";
 import { usePermissionAsks } from "./permissionAsks";
 import { useDismissals } from "./dismissals";
-import { inSlots, SIDES, useArrangement } from "./regions";
+import { inSlots, SIDES, useArrangement, type RegionId, type ViewId } from "./regions";
+import { SIDE_KEYS_SAID, sideKeyOf } from "./sideKeys";
 import { RegionFrame } from "./RegionFrame";
+import { ActivityCount } from "./ActivityBar";
 import { DoctorNotices, useDoctor } from "./Doctor";
 import { ChatGauge, useChatUsage } from "./ChatGauge";
 import { usePin } from "./Updates";
@@ -975,9 +977,37 @@ export const PlaneView = memo(function PlaneView({
   const [shownRow, setShownRow] = useState<string>();
   /** How the window is laid out — which regions are drawn, on which side, in what order and
    *  how big (ADR 0038). Data rather than the shape of the JSX below; `regions.ts` says why. */
-  const { arrangement, toggle: toggleRegion, resized } = useArrangement();
+  const {
+    arrangement,
+    toggle: toggleRegion,
+    resized,
+    pick,
+    show: showSide,
+  } = useArrangement(plane);
+  /** A view shown by its key or its palette row, and the keyboard given to it once it is drawn:
+   *  the stop of its tree, as an editor's ⌘⇧E lands in the explorer (#1673). */
+  const showSideView = useCallback(
+    (view: ViewId) => {
+      showSide(view);
+      requestAnimationFrame(() =>
+        document
+          .querySelector<HTMLElement>(`[role="tabpanel"][data-view="${view}"] [tabindex="0"]`)
+          ?.focus(),
+      );
+    },
+    [showSide],
+  );
   /** The arrangement as the slots it draws, which is what both the toggles and the frame read. */
   const slots = inSlots(arrangement);
+  /** The regions put away, for the palette's row that brings one back. */
+  const awayNames = arrangement
+    .filter((one) => one.collapsed)
+    .map((one) => one.id)
+    .join(" ");
+  const away = useMemo(
+    () => (awayNames === "" ? [] : (awayNames.split(" ") as RegionId[])),
+    [awayNames],
+  );
 
   // The arrangement as it is right now, so that what a button does is decided here and not
   // inside a state update. React may run an update again, and a session must not be opened or
@@ -5230,6 +5260,8 @@ export const PlaneView = memo(function PlaneView({
       openProject: windowDoes.openProject,
       createProject: windowDoes.createProject,
       showExtensions: windowDoes.showExtensions,
+      showSideView,
+      toggleRegion,
       installCli: windowDoes.installCli,
       selectProject: windowDoes.selectProject,
       switchProject: windowDoes.switchProject,
@@ -5257,6 +5289,8 @@ export const PlaneView = memo(function PlaneView({
     }),
     [
       beginRename,
+      showSideView,
+      toggleRegion,
       restartTab,
       restartListed,
       linkWorkItem,
@@ -5823,18 +5857,6 @@ export const PlaneView = memo(function PlaneView({
     const last = recalled.get(`${id}:${lead}:${task}`);
     return last?.path[last.path.length - 1].name;
   };
-  /** The explorer's lines ask the Chats list for chats' own rows (#1490): the one line for a
-   *  session's tasks for the session's, and a line for the tasks working at a place for each
-   *  of theirs. The list opens them and puts the keyboard on the first (`revealTask.ts`). */
-  const revealChats = useCallback(
-    (sessions: readonly number[]) =>
-      setRevealed((was) =>
-        sessions.length === 0
-          ? was
-          : { asker: sessions[0], also: sessions.slice(1), at: (was?.at ?? 0) + 1 },
-      ),
-    [],
-  );
   /**
    * **Whether tab `id` is a task's own** (#1489), and then the name of the chat that asked for
    * it, where that chat is still listed: what the tab says after its own name. Nothing for a
@@ -6041,9 +6063,11 @@ export const PlaneView = memo(function PlaneView({
             branch: nearBranch,
             harnesses: harnessCards,
             memoryStores,
+            away,
           }),
     [
       askedBy,
+      away,
       clones,
       cloningNow,
       absentHere,
@@ -6496,6 +6520,31 @@ export const PlaneView = memo(function PlaneView({
     window.addEventListener("keydown", key, true);
     return () => window.removeEventListener("keydown", key, true);
   }, [inFront, nearBranch, ofWorkspace, showView]);
+
+  /**
+   * **The keys of the left side** (`sideKeys.ts`, #1673): ⌘B puts the navigation region away
+   * or brings it back, ⌘⇧E and ⌘⇧C show Explorer and Chats and give the view the keyboard, as
+   * an editor does. Claimed on the window, capture-phase, by the project in front, as the
+   * shell's key is; not under a dialog; and off a Mac a chord a terminal has a use for is left
+   * to a chat that has the keyboard.
+   */
+  useEffect(() => {
+    if (!inFront) return;
+    const key = (e: KeyboardEvent) => {
+      const which = sideKeyOf(e, onAMac());
+      if (which === undefined || inADialog()) return;
+      const on = e.target;
+      if (which.chatKeeps && on instanceof Element && on.closest(`[${CHAT_KEYBOARD}]`) !== null)
+        return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.repeat) return;
+      if ("toggle" in which) toggleRegion(which.toggle);
+      else showSideView(which.show);
+    };
+    window.addEventListener("keydown", key, true);
+    return () => window.removeEventListener("keydown", key, true);
+  }, [inFront, showSideView, toggleRegion]);
 
   /**
    * A pane's own button: that pane becomes the focused one, and then the row runs.
@@ -7583,66 +7632,80 @@ export const PlaneView = memo(function PlaneView({
       <RegionFrame
         arrangement={arrangement}
         onResized={resized}
-        content={{
-          explorer: (
-            /* The left region is navigation (ADR 0038): the project's chats above, and the
-               focused workspace's repos and branches under them. */
-            <div className="left-region">
-              <WaitingTaskWaysContext.Provider value={waitingTaskWays}>
-                <ChatsSection
-                  rows={listRows}
-                  // The trees that started in the focused workspace, or at the root (#1655).
-                  here={focused === OUTSIDE ? ROOT_WORD : focused}
-                  // The chat that has the keyboard: a task, while its pane shows it (#1486).
-                  front={focusedChat(tabs)}
-                  onOpen={showChat}
-                  offers={found}
-                  onPress={press}
-                  stopping={stopping}
-                  finished={finishedTasks}
-                  onClearFinished={clearFinished}
-                  onReopen={reopenFinished}
-                  clock={chatClock}
-                  onDrawn={rowsDrawn}
-                  reveal={revealed}
-                  onRevealed={revealedSettled}
-                  onLookFinished={lookedAtFinished}
-                  restarts={restartsOnRows}
-                  ending={taskEndInline}
-                  onEndTask={endTaskOnRow}
-                  onEndConfirm={answerTaskEndOnRow}
-                  onChanges={(task) =>
-                    showView(taskChangesView(task.id), taskChangesTitle(task.name))
-                  }
-                />
-              </WaitingTaskWaysContext.Provider>
-              <Explorer
-                plane={plane}
-                workspace={ofWorkspace}
-                live={ofWorkspace !== undefined && liveOf(ofWorkspace)}
-                state={workspaceState}
-                chats={workspaceChats}
-                spot={spot}
-                onPick={pickSpot}
-                onShowChat={showChat}
-                wrapping={wrapping}
+        /* **The navigation region's views** (ADR 0038 as amended 2026-10-10, #1673): Chats and
+           Explorer, one at a time, switched by the activity bar at the side's edge. Both stay
+           mounted when the other is open or the side is away, so neither loses its folds. */
+        views={{
+          chats: (
+            <WaitingTaskWaysContext.Provider value={waitingTaskWays}>
+              <ChatsSection
+                rows={listRows}
+                // The trees that started in the focused workspace, or at the root (#1655).
+                here={focused === OUTSIDE ? ROOT_WORD : focused}
+                // The chat that has the keyboard: a task, while its pane shows it (#1486).
+                front={focusedChat(tabs)}
+                onOpen={showChat}
                 offers={found}
                 onPress={press}
-                onOpenFile={(place, path) =>
-                  showView(pieceFileView(place, path), pieceFileTitle(place, path))
-                }
-                focus={cockpit}
-                onFocus={setFocusedBranch}
-                cloning={cloning}
-                onReadAgain={rereadPanels}
-                listed={listedChats}
+                stopping={stopping}
                 finished={finishedTasks}
-                below={tasksBelow}
-                onRevealChats={revealChats}
-                nameOf={nameOfListed}
+                onClearFinished={clearFinished}
+                onReopen={reopenFinished}
+                clock={chatClock}
+                onDrawn={rowsDrawn}
+                reveal={revealed}
+                onRevealed={revealedSettled}
+                onLookFinished={lookedAtFinished}
+                restarts={restartsOnRows}
+                ending={taskEndInline}
+                onEndTask={endTaskOnRow}
+                onEndConfirm={answerTaskEndOnRow}
+                onChanges={(task) =>
+                  showView(taskChangesView(task.id), taskChangesTitle(task.name))
+                }
               />
-            </div>
+            </WaitingTaskWaysContext.Provider>
           ),
+          explorer: (
+            <Explorer
+              plane={plane}
+              workspace={ofWorkspace}
+              live={ofWorkspace !== undefined && liveOf(ofWorkspace)}
+              state={workspaceState}
+              chats={workspaceChats}
+              spot={spot}
+              onPick={pickSpot}
+              offers={found}
+              onPress={press}
+              onOpenFile={(place, path) =>
+                showView(pieceFileView(place, path), pieceFileTitle(place, path))
+              }
+              focus={cockpit}
+              onFocus={setFocusedBranch}
+              cloning={cloning}
+              onReadAgain={rereadPanels}
+            />
+          ),
+        }}
+        // The Chats tab's count is the queue's, drawn where the queue is read (#1034): a chat
+        // that starts asking redraws the badge and nothing around it. It is on the bar, so it
+        // is there while the side is put away (B-8).
+        badges={{
+          chats: (
+            <QueueRead>
+              {(queue) => (
+                <ActivityCount
+                  count={queue.length}
+                  said={queue.length === 1 ? "1 chat needs you" : `${queue.length} chats need you`}
+                  tone="needs-you"
+                />
+              )}
+            </QueueRead>
+          ),
+        }}
+        keys={SIDE_KEYS_SAID}
+        onPick={pick}
+        content={{
           aside: (
             <Panels
               workspace={ofWorkspace}

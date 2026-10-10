@@ -1327,6 +1327,9 @@ function App() {
       openProject: windowDoes.openProject,
       createProject: windowDoes.createProject,
       showExtensions: windowDoes.showExtensions,
+      // A side's views are a project's: with none open there is no side to show (#1673).
+      showSideView: () => undefined,
+      toggleRegion: () => undefined,
       installCli: windowDoes.installCli,
       selectProject: windowDoes.selectProject,
       switchProject: windowDoes.switchProject,

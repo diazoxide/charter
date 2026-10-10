@@ -104,7 +104,6 @@ function draw(focus?: Place) {
         chats={[WORKING, ELSEWHERE]}
         spot={undefined}
         onPick={() => {}}
-        onShowChat={() => {}}
         offers={new Map()}
         onPress={() => {}}
         onReadAgain={() => {}}

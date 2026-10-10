@@ -883,20 +883,45 @@ component library gets added on.
   texts, texts only with tooltips"_. Three things about that are decisions:
   - **The name did not go with the words.** `aria-label` carries it, which is the one condition
     `docs/design-system.md` puts on an icon with no text beside it — and not a formality here:
-    `pressOnly("Explorer")` is how the palette and the specs reach a control, and a screen
+    `pressOnly("Navigation")` is how the palette and the specs reach a control, and a screen
     reader reads the same string. An icon-only button whose accessible name is an icon is a
     button nobody can find, by either route.
-  - **The `title` says what pressing does, not what the thing is.** _"Put the Explorer region
+  - **The `title` says what pressing does, not what the thing is.** _"Put the Navigation region
     away"_ is where prose belongs once there is no visible text; a tooltip repeating the label
     is a tooltip nobody reads twice.
   - **The status line hosts every region's way back and has none of its own**, which is not a
     contradiction of `StatusLine.tsx`'s argument for not being a region but the sharpest form
     of it: it is the frame. `FourRegions.test.tsx`'s _"cannot be put away, because it is not a
     region"_ is the guard, and it presses all three toggles to get there.
-  - **A scenario reaches them by `[aria-label="Explorer"]` and no longer by `=Explorer`.**
+  - **A scenario reaches them by `[aria-label="Navigation"]` and no longer by `=Navigation`.**
     WebdriverIO's `=` is a whole-text match, and there is no text. `regions.e2e.ts`,
     `pane-fill.e2e.ts` and `status-line.e2e.ts` all moved; `StripMarks.test.tsx` is what holds
-    the name they match against.
+    the name they match against. The left region was named _Explorer_ until #1673, when the
+    explorer became one of its views: it is _Navigation_, ADR 0038's own word for the left.
+- **A side with views has an activity bar** (ADR 0038 as amended 2026-10-10, #1673;
+  `app/src/ActivityBar.tsx`). It is VS Code's strip of icons at the window's edge, and it is
+  built from what this file already allows:
+  - **A vertical tab list on the strips' own roving focus**: `role="tablist"` with
+    `aria-orientation="vertical"`, a `button role="tab"` per view, `aria-selected` on the open
+    one, `aria-controls` naming its `tabpanel`, and one Tab stop through `useTabStop`. The
+    arrows, Home and End move along it; Enter, Space or a click presses. Activation is manual,
+    so walking the bar opens nothing. **The tab list owns tabs and nothing else** (#1204): a
+    view's badge is inside its own tab, and the tab is described by it.
+  - **`aria-selected` is right here, as it is not in the explorer**: the bar is a tab list,
+    and its tabs select what the side shows. The explorer keeps `aria-current`.
+  - **Icon-only, with the words on `aria-label` and the press in the `title`**, as the region
+    toggles are: the tab is named for the view (`Chats`, `Explorer`) and its tooltip says what
+    pressing does, with the key (_"Show the Explorer view (⌘⇧E)"_, or _"Put the Navigation
+    region away"_ on the open one). Its mark is what the view is, never which edge it is on.
+  - **A press of the open view puts the side away**; any other opens. The bar is outside the
+    resizable group, so a side put away keeps its bar and its badges, and nothing is added to
+    or taken from the group (the throw above).
+  - **Putting a side away hides its views; it never unmounts them.** Each view is a `tabpanel`
+    kept mounted with `hidden` when it is not open, which takes it out of the tab sequence and
+    the accessibility tree as unmounting did, and keeps its folds, scroll and filter. A region
+    without views is still unmounted when it is put away.
+  - **A badge is a count drawn only when it is not zero**, in the needs-you colours for the
+    chats that need you (`ActivityCount`).
 
 ## The title bar added no primitive either, and inherited a rule from Tauri
 
@@ -1056,6 +1081,16 @@ step through the hits, so it walks nothing the way it does in a chat's find bar.
 it with Shift+F10 or the menu key. The row's menu has closed by the time it runs, so the same
 chat picker (`ChatsToPick`) is drawn in a dialog (`AddToAChat.tsx`), the keyboard on its first
 chat, and Escape or Cancel closes it with nothing typed.
+
+**The left side's keys are an editor's** (#1673, `sideKeys.sideKeyOf`): `⌘B` puts the
+navigation region away or brings it back, `⌘⇧E` shows Explorer and `⌘⇧C` shows Chats, each
+giving the view the keyboard; off a Mac they are `Ctrl+B`, `Ctrl+Shift+E` and `Ctrl+Shift+C`.
+xterm.js 6.0.0 sends nothing for a `⌘` chord, so on a Mac none was a byte. Off a Mac `Ctrl+B` is
+one (readline's back-char, tmux's prefix) and `Ctrl+Shift+C` is a Linux terminal's copy, so while
+a chat has the keyboard both stay the chat's, as Search's key stays the find bar's;
+`Ctrl+Shift+E` is no byte and is the window's everywhere. They are a capture listener on the
+window, held by the project in front, and never under a dialog. Every view is also a palette
+row (_Show the Chats view_, _Show the Explorer view_), with the key said on the row.
 
 **The keys for the chats inside a tab take nothing either** (#1487, `taskKeys.taskKeyOf`).
 

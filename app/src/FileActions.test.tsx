@@ -13,7 +13,7 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
 import { forgetThisLaunch } from "./regions";
 import { forgetYourEditor, setYourEditor } from "./yourEditor";
-import { stripNamed } from "./test-strips";
+import { showTheExplorer, stripNamed } from "./test-strips";
 import { SETTINGS_LINK, type SettingsLinkAsk } from "./settings/links";
 
 /**
@@ -134,6 +134,7 @@ const asks = (asked: Asked[], cmd: string) =>
 
 /** Opens the branch's files, then the menu on `name`'s row, and presses `row` in it. */
 async function fromTheMenu(name: string, row: string | RegExp) {
+  await showTheExplorer();
   const tree = await screen.findByRole("tree", { name: "Repos and branches" });
   const files = await waitFor(() => {
     const found = tree.querySelector<HTMLElement>('[data-row="file:svc/one:"]');

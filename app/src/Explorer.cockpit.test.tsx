@@ -118,12 +118,10 @@ function draw({
   offers = new Map(),
   onPress = () => {},
   onFocus = () => {},
-  onShowChat = () => {},
 }: {
   offers?: Catalogued;
   onPress?: (offer: Offer) => void;
   onFocus?: (focus: Place | undefined) => void;
-  onShowChat?: (session: number) => void;
 } = {}) {
   render(
     <ChatsHere.Provider value={fixedChats(nothingKnown)}>
@@ -134,7 +132,6 @@ function draw({
         chats={[WORKING, ELSEWHERE]}
         spot={undefined}
         onPick={() => {}}
-        onShowChat={onShowChat}
         offers={offers}
         onPress={onPress}
         onReadAgain={() => {}}
@@ -149,7 +146,7 @@ function draw({
 const header = () => screen.getByRole("region", { name: "Branch fix/one" });
 
 describe("the branch cockpit", () => {
-  it("narrows the explorer to the branch: its state, its chats, then its files", async () => {
+  it("narrows the explorer to the branch: its state, then its files, and no chat (#1673)", async () => {
     core({ ahead: 2, behind: 1, base: "main" });
     draw();
 
@@ -158,13 +155,12 @@ describe("the branch cockpit", () => {
     await within(header()).findByText("2 ahead, 1 behind main");
     await within(header()).findByText("2 changes");
 
-    const tree = screen.getByRole("tree", { name: "Chats and files of fix/one" });
+    const tree = screen.getByRole("tree", { name: "Files of fix/one" });
     const rows = within(tree).getAllByRole("treeitem");
-    // Only the chat working in the branch, then its files, open with nothing clicked.
-    expect(rows[0].textContent).toContain("steward 3");
-    expect(rows.some((row) => row.textContent?.includes("steward 4"))).toBe(false);
-    expect(rows[1].textContent).toContain("Files");
-    expect(rows[1].getAttribute("aria-expanded")).toBe("true");
+    // Its files, open with nothing clicked. The chat working in it is the Chats view's.
+    expect(rows.some((row) => row.textContent?.includes("steward"))).toBe(false);
+    expect(rows[0].textContent).toContain("Files");
+    expect(rows[0].getAttribute("aria-expanded")).toBe("true");
     await within(tree).findByRole("treeitem", { name: /README\.md/ });
   });
 
@@ -218,16 +214,6 @@ describe("the branch cockpit", () => {
     expect(doneButton.getAttribute("title")).toContain("no project");
   });
 
-  it("brings a chat of the branch forward", async () => {
-    core({ ahead: 0, behind: 0, base: "main" });
-    const onShowChat = vi.fn();
-    draw({ onShowChat });
-
-    await userEvent.click(screen.getByRole("treeitem", { name: /steward 3/ }));
-
-    expect(onShowChat).toHaveBeenCalledWith(3);
-  });
-
   it("steps back out on Esc and on the breadcrumb", async () => {
     core({ ahead: 0, behind: 0, base: "main" });
     const onFocus = vi.fn();
@@ -239,7 +225,7 @@ describe("the branch cockpit", () => {
     expect(onFocus).toHaveBeenLastCalledWith(undefined);
 
     onFocus.mockClear();
-    screen.getByRole("treeitem", { name: /steward 3/ }).focus();
+    screen.getByRole("treeitem", { name: /^Files/ }).focus();
     await userEvent.keyboard("{Escape}");
     expect(onFocus).toHaveBeenLastCalledWith(undefined);
   });
@@ -247,15 +233,15 @@ describe("the branch cockpit", () => {
   it("moves between its rows with the arrows", async () => {
     core({ ahead: 0, behind: 0, base: "main" });
     draw();
-    const tree = screen.getByRole("tree", { name: "Chats and files of fix/one" });
-    const chatRow = within(tree).getByRole("treeitem", { name: /steward 3/ });
+    const tree = screen.getByRole("tree", { name: "Files of fix/one" });
     const filesRow = within(tree).getByRole("treeitem", { name: /^Files/ });
+    const readme = await within(tree).findByRole("treeitem", { name: /README\.md/ });
 
-    chatRow.focus();
+    filesRow.focus();
     await userEvent.keyboard("{ArrowDown}");
-    expect(document.activeElement).toBe(filesRow);
+    expect(document.activeElement).toBe(readme);
     await userEvent.keyboard("{ArrowUp}");
-    expect(document.activeElement).toBe(chatRow);
+    expect(document.activeElement).toBe(filesRow);
   });
 
   it("closes its files on ArrowLeft, and they stay closed", async () => {
@@ -269,7 +255,6 @@ describe("the branch cockpit", () => {
           chats={chats}
           spot={undefined}
           onPick={() => {}}
-          onShowChat={() => {}}
           offers={new Map()}
           onPress={() => {}}
           onReadAgain={() => {}}
@@ -280,7 +265,7 @@ describe("the branch cockpit", () => {
       </ChatsHere.Provider>
     );
     const { rerender } = render(cockpit([WORKING, ELSEWHERE]));
-    const tree = screen.getByRole("tree", { name: "Chats and files of fix/one" });
+    const tree = screen.getByRole("tree", { name: "Files of fix/one" });
     const filesRow = () => within(tree).getByRole("treeitem", { name: /^Files/ });
     await within(tree).findByRole("treeitem", { name: /README\.md/ });
 
@@ -306,7 +291,6 @@ describe("the branch cockpit", () => {
           chats={[WORKING, ELSEWHERE]}
           spot={undefined}
           onPick={() => {}}
-          onShowChat={() => {}}
           offers={new Map()}
           onPress={() => {}}
           onReadAgain={() => {}}
@@ -322,7 +306,7 @@ describe("the branch cockpit", () => {
       </ChatsHere.Provider>,
     );
 
-    screen.getByRole("treeitem", { name: /steward 3/ }).focus();
+    screen.getByRole("treeitem", { name: /^Files/ }).focus();
     await userEvent.keyboard("{Escape}");
 
     await screen.findByRole("tree", { name: "Repos and branches" });
@@ -333,7 +317,7 @@ describe("the branch cockpit", () => {
     core({ ahead: 0, behind: 0, base: "main" });
     const onFocus = vi.fn();
     draw({ onFocus });
-    const tree = screen.getByRole("tree", { name: "Chats and files of fix/one" });
+    const tree = screen.getByRole("tree", { name: "Files of fix/one" });
 
     fireEvent.contextMenu(await within(tree).findByRole("treeitem", { name: /README\.md/ }));
     const menu = await screen.findByRole("menu");
@@ -342,7 +326,7 @@ describe("the branch cockpit", () => {
 
     await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
     expect(onFocus).not.toHaveBeenCalled();
-    expect(screen.getByRole("tree", { name: "Chats and files of fix/one" })).toBeTruthy();
+    expect(screen.getByRole("tree", { name: "Files of fix/one" })).toBeTruthy();
   });
 
   it("is drawn while its repo is still listed, and not once the repo is gone, refused or lists no such branch", () => {
@@ -357,7 +341,6 @@ describe("the branch cockpit", () => {
             chats={[]}
             spot={undefined}
             onPick={() => {}}
-            onShowChat={() => {}}
             offers={new Map()}
             onPress={() => {}}
             onReadAgain={() => {}}
@@ -429,7 +412,6 @@ describe("a repo's own folder's cockpit (#1152)", () => {
           chats={[WORKING, ELSEWHERE]}
           spot={undefined}
           onPick={() => {}}
-          onShowChat={() => {}}
           offers={offers}
           onPress={() => {}}
           onReadAgain={() => {}}
@@ -440,7 +422,7 @@ describe("a repo's own folder's cockpit (#1152)", () => {
       </ChatsHere.Provider>,
     );
 
-  it("narrows the explorer to the clone: its branch, its chats, its files, and no Merge or Done", async () => {
+  it("narrows the explorer to the clone: its branch, its files, and no Merge or Done", async () => {
     core({ ahead: 1, behind: 0, base: "origin/main" });
     const merge = offer("worktree.merge:svc/one", "Merge branch fix/one into svc");
     drawRepo(REPO_STATE, new Map([[merge.id, merge]]));
@@ -454,11 +436,9 @@ describe("a repo's own folder's cockpit (#1152)", () => {
     const crumbs = screen.getByRole("navigation", { name: "Breadcrumb" });
     expect(within(crumbs).getByText("svc").getAttribute("aria-current")).toBe("location");
 
-    const tree = screen.getByRole("tree", { name: "Chats and files of svc" });
+    const tree = screen.getByRole("tree", { name: "Files of svc" });
     const rows = within(tree).getAllByRole("treeitem");
-    // The chat working in the clone itself, and not the one in a branch folder.
-    expect(rows[0].textContent).toContain("steward 4");
-    expect(rows.some((row) => row.textContent?.includes("steward 3"))).toBe(false);
+    expect(rows.some((row) => row.textContent?.includes("steward"))).toBe(false);
     await within(tree).findByRole("treeitem", { name: /README\.md/ });
   });
 

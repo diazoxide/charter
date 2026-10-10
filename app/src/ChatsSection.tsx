@@ -846,6 +846,7 @@ export function ChatsSection({
                       outcome={row.outcome}
                       asking={row.asking}
                       harness={row.harness}
+                      runsOn={row.runsOn}
                       level={row.level}
                       posinset={row.posinset}
                       setsize={row.setsize}
@@ -976,6 +977,7 @@ const Row = memo(function Row({
   outcome,
   asking,
   harness,
+  runsOn,
   level,
   posinset,
   setsize,
@@ -1025,6 +1027,8 @@ const Row = memo(function Row({
   outcome: string | null;
   asking: string | null;
   harness: string | null;
+  /** What it runs on (`ListedChat.runsOn`), said on its hover (#1673). */
+  runsOn?: string | null;
   level: number;
   posinset: number;
   setsize: number;
@@ -1110,7 +1114,13 @@ const Row = memo(function Row({
   ].filter((one): one is string => one !== null);
   // A task's tokens, on its row's hover (#1500): read as the pointer comes on, never polled.
   const used = useTokensOnHover({ chat: session });
-  const hover = [lines === 1 ? second.join(" · ") : "", task ? (used.said ?? "") : ""]
+  // What it runs on, which the explorer's row said until the Chats list became the one list of
+  // chats (#1673).
+  const hover = [
+    lines === 1 ? second.join(" · ") : "",
+    runsOn ? `runs on ${runsOn}` : "",
+    task ? (used.said ?? "") : "",
+  ]
     .filter((one) => one !== "")
     .join("\n");
   return (
@@ -1250,10 +1260,10 @@ const Row = memo(function Row({
                         </span>
                       )}
                       {cameFrom !== null && <span className="from">{cameFrom}</span>}
-                      {/* A task's helpers, as a count (#1490, V100-4): it has no row in the
-                          explorer, where a chat's helpers unfold, so its own row says them.
-                          Last on the line, and only where it has some. */}
-                      {task && <HelpersSaid session={session} />}
+                      {/* A chat's helpers, as a count (#1490, V100-4): every chat's, since the
+                          explorer draws no chat any more (#1673). Last on the line, and only
+                          where it has some. */}
+                      <HelpersSaid session={session} />
                     </>
                   }
                 />

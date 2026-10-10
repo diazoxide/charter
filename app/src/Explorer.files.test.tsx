@@ -107,7 +107,6 @@ function draw(onOpenFile = vi.fn(), onPress: (offer: Offer) => void = () => {}) 
         chats={[]}
         spot={undefined}
         onPick={() => {}}
-        onShowChat={() => {}}
         offers={new Map()}
         onPress={onPress}
         onReadAgain={() => {}}

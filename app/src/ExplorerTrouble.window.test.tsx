@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render as renderBare, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
+import { showTheExplorer } from "./test-strips";
 import App from "./App";
 import { forgetThisLaunch } from "./regions";
 
@@ -116,6 +117,7 @@ describe("a read the explorer was refused", () => {
   it("offers Read again, and goes once the workspace reads", async () => {
     const asked = core({ repos: 1 });
     render(<App />);
+    await showTheExplorer();
 
     const notice = (
       await within(await screen.findByTestId("explorer")).findByText(REPOS_REFUSED)
@@ -135,6 +137,7 @@ describe("a read the explorer was refused", () => {
   it("offers Read again on a clone whose branches could not be listed", async () => {
     const asked = core({ branches: 1 });
     render(<App />);
+    await showTheExplorer();
 
     const notice = (
       await within(await screen.findByTestId("explorer")).findByText(/through a symlink/)
