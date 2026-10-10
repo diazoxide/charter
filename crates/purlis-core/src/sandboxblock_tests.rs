@@ -1152,3 +1152,194 @@ fn the_last_quoted_path_is_read_past_an_apostrophe() {
     assert_eq!(last_quoted("failed to create directory `/x`"), Some("/x"));
     assert_eq!(last_quoted("can't open /x"), None);
 }
+
+// ---- Claude Code's proxy (#1631) --------------------------------------------------------------
+
+/// What a command that reached three hosts through Claude Code's proxy came back with, exit 0:
+/// curl printed `000` for each, and Claude Code appended its report to standard error. A refused
+/// connection is said by the proxy, not Seatbelt: no process, no `deny(`, and its reason after.
+const PROXY_REFUSED_THREE: &str = "https://api.example.com/health 000\n\
+https://console.example.com/gateway/v1/ready 000\n\
+https://mcp.example.com/health 000\n\
+Shell cwd was reset to /Users/dev/plane/workspaces/alpha/repo\n\
+<sandbox_violations>\n\
+deny network-outbound api.example.com:443 (host is not on the allow list)\n\
+deny network-outbound console.example.com:443 (host is not on the allow list)\n\
+deny network-outbound mcp.example.com:443 (host is not on the allow list)\n\
+</sandbox_violations>";
+
+#[test]
+fn a_host_claude_codes_proxy_refused_is_a_block_for_each_host_with_the_host_to_allow() {
+    let found = detect_with_targets(&came_back("curl …", "", PROXY_REFUSED_THREE), &place());
+    let host = block(Operation::Connect, Kind::Host, false);
+    assert_eq!(
+        found,
+        vec![
+            (host, Some("api.example.com:443".to_owned())),
+            (host, Some("console.example.com:443".to_owned())),
+            (host, Some("mcp.example.com:443".to_owned())),
+        ]
+    );
+    // The same, from a command that failed: the block is the sandbox's own, so it is read there
+    // too. And one host twice is one block.
+    let twice = appended(
+        "Exit code 7",
+        &[
+            "deny network-outbound api.example.com:443 (host is not on the allow list)",
+            "deny network-outbound API.example.com:443 (host is not on the allow list)",
+        ],
+    );
+    assert_eq!(
+        detect_with_targets(&failed("curl …", &twice), &place()),
+        vec![(host, Some("api.example.com:443".to_owned()))]
+    );
+}
+
+#[test]
+fn a_proxy_line_names_only_a_host_never_the_words_after_it() {
+    // A reason Claude Code may word otherwise, and a line with none.
+    for (line, target) in [
+        (
+            "deny network-outbound registry.example.org:443 (blocked by managed policy)",
+            Some("registry.example.org:443"),
+        ),
+        ("deny network-outbound 10.0.0.7:6443", Some("10.0.0.7:6443")),
+        // No host at all, only a reason: nothing to grant, still a refused connection.
+        (
+            "deny network-outbound (host is not on the allow list)",
+            None,
+        ),
+    ] {
+        assert_eq!(
+            detect_with_targets(&came_back("x", "", &appended("", &[line])), &place()),
+            vec![(
+                block(Operation::Connect, Kind::Host, false),
+                target.map(str::to_owned)
+            )],
+            "{line}"
+        );
+    }
+    // A socket path is a local socket, which no grant names.
+    assert_eq!(
+        detect_with_targets(
+            &came_back(
+                "x",
+                "",
+                &appended(
+                    "",
+                    &["deny network-outbound /private/tmp/x.sock (not allowed)"]
+                )
+            ),
+            &place()
+        ),
+        vec![(block(Operation::Connect, Kind::LocalSocket, false), None)]
+    );
+    // A client's word for the same refusal names no host: it is the one the line named, not
+    // a second block.
+    let both = format!(
+        "curl: (56) CONNECT tunnel failed, response 403\n{}",
+        appended(
+            "",
+            &["deny network-outbound api.example.com:443 (host is not on the allow list)"]
+        )
+    );
+    assert_eq!(
+        detect_with_targets(&came_back("curl -v x", "", &both), &place()),
+        vec![(
+            block(Operation::Connect, Kind::Host, false),
+            Some("api.example.com:443".to_owned())
+        )]
+    );
+}
+
+/// A program that looks a host up itself, rather than going through the sandbox's proxy, is
+/// refused the lookup by the sandbox, and macOS's resolver says only that the name is not known
+/// (#1631): no violation line comes with it. Allowing the host would not let such a program
+/// through, so nothing is named to grant.
+#[test]
+fn a_lookup_the_sandbox_refused_is_a_lookup_of_a_host_with_nothing_to_grant() {
+    for line in [
+        "psql: error: could not translate host name \"db.example.com\" to address: nodename nor \
+         servname provided, or not known",
+        "socket.gaierror: [Errno 8] nodename nor servname provided, or not known",
+        "nc: getaddrinfo: nodename nor servname provided, or not known",
+        "curl: (6) Could not resolve host: api.example.com",
+    ] {
+        assert_eq!(
+            detect_with_targets(&came_back("x", "", line), &place()),
+            vec![(block(Operation::Lookup, Kind::Host, false), None)],
+            "{line}"
+        );
+        // What a command printed on its standard output is never a block.
+        assert!(
+            detect(&came_back("x", line, ""), &place()).is_empty(),
+            "{line}"
+        );
+    }
+}
+
+/// Docker's client refused its socket (#1631): a local socket, which no grant names.
+#[test]
+fn a_refused_docker_socket_is_a_connection_to_a_local_socket() {
+    for line in [
+        "permission denied while trying to connect to the docker API at \
+         unix:///Users/dev/.docker/run/docker.sock",
+        "Got permission denied while trying to connect to the Docker daemon socket at \
+         unix:///var/run/docker.sock: Get \"http://%2Fvar%2Frun%2Fdocker.sock/v1.47/info\": dial \
+         unix /var/run/docker.sock: connect: operation not permitted",
+        "dial unix /Users/dev/.colima/default/docker.sock: connect: operation not permitted",
+    ] {
+        assert_eq!(
+            detect_with_targets(&came_back("docker info", "", line), &place()),
+            vec![(block(Operation::Connect, Kind::LocalSocket, false), None)],
+            "{line}"
+        );
+    }
+    // A daemon that is not running is not the sandbox.
+    assert!(
+        detect(
+            &came_back(
+                "docker info",
+                "",
+                "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the \
+                 docker daemon running?"
+            ),
+            &place()
+        )
+        .is_empty()
+    );
+}
+
+#[test]
+fn the_chat_is_told_what_was_blocked_and_to_wait_only_when_a_notice_is_up() {
+    assert_eq!(
+        told_the_chat(&[]),
+        None,
+        "no block taken, no Notice to point at"
+    );
+    let host = block(Operation::Connect, Kind::Host, false);
+    let told = told_the_chat(&[host, host]).expect("a block was taken");
+    assert!(
+        told.contains("blocked a connection to an internet host this project does not allow."),
+        "{told}"
+    );
+    assert_eq!(
+        told.matches("a connection to").count(),
+        1,
+        "said once: {told}"
+    );
+    for words in [
+        "Notice",
+        "this chat's tab",
+        "wait for their answer",
+        "do not work around",
+    ] {
+        assert!(told.contains(words), "{words}: {told}");
+    }
+    assert!(!told.contains("Report"), "{told}");
+    let ours = told_the_chat(&[block(Operation::Write, Kind::ProjectFiles, true)]).unwrap();
+    assert!(
+        ours.contains("purlis bug") && ours.contains("Report"),
+        "{ours}"
+    );
+}
