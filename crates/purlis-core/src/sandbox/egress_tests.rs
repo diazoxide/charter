@@ -921,6 +921,42 @@ fn a_resolved_local_address_is_reached_only_where_listed_exactly() {
     assert!(reachable("db.internal.example", 5432, &resolve, &none(), &own).is_empty());
 }
 
+/// A listed name pointed at this machine, a link-local address or a metadata service, in any
+/// spelling an IPv6 answer can carry one, reaches nothing; a public address beside it is kept.
+#[test]
+fn a_listed_name_resolving_to_any_spelling_of_a_local_address_reaches_nothing() {
+    let at = |ip: &str, port: u16| std::net::SocketAddr::new(ip.parse().unwrap(), port);
+    let own: Vec<std::net::IpAddr> = vec!["2001:db8::7".parse().unwrap()];
+    let listed = Reach::open(vec!["rebound.example.com".to_owned()]);
+    for local in [
+        "127.0.0.1",
+        "0.0.0.0",
+        "169.254.169.254",
+        "::1",
+        "::",
+        "fe80::1",
+        "fd00:ec2::254",
+        "::ffff:127.0.0.1",
+        "::ffff:169.254.169.254",
+        "64:ff9b::a9fe:a9fe",
+        "2002:7f00:1::1",
+        "2001:db8::7",
+    ] {
+        let answer = vec![at(local, 443)];
+        let resolve = move |_: &str, _: u16| answer.clone();
+        assert!(
+            reachable("rebound.example.com", 443, &resolve, &listed, &own).is_empty(),
+            "{local}"
+        );
+    }
+    let answer = vec![at("::1", 443), at("2001:db8::8", 443)];
+    let resolve = move |_: &str, _: u16| answer.clone();
+    assert_eq!(
+        reachable("rebound.example.com", 443, &resolve, &listed, &own),
+        [at("2001:db8::8", 443)]
+    );
+}
+
 #[test]
 fn both_ports_stop_listening_when_the_chat_ends() {
     let proxy = Proxy::start(vec!["example.com".to_owned()]).expect("a proxy");

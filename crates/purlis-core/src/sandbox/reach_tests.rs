@@ -83,6 +83,31 @@ fn this_machine_link_local_and_metadata_are_refused_as_local_addresses() {
     );
 }
 
+/// An address literal is held to the check in every IPv6 spelling that carries a local
+/// IPv4 address, and as this machine's own IPv6 address.
+#[test]
+fn every_ipv6_spelling_of_a_local_address_is_refused() {
+    for host in [
+        "::",
+        "::ffff:127.0.0.1",
+        "::ffff:169.254.169.254",
+        "64:ff9b::a9fe:a9fe",
+        "2002:7f00:1::1",
+        "fd00:ec2::254",
+    ] {
+        assert_eq!(
+            decide(host, 443),
+            Decision::Refused(Refused::LocalAddress),
+            "{host}"
+        );
+    }
+    let own = ["2001:db8::7".parse::<IpAddr>().unwrap()];
+    assert_eq!(
+        reach().decide("2001:db8::7", 443, HTTPS, &own),
+        Decision::Refused(Refused::LocalAddress)
+    );
+}
+
 #[test]
 fn a_local_address_is_carried_only_where_that_exact_address_and_port_is_listed() {
     let listed = Reach::of(vec![
