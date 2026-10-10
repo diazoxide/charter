@@ -103,8 +103,8 @@ Tell the user the host purlis named: a notice on this chat's tab lets them allow
 have, the chat is started again with it, and you run the same command again. Do not retry it
 before then, and do not try to reach the host some other way.
 
-**A database client or ssh** (`psql`, `usql`, `mysql`, `redis-cli`, `ssh`, `git` over ssh) works
-in a sandboxed chat with the command unchanged. Hand it the connection string from the vault
+**A database client or ssh** (`psql`, `usql`, `mysql`, `redis-cli`, `git` over ssh, and `ssh`
+outside Claude Code) works in a sandboxed chat with the command unchanged. Hand it the connection string from the vault
 with `--env` (`purlis secret exec <vault> --env DSN=<key> -- usql "$DSN"`): when the chat may
 reach that host and port, purlis points the value at a tunnel to it; when it may not, purlis says
 so and the tab offers Allow, as above. Do not rewrite the host or the port yourself.

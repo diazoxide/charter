@@ -4356,6 +4356,9 @@ set = { PURLIS_HARNESS = "codex" }
 - **Tier:** Machine, device-bound, rebuildable — written again for every confined chat as it starts, and removed with the chat's own temp directory when it ends.
 - **Written by:** `crates/purlis-core/src/sandbox/tunnel.rs` (`SshRoute::write`), for each chat
   whose network goes through purlis's proxy, and for each brokered `secret exec` (#1667).
+  Handed only to a harness purlis's sandbox wraps whole (Codex, opencode) and to a brokered
+  run: a Claude Code chat's harness runs outside its sandbox, so this folder, which a chat may
+  write, is never on its `PATH` (`Applied::ssh_route`).
 - **What it says:** every ssh connection leaves through the chat's SOCKS port
   (`ProxyCommand /usr/bin/nc -X 5 -x 127.0.0.1:<port> %h %p`), shares no master connection,
   and then reads the person's own `~/.ssh/config`. `bin/ssh` runs `/usr/bin/ssh -F` with it;

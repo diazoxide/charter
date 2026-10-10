@@ -293,6 +293,16 @@ impl Asks {
         self.changed.notify_all();
     }
 
+    /// The hosts allowed live on this board, as a grant writes each: what a run for the chat
+    /// started now carries besides what the chat was compiled with (#1667).
+    pub fn allowed_live(&self) -> Vec<String> {
+        self.state()
+            .live
+            .iter()
+            .map(|(host, _)| host.clone())
+            .collect()
+    }
+
     /// **An Allow of `host` at scope `by` was removed**: what it allowed live reaches nothing
     /// again, unless the same host is allowed live at another scope.
     pub fn forget(&self, host: &Host, by: By) {

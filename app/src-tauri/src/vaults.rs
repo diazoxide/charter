@@ -150,8 +150,9 @@ pub(crate) fn run_brokered(
         persona: open.persona,
         folder: open.cwd,
         // Recorded as the chat started, so the run is held to what the chat itself is held to
-        // and a policy changed since does not change it.
-        confines: held.chats().confines_of(ask.chat),
+        // and a policy changed since does not change it, with what the person allowed the chat
+        // live since (#1666, #1667).
+        confines: held.chats().confines_now(ask.chat),
     };
     crate::vaultroute::refused(
         plane,

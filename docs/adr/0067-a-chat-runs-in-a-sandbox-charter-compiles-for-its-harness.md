@@ -958,13 +958,17 @@ there.
    A host that carries one of the run's values is counted there and not named.
 7. **A tunnel lives as long as the run** that opened it, which ends when the chat that asked
    goes. Ended, it stops listening and closes every connection it carries.
-8. **ssh, and git over ssh, through the chat's SOCKS port.** Each confined chat gets an ssh
-   configuration in its own temp directory that sends every ssh connection through the chat's
+8. **ssh, and git over ssh, through the chat's SOCKS port.** Each chat purlis's sandbox wraps
+   whole (Codex, opencode), and each brokered run, gets an ssh configuration in its own temp
+   directory that sends every ssh connection through the chat's
    SOCKS port (with the person's own `~/.ssh/config` read after it, for names, users and keys),
    an `ssh` that reads it first on the chat's `PATH`, and `GIT_SSH_COMMAND` pointed at that
    `ssh`. No connection rides a master connection another ssh opened outside the sandbox
    (`ControlMaster no`, `ControlPath none`). A Claude Code chat's own sandbox sets
-   `GIT_SSH_COMMAND` for each command through the same SOCKS port, which is purlis's since #1665.
+   `GIT_SSH_COMMAND` for each command through the same SOCKS port, which is purlis's since #1665;
+   it is handed no route of purlis's, since its harness, its hooks and its servers run outside
+   its sandbox and must never run a file from a folder a chat may write, so a bare `ssh` there
+   does not take the route (#1708).
    The SOCKS port decides by host and port, so a refused host is a Block. Signing is not
    the route's: it names no key and no agent, and the SSH agent purlis holds for a chat (#1350)
    comes through `SSH_AUTH_SOCK` unchanged. A chat that rewrites the file in its own temp

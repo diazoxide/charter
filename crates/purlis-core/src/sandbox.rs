@@ -1853,8 +1853,9 @@ impl Applied {
             .adapter()
             .sandboxed_line(&self.with(chain), words, at)
             .map_err(under)?;
-        // ssh, and git over ssh, through the chat's SOCKS port (#1667): every harness.
-        if let Some(route) = at.confinement.and_then(Confinement::ssh_route) {
+        // ssh, and git over ssh, through the chat's SOCKS port (#1667): each harness wrapped
+        // whole ([`Self::ssh_route`]).
+        if let Some(route) = self.ssh_route(at.confinement) {
             let gained = route.env();
             line.env
                 .retain(|(key, _)| !gained.iter().any(|(set, _)| set == key));
@@ -1914,6 +1915,23 @@ impl Applied {
         refusals: egress::Refusals,
     ) -> std::io::Result<Option<Confinement>> {
         self.confine_telling(refusals, None)
+    }
+
+    /// **The ssh route a chat of this harness is handed** (#1667), from `confinement`: only
+    /// where the sandbox wraps the whole harness (Codex, opencode), so everything that reads the
+    /// route's `PATH` and `GIT_SSH_COMMAND` runs inside it. The route sits in the chat's own temp
+    /// directory, which a wrapped chat may write; a Claude Code chat's harness runs outside its
+    /// sandbox, with its hooks and its servers, so a file there that a chat could have written is
+    /// never on that harness's `PATH` and never its git's ssh. Claude Code's own sandbox sets
+    /// `GIT_SSH_COMMAND` for each command it runs, through the same SOCKS port.
+    pub fn ssh_route<'c>(
+        &self,
+        confinement: Option<&'c Confinement>,
+    ) -> Option<&'c tunnel::SshRoute> {
+        if self.harness == Harness::ClaudeCode {
+            return None;
+        }
+        confinement.and_then(Confinement::ssh_route)
     }
 
     /// [`Self::confine_keeping`], its proxy also telling `reached` each connection it carried
