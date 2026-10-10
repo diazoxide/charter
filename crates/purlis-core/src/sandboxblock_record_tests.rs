@@ -124,7 +124,14 @@ fn what_is_older_than_thirty_days_is_neither_read_nor_kept() {
     record.write(&root, &kept).expect("written");
     assert_eq!(record.read(&root, now), vec![kept.clone()]);
 
-    let fresh = Entry::allowed("host", "kept.example", "you", chat("01J", "fix"), None, now);
+    let fresh = Entry::allowed(
+        What::Host,
+        "kept.example",
+        Scope::You,
+        chat("01J", "fix"),
+        None,
+        now,
+    );
     record.write(&root, &fresh).expect("written");
     let text = std::fs::read_to_string(record.file(&root)).expect("the file");
     assert!(
@@ -139,21 +146,21 @@ fn an_allow_and_its_removal_say_what_where_who_and_the_outcome() {
     let (dir, root) = project();
     let record = Record::in_data(&dir.path().join("data"));
     let allowed = Entry::allowed(
-        "host",
+        What::Host,
         "db.example:5432",
-        "you",
+        Scope::You,
         chat("01J", "fix"),
         None,
         10,
     );
-    let removed = Entry::removed("host", "db.example:5432", "you", 20);
+    let removed = Entry::removed(What::Host, "db.example:5432", Scope::You, 20);
     record.write(&root, &allowed).expect("written");
     record.write(&root, &removed).expect("written");
     let read = record.read(&root, 20);
     assert_eq!(read[0].event, Event::Allow);
     assert_eq!(read[0].outcome, Outcome::Allowed);
-    assert_eq!(read[0].scope.as_deref(), Some("you"));
-    assert_eq!(read[0].who.as_deref(), Some("you"));
+    assert_eq!(read[0].scope, Some(Scope::You));
+    assert_eq!(read[0].who, Some(Who::You));
     assert_eq!(read[1].event, Event::Remove);
     assert_eq!(read[1].outcome, Outcome::Removed);
 }
@@ -208,7 +215,14 @@ fn the_doctor_counts_seven_days_of_blocks_per_operation() {
             None,
             now - 60,
         ),
-        Entry::allowed("host", "b.example:443", "you", Chat::default(), None, now),
+        Entry::allowed(
+            What::Host,
+            "b.example:443",
+            Scope::You,
+            Chat::default(),
+            None,
+            now,
+        ),
     ];
     assert_eq!(
         counts(&entries, now),
@@ -326,7 +340,7 @@ fn connections_the_proxy_carried_are_kept_with_their_layer_and_count() {
     assert_eq!(read.len(), 3);
     assert_eq!(read[0], carried);
     assert_eq!(read[0].event, Event::Connect);
-    assert_eq!(read[0].scope.as_deref(), Some("open"));
+    assert_eq!(read[0].scope, Some(Scope::Open));
     assert_eq!(read[0].times, Some(42));
     assert_eq!(read[1].target, None);
     assert_eq!(read[2].target, None, "only a host is kept");
@@ -374,4 +388,67 @@ fn a_held_connection_s_ask_and_its_timeout_are_kept_as_such() {
             .expect("the file")
             .contains("\"event\":\"timeout\"")
     );
+}
+
+/// #1681: the record's words are typed, and each is written as the record has always spelled
+/// it: a line written now reads byte for byte as one written before the words were typed, and
+/// a line written before reads back as the same words.
+#[test]
+fn each_typed_word_is_written_as_the_record_spells_it() {
+    let written = |entry: &Entry| serde_json::to_string(entry).expect("written");
+    for (what, word) in [
+        (What::Host, "host"),
+        (What::Write, "write"),
+        (What::Vault, "vault"),
+        (What::PersonaHosts, "persona-hosts"),
+    ] {
+        let line = written(&Entry::allowed(
+            what,
+            "x",
+            Scope::You,
+            Chat::default(),
+            None,
+            1,
+        ));
+        assert!(line.contains(&format!("\"what\":\"{word}\"")), "{line}");
+        assert_eq!(What::of_word(word), Some(what));
+    }
+    for (scope, word) in [
+        (Scope::Chat, "chat"),
+        (Scope::You, "you"),
+        (Scope::Project, "project"),
+    ] {
+        let line = written(&Entry::removed(What::Host, "x", scope, 1));
+        assert!(line.contains(&format!("\"scope\":\"{word}\"")), "{line}");
+        assert!(line.contains("\"who\":\"you\""), "{line}");
+    }
+    for word in [
+        "open", "persona", "you", "chat", "project", "ask", "refused",
+    ] {
+        let line = written(&Entry::connected(
+            Some("a.example:443"),
+            word,
+            1,
+            Chat::default(),
+            None,
+            1,
+        ));
+        assert!(line.contains(&format!("\"scope\":\"{word}\"")), "{line}");
+    }
+    let before = "{\"at\":5,\"event\":\"allow\",\"what\":\"persona-hosts\",\"target\":\"x\",\
+                  \"scope\":\"project\",\"who\":\"you\",\"outcome\":\"allowed\"}";
+    let read: Entry = serde_json::from_str(before).expect("read");
+    assert_eq!(read.what, Some(What::PersonaHosts));
+    assert_eq!(read.scope, Some(Scope::Project));
+    assert_eq!(read.who, Some(Who::You));
+    assert_eq!(written(&read), before);
+}
+
+/// The scope an Allow at each level is recorded by.
+#[test]
+fn an_allows_scope_is_its_levels_word() {
+    use crate::sandbox::grant::Level;
+    for level in [Level::Chat, Level::You, Level::Project] {
+        assert_eq!(Scope::from(level).word(), level.word());
+    }
 }

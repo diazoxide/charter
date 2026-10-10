@@ -671,8 +671,9 @@ impl Allowed {
         };
         match asks.hold(host, port, &ports) {
             Answer::Allowed(by) => Ok(Decision::by(by)),
-            // The board is full: refused as before, with a Block of its own.
-            Answer::Busy => Ok(decision),
+            // The board is full, or no Notice can be raised: refused at once as before, with a
+            // Block of its own.
+            Answer::Busy | Answer::NobodyToAsk => Ok(decision),
             answer => {
                 let target = host_and_port(host, port);
                 self.tell(|tally| tally.heard(&target, decision.word(), Instant::now()));

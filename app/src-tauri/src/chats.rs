@@ -2944,10 +2944,8 @@ impl Chats {
     pub fn confines_now(&self, session: u32) -> Option<purlis_core::sandbox::Confines> {
         let mut confines = self.confines_of(session)?;
         if let Some(board) = self.board_of(session) {
-            for host in board.allowed_live() {
-                if !confines.hosts.contains(&host) {
-                    confines.hosts.push(host);
-                }
+            for (host, by) in board.allowed_live() {
+                confines.allow_live(&host, by);
             }
         }
         Some(confines)
@@ -3640,6 +3638,9 @@ struct Asking {
 ///   here: when it lands, each ask registers there, answered by `allow_sandbox_block` and
 ///   `keep_sandbox_block`.
 /// - **A timeout** is kept in the network record. The Notice stays.
+/// - **Nobody to ask** (the project's hooks are not listening yet, or the chat has no number
+///   yet, the first instant of its start): no Notice could be raised, so the connection is
+///   refused at once, as before purlis asked live, never held its minute for an ask nobody sees.
 ///
 /// Every answer comes from the window ([`Chats::allow_live`], [`Chats::keep_blocked_live`]);
 /// nothing a chat sends reaches the board.
@@ -3653,6 +3654,12 @@ fn asked_by_the_proxy(asking: Asking, root: PathBuf) -> Arc<purlis_core::sandbox
         who,
         harness,
     } = asking;
+    let askable = {
+        let (hear, whose) = (Arc::clone(&hear), Arc::clone(&whose));
+        Arc::new(move || {
+            whose.load(std::sync::atomic::Ordering::SeqCst) != 0 && lock(&hear).is_some()
+        })
+    };
     let board = Asks::new(Arc::new(move |heard: Heard| {
         let chat = whose.load(std::sync::atomic::Ordering::SeqCst);
         if chat == 0 {
@@ -3695,7 +3702,7 @@ fn asked_by_the_proxy(asking: Asking, root: PathBuf) -> Arc<purlis_core::sandbox
             }
         }
     }));
-    Arc::new(board.knowing(Arc::new(move |host| {
+    Arc::new(board.asking_while(askable).knowing(Arc::new(move |host| {
         purlis_core::sandbox::grant::allowed_already(&root, host)
             .map(purlis_core::sandbox::reach::By::from)
     })))
@@ -3814,6 +3821,44 @@ pub(crate) mod tests {
                 .is_err(),
             "once"
         );
+    }
+
+    /// #1709: where no Notice can be raised, because the project's hooks are not listening yet
+    /// or the chat has no number yet, a connection nothing lists is refused at once, never held
+    /// its minute for an ask nobody sees.
+    #[test]
+    fn with_no_notice_to_raise_a_held_connection_is_refused_at_once() {
+        use purlis_core::sandbox::asks::Answer;
+        let hear: Arc<Mutex<Option<crate::hooks::Blocks>>> = Arc::new(Mutex::new(None));
+        let whose = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let board = super::asked_by_the_proxy(
+            super::Asking {
+                hear: Arc::clone(&hear),
+                reached: Arc::new(Mutex::new(None)),
+                whose: Arc::clone(&whose),
+                who: super::ReachedAs::default(),
+                harness: Some(Harness::ClaudeCode),
+            },
+            std::env::temp_dir().join("purlis-no-such-project-1709"),
+        );
+        let quick = |host: &str| {
+            let started = std::time::Instant::now();
+            let answer = board.hold(host, 443, &[443]);
+            assert!(
+                started.elapsed() < std::time::Duration::from_secs(1),
+                "not held"
+            );
+            answer
+        };
+        // Neither listening nor numbered, then listening with no number, then numbered with
+        // nobody listening.
+        assert_eq!(quick("one.example.com"), Answer::NobodyToAsk);
+        *lock(&hear) = Some(Arc::new(|_| {}));
+        assert_eq!(quick("two.example.com"), Answer::NobodyToAsk);
+        *lock(&hear) = None;
+        whose.store(9, std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(quick("three.example.com"), Answer::NobodyToAsk);
+        assert_eq!(board.holding(), 0);
     }
 
     /// #1664: a local address the proxy refused is the chat's Block of a local socket, naming no

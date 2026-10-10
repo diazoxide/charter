@@ -3083,6 +3083,7 @@ pub(crate) fn applied_of(
         confines: Box::new(Confines {
             denied: held,
             hosts: compiled.hosts.clone(),
+            reach: compiled.reach.clone(),
             widened: compiled.widened.clone(),
             writable: compiled.writable.clone(),
         }),
@@ -3103,6 +3104,10 @@ pub(crate) fn applied_of(
 pub struct Confines {
     pub denied: Vec<Denial>,
     pub hosts: Vec<String>,
+    /// The layer that lists each of [`Self::hosts`] (#1708): Open, the persona's, yours or this
+    /// chat's, as the chat's own proxy decides by, so a run's connections are recorded by the
+    /// same word as the chat's ([`Self::decides`]).
+    pub reach: reach::Reach,
     /// What the chat's sandbox widens (#1337): its cache grants and certificate check, so a
     /// run for the chat gets them too.
     pub widened: Widened,
@@ -3110,6 +3115,31 @@ pub struct Confines {
     /// its own grants and the every-chat ones. Recorded so a start compiled later can be told
     /// from this one by them (#1428); a run for the chat is not widened by it.
     pub writable: Vec<PathBuf>,
+}
+
+impl Confines {
+    /// **What a run for the chat decides a connection by** (#1708): the chat's own layers, so
+    /// a host listed for the chat is carried as the chat's proxy carries it (Open, persona,
+    /// yours, this chat's) and recorded by that word. A host in [`Self::hosts`] no layer was
+    /// kept for is an Open host, as every listed host was before the layers were kept.
+    pub fn decides(&self) -> reach::Reach {
+        let layered = self.reach.hosts();
+        self.reach.clone().and(
+            self.hosts
+                .iter()
+                .filter(|host| !layered.contains(host))
+                .map(|host| (host.clone(), reach::By::Open)),
+        )
+    }
+
+    /// `host`, allowed live at scope `by` since the chat started (#1666): listed for a run
+    /// started now, at that scope.
+    pub fn allow_live(&mut self, host: &str, by: reach::By) {
+        if !self.hosts.iter().any(|one| one == host) {
+            self.hosts.push(host.to_owned());
+        }
+        self.reach = std::mem::take(&mut self.reach).and([(host.to_owned(), by)]);
+    }
 }
 
 /// `policy` for a chat of `harness` in `plane` at `root`, with no `charter.toml` written and no

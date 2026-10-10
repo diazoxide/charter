@@ -4910,3 +4910,75 @@ fn a_profile_too_large_to_hand_seatbelt_is_refused_by_name() {
         format!("Lead. {}, so nothing was started.", seatbelt::CONTROL)
     );
 }
+
+/// #1708: a command run for a chat decides a connection as the chat does, by the layer that
+/// lists the host (persona, yours, this chat's), so its record says which; a host the run was
+/// only told of by name, with no layer kept, is decided as an Open host, as before.
+#[test]
+fn a_run_for_a_chat_decides_a_connection_by_the_chats_own_layers() {
+    use reach::{By, Decision};
+    let confines = Confines {
+        hosts: vec![
+            "db.example.com:5432".to_owned(),
+            "grafana.example.com".to_owned(),
+            "named.example.com".to_owned(),
+        ],
+        reach: reach::Reach::of(vec![
+            ("db.example.com:5432".to_owned(), By::You),
+            ("grafana.example.com".to_owned(), By::Persona),
+        ]),
+        ..Confines::default()
+    };
+    let decides = confines.decides();
+    assert_eq!(
+        decides.decide("db.example.com", 5432, &[443], &[]),
+        Decision::Allowed(By::You)
+    );
+    assert_eq!(
+        decides.decide("grafana.example.com", 443, &[443], &[]),
+        Decision::Persona
+    );
+    assert_eq!(
+        decides.decide("named.example.com", 443, &[443], &[]),
+        Decision::Open
+    );
+    assert_eq!(
+        decides.decide("other.example.com", 443, &[443], &[]),
+        Decision::Ask
+    );
+    // A host allowed live since the chat started joins at the scope the person chose.
+    let mut now = confines.clone();
+    now.allow_live("live.example.com", By::Chat);
+    assert_eq!(
+        now.decides().decide("live.example.com", 443, &[443], &[]),
+        Decision::Allowed(By::Chat)
+    );
+    assert!(now.hosts.contains(&"live.example.com".to_owned()));
+}
+
+/// #1708: what a chat's sandbox compiled is what a run for it is held to: the same layers.
+#[test]
+fn a_chats_confines_keep_the_layers_its_sandbox_was_compiled_with() {
+    let root = tempfile::tempdir().expect("a project");
+    let policy = Policy {
+        hosts: vec![hosts::Host::parse("api.example.com").expect("a host")],
+        ..policy_of(&[], false)
+    };
+    let applied = applied_for(
+        Harness::ClaudeCode,
+        &policy,
+        &Plane::of(None),
+        root.path(),
+        &machine(Os::MacOs),
+    )
+    .expect("compiles");
+    let confines = applied.confines();
+    assert_eq!(
+        confines
+            .decides()
+            .decide("api.example.com", 443, &[443], &[])
+            .word(),
+        "open"
+    );
+    assert_eq!(confines.reach.hosts(), confines.hosts);
+}
