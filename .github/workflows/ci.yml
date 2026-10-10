@@ -55,10 +55,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # bubblewrap and socat: Claude Code's Linux sandbox runs through them, and a project
       # charter makes runs its chats sandboxed (ADR 0067 §1), so the start tests need them.
+      # From a cache of their .deb files, and bounded: a slow mirror fails the step in minutes,
+      # and the job summary says how long the install took (#1477, `.github/actions/linux-packages`).
       - name: Tauri's Linux build dependencies, and the sandbox's programs
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev bubblewrap socat
+        timeout-minutes: 9
+        uses: ./.github/actions/linux-packages
+        with:
+          tauri: true
+          packages: bubblewrap socat
       - uses: ./.github/actions/rust-toolchain
         with:
           components: rustfmt, clippy
@@ -326,11 +330,14 @@ jobs:
             echo "::warning::${{ matrix.os }} runs $got, but docs/platforms.md says it covers $EXPECT: update the row and this matrix"
           fi
       # bubblewrap and socat: Claude Code's Linux sandbox runs through them (ADR 0067 §1).
+      # Cached and bounded, as the `rust` job's (#1477).
       - name: Tauri's Linux build dependencies, an X server and i3 to start it in, and the sandbox's programs
         if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev xvfb xauth dbus-x11 i3 bubblewrap socat
+        timeout-minutes: 9
+        uses: ./.github/actions/linux-packages
+        with:
+          tauri: true
+          packages: xvfb xauth dbus-x11 i3 bubblewrap socat
       - uses: ./.github/actions/rust-toolchain
       # Not on the newer images: rust-cache's key has the OS and architecture but not the image,
       # so they would restore objects compiled on macOS 26 or Ubuntu 24.04 and only link them.
@@ -583,11 +590,15 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # bubblewrap and socat: Claude Code's Linux sandbox runs through them, and a project
       # charter makes runs its chats sandboxed (ADR 0067 §1).
+      # Cached and bounded, as the `rust` job's (#1477): this is the step that took 1,285 s on
+      # 2026-10-07 and held `main` for over an hour.
       - name: Tauri's Linux build dependencies, a display to run in, and the sandbox's programs
         if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev xvfb dbus-x11 bubblewrap socat
+        timeout-minutes: 9
+        uses: ./.github/actions/linux-packages
+        with:
+          tauri: true
+          packages: xvfb dbus-x11 bubblewrap socat
       - uses: ./.github/actions/rust-toolchain
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:

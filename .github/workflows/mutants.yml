@@ -285,10 +285,12 @@ jobs:
       # sandboxed (ADR 0067 §1), so purlis-core's start tests refuse without them. On a shard
       # their absence is worse than a red baseline: every mutant those tests cover reads as
       # caught, by a test that fails whatever the mutant does.
+      # Cached and bounded, as in `ci.yml` (#1477).
       - name: The sandbox's programs
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y bubblewrap socat
+        timeout-minutes: 9
+        uses: ./.github/actions/linux-packages
+        with:
+          packages: bubblewrap socat
       - uses: ./.github/actions/rust-toolchain
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       # Every crate the workspace's lock names, and not only purlis-core's: the gitoxide
@@ -325,10 +327,12 @@ jobs:
       # sandboxed (ADR 0067 §1), so purlis-core's start tests refuse without them. On a shard
       # their absence is worse than a red baseline: every mutant those tests cover reads as
       # caught, by a test that fails whatever the mutant does.
+      # Cached and bounded, as in `ci.yml` (#1477).
       - name: The sandbox's programs
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y bubblewrap socat
+        timeout-minutes: 9
+        uses: ./.github/actions/linux-packages
+        with:
+          packages: bubblewrap socat
       - uses: ./.github/actions/rust-toolchain
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       # Every crate the workspace's lock names, and not only purlis-core's: the gitoxide

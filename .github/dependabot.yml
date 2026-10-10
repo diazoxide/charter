@@ -77,8 +77,10 @@ updates:
   # Every workflow pins its actions by commit SHA with the version as a comment; Dependabot
   # moves the SHA and the comment together. `dtolnay/rust-toolchain` publishes no version tags
   # for Dependabot to follow, so its pin, in `.github/actions/rust-toolchain`, is moved by hand.
+  # `/` reads `.github/workflows` only; `.github/actions/linux-packages` pins `actions/cache`
+  # too, and is named so its pin moves in the same PR as the workflows' (#1477).
   - package-ecosystem: github-actions
-    directory: /
+    directories: ["/", "/.github/actions/linux-packages"]
     schedule: { interval: weekly }
     groups:
       actions: { patterns: ["*"] }

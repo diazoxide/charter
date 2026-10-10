@@ -1,0 +1,57 @@
+# The Linux jobs' apt packages, from a cache when it holds them (#1477). On 2026-10-07 the
+# distribution's mirror took 1,285 s for an install that takes under 45 s, and a run on `main`
+# sat for over an hour. With this cache restored, the install does not ask the mirror at all.
+#
+# `tools/linux-packages.sh` does the work and says what it does; this action keys, restores and
+# saves the cache around it. The calling step gives it `timeout-minutes: 9`, a backstop above
+# the script's own limits.
+#
+# **Not for the release workflow.** Its jobs hold the signing keys and restore no cache (ADR 0042,
+# amendment of 2026-09-29); `release.yml` runs `tools/linux-packages.sh` itself, with no `--cache`,
+# where `the_workflows_run_only_what_they_pinned.rs` can see it caches nothing.
+name: Linux packages
+description: Installs apt packages, bounded, from a cache of their .deb files when it fits this image.
+inputs:
+  packages:
+    description: Package names beyond Tauri's, space-separated.
+    required: false
+    default: ""
+  tauri:
+    description: "true to add Tauri's Linux build dependencies, which tools/linux-packages.sh names."
+    required: false
+    default: "false"
+runs:
+  using: composite
+  steps:
+    - id: key
+      shell: bash
+      env:
+        PACKAGES: ${{ inputs.packages }}
+        TAURI: ${{ inputs.tauri }}
+      run: |
+        args=()
+        [ "$TAURI" = true ] && args+=(--tauri)
+        read -ra names <<< "$PACKAGES"
+        "$GITHUB_WORKSPACE/tools/linux-packages.sh" key "${args[@]}" "${names[@]}"
+    # A pull request restores what `main` saved and saves nothing, as the Rust cache does in
+    # `ci.yml`: the repository's caches are capped at 10 GB.
+    - id: restore
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.cache/linux-packages
+        key: ${{ steps.key.outputs.key }}
+    - id: install
+      shell: bash
+      env:
+        PACKAGES: ${{ inputs.packages }}
+        TAURI: ${{ inputs.tauri }}
+      run: |
+        args=(--cache "$HOME/.cache/linux-packages")
+        [ "$TAURI" = true ] && args+=(--tauri)
+        read -ra names <<< "$PACKAGES"
+        "$GITHUB_WORKSPACE/tools/linux-packages.sh" install "${args[@]}" "${names[@]}"
+    - if: steps.install.outputs.save == 'true' && steps.restore.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.cache/linux-packages
+        key: ${{ steps.key.outputs.key }}

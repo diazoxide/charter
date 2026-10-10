@@ -362,11 +362,13 @@ jobs:
           ref: ${{ needs.plan.outputs.sha }}
           persist-credentials: false
 
+      # Bounded and tried twice, as in `ci.yml`, but from the mirror every time: this job holds
+      # the signing keys and restores no cache, so it runs the script itself, without `--cache`
+      # and without `.github/actions/linux-packages` (#1477).
       - name: Tauri's Linux build dependencies
         if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+        timeout-minutes: 9
+        run: tools/linux-packages.sh install --tauri
 
       - uses: ./.github/actions/rust-toolchain
       # **No cache, restored or saved.** This job holds the signing keys, so it builds from its
