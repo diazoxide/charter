@@ -33,6 +33,10 @@ A good pull request:
 - **comes with a test** that fails without the change and passes with it, named for the
   behaviour it checks;
 - **passes what CI runs**: formatting, clippy with `-D warnings`, and the Rust and app tests;
+- **is looked at, when it changes the window.** A change to what the window draws is done only
+  once someone has looked at a screenshot of the real window, in the light and the dark theme,
+  and narrow and wide where that matters. Attach it to the pull request, or say what it showed:
+  the app's tests draw no pixels;
 - **adds a changelog fragment, `changes/<slug>.md`,** when people using purlis would notice
   the change. It holds a `### Added`, `### Changed`, `### Fixed` or `### Security` heading (or
   another of Keep a Changelog's) and the entry under it, written as it will read in
