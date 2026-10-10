@@ -954,7 +954,9 @@ component library gets added on.
     the accessibility tree as unmounting did, and keeps its folds, scroll and filter. A region
     without views is still unmounted when it is put away.
   - **A badge is a count drawn only when it is not zero**, in the needs-you colours for the
-    chats that need you (`ActivityCount`).
+    chats that need you and in the plain count's for the open todos (`ActivityCount`).
+  - **An extension's panel is a tab like purlis's own** (#1678): named and marked as its panel
+    declares, after purlis's views on the right side's bar, sorted among themselves by `order`.
 
 ## The title bar added no primitive either, and inherited a rule from Tauri
 
@@ -1129,6 +1131,14 @@ a chat has the keyboard both stay the chat's, as Search's key stays the find bar
 window, held by the project in front, and never under a dialog. Every view is also a palette
 row (_Show the Chats view_, _Show the Explorer view_, _Search in files_, _Show the Changes
 view_), with the key said on the row.
+
+**The right side's key is `⌥⌘B`** (#1678), VS Code's for its secondary side bar, and `Ctrl+Alt+B`
+off a Mac; it puts the attention region away and brings it back. On a Mac Option makes B type
+`∫`, so a key that types no letter is read by its place, as the palette's `⌥⌘C` is. Off a Mac
+Ctrl with Alt is AltGr on Windows, so only a key that still types `b` is read, and a terminal
+sends the chord, so a chat with the keyboard keeps it. Each of the right side's views is a
+palette row too (_Show the Memory view_, and an extension's panel by its own name), and so is the
+region (_Put the Attention region away_).
 
 **The keys for the chats inside a tab take nothing either** (#1487, `taskKeys.taskKeyOf`).
 

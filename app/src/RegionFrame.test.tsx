@@ -9,9 +9,11 @@ import {
   DEFAULT_ARRANGEMENT,
   type Arrangement,
   type RegionId,
+  type PanelViewId,
   type Side,
   type ViewId,
 } from "./regions";
+import { Flame, type LucideIcon } from "lucide-react";
 
 /**
  * **The frame, against the real `react-resizable-panels`** — where a region's content lands,
@@ -172,12 +174,18 @@ describe("what a rearrangement may not cost", () => {
   });
 });
 
-/** The views of the navigation region, as a window hands them over. */
-const VIEWS: Record<ViewId, React.ReactNode> = {
+/** The views of both sides, as a window hands them over. */
+const VIEWS: Partial<Record<ViewId, React.ReactNode>> = {
   chats: <div data-testid="v-chats">chats</div>,
   explorer: <div data-testid="v-explorer">explorer</div>,
   search: <div data-testid="v-search">search</div>,
   changes: <div data-testid="v-changes">changes</div>,
+  todos: <div data-testid="v-todos">todos</div>,
+  memory: <div data-testid="v-memory">memory</div>,
+  personas: <div data-testid="v-personas">personas</div>,
+  sessions: <div data-testid="v-sessions">sessions</div>,
+  vaults: <div data-testid="v-vaults">vaults</div>,
+  "panel:ext/stats/burn": <div data-testid="v-burn">burn</div>,
 };
 
 /** The frame with views, an activity bar and a badge, rearranged by `to` on the button. */
@@ -186,11 +194,13 @@ function WithViews({
   to,
   onPick = vi.fn(),
   badge,
+  panels = [],
 }: {
   from: Arrangement;
   to?: Arrangement;
   onPick?: (view: ViewId) => void;
   badge?: React.ReactNode;
+  panels?: { view: PanelViewId; name: string; mark: LucideIcon }[];
 }) {
   const [arrangement, setArrangement] = useState(from);
   return (
@@ -200,6 +210,7 @@ function WithViews({
         arrangement={arrangement}
         content={CONTENT}
         views={VIEWS}
+        panels={panels}
         badges={{ chats: badge }}
         onPick={onPick}
         centre={<div data-testid="centre">centre</div>}
@@ -291,7 +302,7 @@ describe("the activity bar of a region with views (#1673)", () => {
     await rearrange();
 
     expect(screen.getByTestId("v-chats")).toBe(chats);
-    expect(screen.queryByRole("tabpanel")).toBeNull();
+    expect(within(slot("left")).queryByRole("tabpanel")).toBeNull();
     expect(within(bar()).queryAllByRole("tab", { selected: true })).toEqual([]);
   });
 
@@ -319,5 +330,71 @@ describe("the activity bar of a region with views (#1673)", () => {
     const chats = screen.getByRole("tab", { name: "Chats" });
     expect(chats).toHaveTextContent("2");
     expect(chats).toHaveAccessibleDescription("2 chats need you");
+  });
+});
+
+describe("the right side's activity bar (#1678)", () => {
+  const right = () => screen.getByRole("tablist", { name: "Attention" });
+
+  it("holds purlis's views in order, opens on Memory, and sits at the right edge", () => {
+    render(<WithViews from={DEFAULT_ARRANGEMENT} />);
+
+    expect(
+      within(right())
+        .getAllByRole("tab")
+        .map((tab) => tab.getAttribute("aria-label")),
+    ).toEqual(["Todos", "Memory", "Personas", "Sessions", "Vaults"]);
+    expect(right().closest("[data-side]")).toHaveAttribute("data-side", "right");
+    expect(screen.getByRole("tabpanel", { name: "Memory" })).toContainElement(
+      screen.getByTestId("v-memory"),
+    );
+    // The others are mounted and hidden.
+    expect(screen.getByTestId("v-todos")).toBeInTheDocument();
+    expect(screen.queryByRole("tabpanel", { name: "Todos" })).toBeNull();
+  });
+
+  it("gives each extension's panel a tab after purlis's own, named and marked as it says", () => {
+    render(
+      <WithViews
+        from={DEFAULT_ARRANGEMENT}
+        panels={[{ view: "panel:ext/stats/burn", name: "Burn rate", mark: Flame }]}
+      />,
+    );
+
+    const tabs = within(right()).getAllByRole("tab");
+    expect(tabs.map((tab) => tab.getAttribute("aria-label")).at(-1)).toBe("Burn rate");
+    expect(tabs.at(-1)).toHaveAttribute("title", "Show the Burn rate view");
+  });
+
+  it("shows an extension's panel when it is the open view", () => {
+    render(
+      <WithViews
+        from={[
+          on("navigation", "left"),
+          { ...on("aside", "right"), view: "panel:ext/stats/burn" },
+          on("bottom", "bottom"),
+        ]}
+        panels={[{ view: "panel:ext/stats/burn", name: "Burn rate", mark: Flame }]}
+      />,
+    );
+
+    expect(screen.getByRole("tabpanel", { name: "Burn rate" })).toContainElement(
+      screen.getByTestId("v-burn"),
+    );
+  });
+
+  it("opens on Memory when the panel picked last is not contributed any more", () => {
+    render(
+      <WithViews
+        from={[
+          on("navigation", "left"),
+          { ...on("aside", "right"), view: "panel:ext/stats/burn" },
+          on("bottom", "bottom"),
+        ]}
+      />,
+    );
+
+    expect(screen.getByRole("tabpanel", { name: "Memory" })).toBeInTheDocument();
+    expect(screen.queryByTestId("v-burn")).toBeNull();
   });
 });

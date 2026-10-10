@@ -277,12 +277,16 @@ describe("the right-hand region", () => {
   it("shows the focused workspace's open todos and the plane's personas", async () => {
     await onAlpha();
 
+    // Each is a view of the right side (#1678), which opens on Memory.
+    await showView("Todos");
     await untilSays("panel-todos", "Review the rollout plan");
+    await showView("Personas");
     await untilSays("panel-personas", "steward");
     // A persona's row is its badge and its name (#1674); the default says so on hover.
     const fallback = await $('[data-testid="panel-personas"] .is-default .row');
     await fallback.waitForExist({ timeout: 30_000 });
     expect(await fallback.getAttribute("title")).toContain("default");
+    await showView("Memory");
   });
 
   /**
@@ -303,7 +307,9 @@ describe("the right-hand region", () => {
    */
   it("draws its own panels as contributions, with the contributor named on each", async () => {
     await onAlpha();
+    await showView("Todos");
     await untilSays("panel-todos", "Review the rollout plan");
+    await showView("Memory");
 
     const whose = await browser.execute(() =>
       [...document.querySelectorAll("[data-panel-from]")].map((panel) => [
@@ -328,7 +334,7 @@ describe("the right-hand region", () => {
   it("holds no needs-you queue, which is the title bar's now (charter-app#249)", async () => {
     await untilTheStripIsRead();
 
-    const panels = await $('[data-testid="panels"]');
+    const panels = await $('.region-views[data-region="aside"]');
     await panels.waitForExist({ timeout: 20_000 });
     expect(await panels.$('[aria-label="Needs you"]').isExisting()).toBe(false);
     expect(await panels.$(".needs-you").isExisting()).toBe(false);
@@ -338,7 +344,7 @@ describe("the right-hand region", () => {
     // An alert is about a plane and this region is one project's, so alerts moved to the
     // drawer the status line opens (`status-line.e2e.ts` drives it).
     await untilTheStripIsRead();
-    await $('[data-testid="panels"]').waitForExist({ timeout: 20_000 });
+    await $('.region-views[data-region="aside"]').waitForExist({ timeout: 20_000 });
 
     expect(await $('[data-testid="panel-alerts"]').isExisting()).toBe(false);
   });
@@ -347,7 +353,7 @@ describe("the right-hand region", () => {
     await onAlpha();
     await $('[data-testid="repo-svc"]').waitForExist({ timeout: 30_000 });
 
-    const panels = await $('[data-testid="panels"]');
+    const panels = await $('.region-views[data-region="aside"]');
     await expect(panels).not.toHaveText(expect.stringContaining("not fetched"));
     expect(await (await $('[data-testid="panel-repos"]')).isExisting()).toBe(false);
   });
@@ -463,6 +469,60 @@ describe("the left side's activity bar", () => {
   });
 });
 
+describe("the right side's activity bar (#1678)", () => {
+  const BAR = '[role="tablist"][aria-label="Attention"]';
+  const tab = (name: string) => $(`${BAR} [role="tab"][aria-label="${name}"]`);
+  const box = (selector: string) =>
+    browser.execute((where: string) => {
+      const found = document.querySelector(where)?.getBoundingClientRect();
+      return found ? { left: found.left, right: found.right, width: found.width } : null;
+    }, selector);
+
+  it("opens on Memory and switches to Todos, one view at a time", async () => {
+    await onAlpha();
+    await (await tab("Memory")).waitForExist({ timeout: 20_000 });
+    await expect(await tab("Memory")).toHaveAttribute("aria-selected", "true");
+
+    await (await tab("Todos")).click();
+    await $('[data-testid="panel-todos"]').waitForDisplayed({ timeout: 20_000 });
+    await expect(await $('[data-testid="panel-memory"]')).not.toBeDisplayed();
+
+    await (await tab("Memory")).click();
+    await $('[data-testid="panel-memory"]').waitForDisplayed({ timeout: 20_000 });
+  });
+
+  it("puts the side away on a press of the open view, keeps the bar, and brings it back", async () => {
+    await onAlpha();
+    await $('[data-testid="panel-memory"]').waitForDisplayed({ timeout: 20_000 });
+
+    await (await tab("Memory")).click();
+    const slot = await $('[data-panel][id="region-right"]');
+    await browser.waitUntil(async () => ((await slot.getSize("width")) as number) === 0, {
+      timeout: 20_000,
+      timeoutMsg: "the right slot did not go to nothing when its open view was pressed",
+    });
+    await expect(await $(BAR)).toBeDisplayed();
+
+    await (await tab("Memory")).click();
+    await $('[data-testid="panel-memory"]').waitForDisplayed({ timeout: 20_000 });
+    expect((await slot.getSize("width")) as number).toBeGreaterThan(0);
+  });
+
+  it("stands at the window's right edge, and nothing on the right lies over the terminals", async () => {
+    await onAlpha();
+    await $('[data-testid="panel-memory"]').waitForDisplayed({ timeout: 20_000 });
+
+    const bar = await box(".activity-bar[data-side='right']");
+    const slot = await box('[data-panel][id="region-right"]');
+    const centre = await box('[data-panel][id="region-centre"]');
+    const width = await browser.execute(() => document.documentElement.clientWidth);
+    expect(bar).not.toBeNull();
+    expect(bar?.right ?? -1).toBeGreaterThanOrEqual(width - 1);
+    expect(slot?.right ?? Infinity).toBeLessThanOrEqual((bar?.left ?? 0) + 1);
+    expect(centre?.right ?? Infinity).toBeLessThanOrEqual((slot?.left ?? 0) + 1);
+  });
+});
+
 /**
  * **No view lies over the terminals** (#1676): every view of the left side, the right-hand
  * region and both activity bars, each laid out in the real window and measured against the
@@ -540,9 +600,11 @@ describe("the layout as data", () => {
     // #1676, and what is asking for you in the right. Nothing along the bottom.
     await expect(await $('[data-panel][id="region-left"] [data-testid="explorer"]')).toBeExisting();
     await expect(
+      await $('[data-panel][id="region-right"] .region-views[data-region="aside"]'),
+    ).toBeExisting();
+    await expect(
       await $('[data-panel][id="region-left"] [data-testid="changes-view"]'),
     ).toBeExisting();
-    await expect(await $('[data-panel][id="region-right"] [data-testid="panels"]')).toBeExisting();
     await expect(await $('[data-panel][id="region-bottom"]')).not.toBeExisting();
   });
 

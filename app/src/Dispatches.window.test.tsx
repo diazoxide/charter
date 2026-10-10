@@ -21,7 +21,7 @@ import type {
   WorktreeLoss,
 } from "./bindings";
 import { forgetShown, windowShown } from "./test-shown";
-import { stripNamed } from "./test-strips";
+import { stripNamed, showThePanel } from "./test-strips";
 
 /**
  * **The Dispatches tab** (#1452) against the whole window: it is offered from the Sessions
@@ -297,7 +297,7 @@ const selected = () => within(strip()).getByRole("tab", { selected: true }).text
 
 /** Opens the Dispatches tab from the Sessions panel's heading, and answers its table. */
 async function opened(): Promise<HTMLElement> {
-  const panel = await screen.findByTestId("panel-sessions");
+  const panel = await showThePanel("Sessions");
   await userEvent.click(await within(panel).findByRole("button", { name: "Open dispatches" }));
   return screen.findByRole("table", { name: "Dispatches" });
 }
@@ -359,7 +359,7 @@ describe("the Dispatches tab", () => {
   it("is offered from the palette", async () => {
     core();
     render(<App />);
-    await screen.findByTestId("panel-sessions");
+    await showThePanel("Sessions");
 
     await userEvent.keyboard("{F2}");
     const palette = await screen.findByRole("dialog", { name: "Command palette" });
@@ -607,7 +607,7 @@ describe("the Dispatches tab", () => {
     };
     core({ rows: [], notStarted: [held, blocked] });
     render(<App />);
-    const panel = await screen.findByTestId("panel-sessions");
+    const panel = await showThePanel("Sessions");
     await userEvent.click(await within(panel).findByRole("button", { name: "Open dispatches" }));
 
     const listed = await screen.findAllByTestId("dispatch-not-started");
@@ -633,7 +633,7 @@ describe("the Dispatches tab", () => {
       };
       const { asked } = core({ rows: [], notStarted: [waiting] });
       render(<App />);
-      const panel = await screen.findByTestId("panel-sessions");
+      const panel = await showThePanel("Sessions");
       await userEvent.click(await within(panel).findByRole("button", { name: "Open dispatches" }));
 
       const listed = await screen.findAllByTestId("dispatch-not-started");
@@ -665,7 +665,7 @@ describe("the Dispatches tab", () => {
       };
       const { asked } = core({ rows: [], notStarted: [waiting] });
       render(<App />);
-      const panel = await screen.findByTestId("panel-sessions");
+      const panel = await showThePanel("Sessions");
       await userEvent.click(await within(panel).findByRole("button", { name: "Open dispatches" }));
       await screen.findAllByTestId("dispatch-not-started");
       const reads = () => asked.filter((one) => one.cmd === "dispatches").length;
@@ -686,7 +686,7 @@ describe("the Dispatches tab", () => {
   it("says so when every record in the store is one purlis will not draw", async () => {
     core({ rows: [], undrawn: 1 });
     render(<App />);
-    const panel = await screen.findByTestId("panel-sessions");
+    const panel = await showThePanel("Sessions");
     await userEvent.click(await within(panel).findByRole("button", { name: "Open dispatches" }));
 
     expect(await screen.findByTestId("dispatches-undrawn")).toHaveTextContent(
@@ -698,7 +698,7 @@ describe("the Dispatches tab", () => {
   it("says there are none yet in a project whose chats have dispatched nothing", async () => {
     core({ rows: [] });
     render(<App />);
-    const panel = await screen.findByTestId("panel-sessions");
+    const panel = await showThePanel("Sessions");
     await userEvent.click(await within(panel).findByRole("button", { name: "Open dispatches" }));
 
     expect(await screen.findByTestId("dispatches-empty")).toHaveTextContent("No dispatches yet");
@@ -707,7 +707,7 @@ describe("the Dispatches tab", () => {
   it("says what purlis could not read and why, and reads again on a press", async () => {
     const { asked } = core({ rows: new Error("the store is a link out of the project") });
     render(<App />);
-    const panel = await screen.findByTestId("panel-sessions");
+    const panel = await showThePanel("Sessions");
     await userEvent.click(await within(panel).findByRole("button", { name: "Open dispatches" }));
 
     const notice = await waitFor(() => {
@@ -1185,7 +1185,7 @@ describe("a session record's tab", () => {
   it("lists the dispatches its chat made: persona, task and outcome", async () => {
     core();
     render(<App />);
-    const panel = await screen.findByTestId("panel-sessions");
+    const panel = await showThePanel("Sessions");
     await userEvent.click(await within(panel).findByRole("button", { name: /Ship the rollout/ }));
     await screen.findByTestId("session-record");
 

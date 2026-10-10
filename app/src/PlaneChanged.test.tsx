@@ -150,9 +150,11 @@ function core(): {
   };
 }
 
+// The Todos view is mounted and hidden while Memory is the open view (#1678): what it holds is
+// read whether or not it is the one on screen.
 const todoRows = () =>
   within(screen.getByTestId("panel-todos"))
-    .queryAllByRole("listitem")
+    .queryAllByRole("listitem", { hidden: true })
     .map((row) => row.textContent);
 
 beforeEach(() => {

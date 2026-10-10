@@ -1,5 +1,5 @@
 import { useCallback, useState } from "react";
-import type { ViewId } from "./sideViews";
+import { ATTENTION_VIEWS, isPanelView, type OwnViewId, type ViewId } from "./sideViews";
 import { commands } from "./bindings";
 import { forgetTextSizes, onTextSizes, textSizes, type TextSizes } from "./textSize";
 import {
@@ -89,7 +89,7 @@ import { atCreation, onLayoutMovedAside, sayAboutThisMachine, type Reading } fro
 export type RegionId = "navigation" | "aside";
 
 // A view (`sideViews.ts`): what a region with an activity bar shows, one at a time.
-export { VIEWS, type ViewId } from "./sideViews";
+export { ATTENTION_VIEWS, VIEWS, type OwnViewId, type PanelViewId, type ViewId } from "./sideViews";
 
 /** Where a region can be put. These are the slots `RegionFrame` draws, and the centre is not
  *  one of them: the terminal panes are the product, and a window with no centre is not a state
@@ -130,9 +130,14 @@ export type Definition = {
   name: string;
   /** How big its slot is when nothing has been dragged, as a percentage of the group. */
   size: number;
-  /** The views it switches between with an activity bar, in the bar's order, the first open
-   *  by default. A region without them draws its content alone. */
-  views?: readonly ViewId[];
+  /** The views it switches between with an activity bar, in the bar's order. A region without
+   *  them draws its content alone. */
+  views?: readonly OwnViewId[];
+  /** The view open until the person picks another, when it is not the bar's first (#1678: the
+   *  right side opens on Memory, and Todos is first on its bar). */
+  opens?: ViewId;
+  /** It also holds the approved extensions' panels, each a view after purlis's own (#1678). */
+  panels?: true;
 };
 
 /**
@@ -152,23 +157,54 @@ export const CATALOGUE: Record<RegionId, Definition> = {
     // Search and Changes since #1676: Changes holds what the bottom region drew (B-7).
     views: ["chats", "explorer", "search", "changes"],
   },
-  aside: { name: "Attention", size: 20 },
+  // The right is "for you" (ADR 0038 as amended 2026-10-10, B-13): what is asking for you
+  // and what you keep, each a view, opening on Memory; the extensions' panels after them.
+  aside: {
+    name: "Attention",
+    size: 20,
+    views: ATTENTION_VIEWS,
+    opens: "memory",
+    panels: true,
+  },
 };
 
 /** Every region there is, in a fixed order, so anything iterating them is deterministic. */
 export const REGION_IDS = Object.keys(CATALOGUE) as RegionId[];
 
-/** The region whose activity bar holds `view`. */
-export function regionOf(view: ViewId): RegionId {
-  const holds = REGION_IDS.find((id) => CATALOGUE[id].views?.includes(view));
-  if (holds === undefined) throw new Error(`no region holds the ${view} view`);
-  return holds;
+/** Whether `view` is one region `id` can show: one of its own, or an extension's panel where
+ *  the region takes them. */
+function holds(id: RegionId, view: string): view is ViewId {
+  const region = CATALOGUE[id];
+  return (
+    (region.views as readonly string[] | undefined)?.includes(view) === true ||
+    (region.panels === true && isPanelView(view))
+  );
 }
 
-/** The view a region with views shows: the one picked last, else its first. Nothing for a
- *  region without views. */
-export function openView(placement: Placement): ViewId | undefined {
-  return placement.view ?? CATALOGUE[placement.id].views?.[0];
+/** The region whose activity bar holds `view`. */
+export function regionOf(view: ViewId): RegionId {
+  const found = REGION_IDS.find((id) => holds(id, view));
+  if (found === undefined) throw new Error(`no region holds the ${view} view`);
+  return found;
+}
+
+/** The view a region opens on until the person picks one. */
+const opening = (id: RegionId): ViewId | undefined =>
+  CATALOGUE[id].opens ?? CATALOGUE[id].views?.[0];
+
+/**
+ * The view a region with views shows: the one picked last, else the one it opens on. Nothing
+ * for a region without views.
+ *
+ * `panels` are the extensions' panels the window has now (#1678). One picked last whose
+ * extension is not contributing it any more — removed, or not approved on this machine — is not
+ * there to show, so the region opens on its default; the file keeps the pick, so it comes back
+ * with the panel.
+ */
+export function openView(placement: Placement, panels: readonly ViewId[] = []): ViewId | undefined {
+  const picked = placement.view;
+  if (picked !== undefined && (!isPanelView(picked) || panels.includes(picked))) return picked;
+  return opening(placement.id);
 }
 
 /**
@@ -187,7 +223,8 @@ export type Placement = {
   /** How big its slot was left, as a percentage of the group (0..100). Absent until something
    *  has been dragged, in which case the catalogue's default is used. */
   size?: number;
-  /** The view open in a region with views, once one was picked (#1673). Absent, its first. */
+  /** The view open in a region with views, once one was picked (#1673). Absent, the one it
+   *  opens on. */
   view?: ViewId;
 };
 
@@ -211,6 +248,9 @@ export const VERSION = 2;
 /** The most projects whose arrangements are kept, read or sent: the core's own bound
  *  (`purlis_core::windowprefs::MOST_PROJECTS`), so the file stays inside its size. */
 export const MOST_PROJECTS = 32;
+
+/** The longest view name kept from the file: an extension's panel key is two short ids. */
+const MOST_VIEW = 200;
 
 /** A region id version 1 wrote, by the id it has now. */
 const RENAMED: Record<string, RegionId> = { explorer: "navigation" };
@@ -269,8 +309,9 @@ export function useArrangement(project?: string): {
   move: (id: RegionId, side: Side, order: number) => void;
   /** Remember how big each slot was left. Called with the group's settled layout. */
   resized: (sizes: Partial<Record<Side, number>>) => void;
-  /** A press of a view's icon on its activity bar: {@link picked}. */
-  pick: (view: ViewId) => void;
+  /** A press of a view's icon on its activity bar: {@link picked}. `panels` are the
+   *  extensions' panels the bar drew, which decide what was open. */
+  pick: (view: ViewId, panels?: readonly ViewId[]) => void;
   /** A view asked for by a key or the palette: {@link showing}. */
   show: (view: ViewId) => void;
 } {
@@ -287,7 +328,10 @@ export function useArrangement(project?: string): {
     [project],
   );
 
-  const pick = useCallback((view: ViewId) => change((was) => picked(was, view)), [change]);
+  const pick = useCallback(
+    (view: ViewId, panels?: readonly ViewId[]) => change((was) => picked(was, view, panels)),
+    [change],
+  );
   const show = useCallback((view: ViewId) => change((was) => showing(was, view)), [change]);
 
   const toggle = useCallback(
@@ -327,10 +371,14 @@ export function useArrangement(project?: string): {
  * of a side that is out puts the side away; any other view opens, and a side that was away comes
  * back on it. The view stays mounted either way (`RegionFrame`).
  */
-export function picked(arrangement: Arrangement, view: ViewId): Arrangement {
+export function picked(
+  arrangement: Arrangement,
+  view: ViewId,
+  panels: readonly ViewId[] = [],
+): Arrangement {
   const region = regionOf(view);
   const was = arrangement.find((one) => one.id === region);
-  if (was !== undefined && !was.collapsed && openView(was) === view) {
+  if (was !== undefined && !was.collapsed && openView(was, panels) === view) {
     return arrangement.map((one) => (one.id === region ? { ...one, collapsed: true } : one));
   }
   return showing(arrangement, view);
@@ -625,12 +673,17 @@ function placements(regions: unknown, said: string[]): Arrangement {
       said.push(`${fallback.id}'s size ${JSON.stringify(one.size)} is not a percentage above 0`);
     }
     const views = CATALOGUE[fallback.id].views;
-    const view = views?.find((known) => known === one.view);
+    // An extension's panel is kept by name, bounded, whether or not it is contributed now: its
+    // extension may be approved again, and `openView` draws the default while it is not.
+    const view =
+      typeof one.view === "string" && one.view.length <= MOST_VIEW && holds(fallback.id, one.view)
+        ? one.view
+        : undefined;
     if (one.view !== undefined && view === undefined) {
       said.push(
         views === undefined
           ? `${fallback.id} has no views, so its view ${JSON.stringify(one.view)} was left out`
-          : `${JSON.stringify(one.view)} is not a view of ${fallback.id} (${views.join(", ")}), so it opens on ${views[0]}`,
+          : `${JSON.stringify(one.view)} is not a view of ${fallback.id} (${views.join(", ")}${CATALOGUE[fallback.id].panels ? ", or an extension's panel" : ""}), so it opens on ${opening(fallback.id)}`,
       );
     }
     return {

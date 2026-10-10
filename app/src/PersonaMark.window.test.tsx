@@ -12,7 +12,7 @@ import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
 import type { PersonaMark as Mark } from "./bindings";
-import { findStripNamed, stripNamed } from "./test-strips";
+import { findStripNamed, stripNamed, showThePanel } from "./test-strips";
 
 /**
  * **A persona's icon and colour, wherever the persona appears** (#1449), against the whole
@@ -250,7 +250,7 @@ describe("a persona with an icon and a colour is drawn with them", () => {
   it("on its row in the Personas panel, beside a persona that is its initials", async () => {
     await opened();
 
-    const panel = await screen.findByTestId("panel-personas");
+    const panel = await showThePanel("Personas");
     expect(marksIn(panel, "devops")).toEqual([ROCKET_ON_TEAL]);
     const [qa] = marksIn(panel, "qa");
     expect(qa).toMatchObject({ mark: "initials", initials: "QA" });
@@ -260,7 +260,7 @@ describe("a persona with an icon and a colour is drawn with them", () => {
 
   it("on its own view's tab and heading", async () => {
     await opened();
-    const panel = await screen.findByTestId("panel-personas");
+    const panel = await showThePanel("Personas");
 
     await userEvent.click(within(panel).getByRole("button", { name: /devops/ }));
     await screen.findByText("It remembers 0 things.");
@@ -308,7 +308,7 @@ describe("a persona with an icon and a colour is drawn with them", () => {
 describe("the persona's view lets the person pick", () => {
   it("writes the pick to the definition, and every surface draws it", async () => {
     const { asked, tab } = await opened();
-    const panel = await screen.findByTestId("panel-personas");
+    const panel = await showThePanel("Personas");
     await userEvent.click(within(panel).getByRole("button", { name: /devops/ }));
     const picker = await screen.findByRole("region", { name: "Icon and colour" });
     expect(within(picker).getByRole("radio", { name: "rocket" })).toBeChecked();
@@ -338,7 +338,7 @@ describe("the persona's view lets the person pick", () => {
       ]),
     );
 
-    const panel = await screen.findByTestId("panel-personas");
+    const panel = await showThePanel("Personas");
     await userEvent.click(within(panel).getByRole("button", { name: /devops/ }));
 
     const picker = await screen.findByRole("region", { name: "Icon and colour" });
@@ -368,7 +368,7 @@ describe("the persona's view lets the person pick", () => {
     await waitFor(() => expect(marksIn(tab, "devops")[0]).toMatchObject({ mark: "image" }));
     await waitFor(() => expect(drawImage).toHaveBeenCalled());
     expect(tab.querySelector(".persona-mark canvas")).not.toBeNull();
-    const panel = await screen.findByTestId("panel-personas");
+    const panel = await showThePanel("Personas");
     expect(marksIn(panel, "devops")[0]).toMatchObject({ mark: "image", icon: undefined });
   });
 });

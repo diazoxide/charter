@@ -9,6 +9,7 @@ import {
 import { dirname, join } from "node:path";
 import { $, $$, browser, expect } from "@wdio/globals";
 import { copyFixturePlane } from "../harness.js";
+import { showView } from "../opening.js";
 
 /**
  * **A tab that holds something other than a chat**, in the built app (ADR 0043, as
@@ -75,6 +76,8 @@ async function inFront(): Promise<string | null> {
 
 /** Waits until the plane's panels are drawn, so a persona's row can be pressed. */
 async function untilThePersonasAreListed(): Promise<void> {
+  // Personas is a view of the right side (#1678), which opens on Memory.
+  await showView("Personas");
   await browser.waitUntil(
     async () => (await $('[data-testid="panel-personas"]').getText()).includes("devops"),
     { timeout: 30_000, interval: 250, timeoutMsg: "the personas panel never listed devops" },
@@ -291,6 +294,8 @@ describe("view tabs", function () {
     const TITLE = "Deploys freeze on Fridays";
     const BODY = "Nothing ships after Thursday noon.";
     const SECTION = '[data-testid="panel-memory"]';
+    // Memory is a view of the right side (#1678); a spec before this one left Personas open.
+    before(async () => await showView("Memory"));
 
     /** The journal's file for the memory this describe makes, or `undefined` before it is. */
     const made = (plane: string): string | undefined => {

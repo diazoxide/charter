@@ -14,7 +14,7 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
 import type { SessionRecordRow } from "./bindings";
 import { heardFrom, lostOnResume, type Resuming } from "./sessions";
-import { stripNamed } from "./test-strips";
+import { stripNamed, showThePanel } from "./test-strips";
 
 /**
  * **The Sessions panel and Resume** (SI-8d, ADR 0064) against the whole window: the operator's
@@ -202,7 +202,7 @@ describe("the Sessions panel", () => {
   it("lists the workspace's session records newest first, marking the resumable", async () => {
     core();
     render(<App />);
-    const panel = await screen.findByTestId("panel-sessions");
+    const panel = await showThePanel("Sessions");
     await waitFor(() => expect(within(panel).getByText("Ship the widget")).toBeTruthy());
 
     // One line a record (#1674): its title, and when, as whom and whether it resumes on hover.
@@ -217,7 +217,7 @@ describe("the Sessions panel", () => {
   it("opens a record as a read-only view tab of rendered Markdown", async () => {
     const { asked } = core();
     render(<App />);
-    const panel = await screen.findByTestId("panel-sessions");
+    const panel = await showThePanel("Sessions");
     await userEvent.click(await within(panel).findByRole("button", { name: /Ship the widget/ }));
 
     const view = await screen.findByTestId("session-record");
@@ -237,7 +237,7 @@ describe("the Sessions panel", () => {
       "Policy forbids a persona's own hosts. Locked by policy, set by Platform team in /etc/purlis/policy.json.";
     core({ personaHosts: { hosts: ["10.0.0.5:6443"], holds: true, locked } });
     render(<App />);
-    const panel = await screen.findByTestId("panel-sessions");
+    const panel = await showThePanel("Sessions");
     await userEvent.click(await within(panel).findByRole("button", { name: /Ship the widget/ }));
 
     await screen.findByTestId("session-record");
@@ -250,7 +250,7 @@ describe("the Sessions panel", () => {
   it("says a persona's hosts wait for this machine's Allow before any Resume reaches them (#1362)", async () => {
     core({ personaHosts: { hosts: ["10.0.0.5:6443"], holds: true, locked: null, wait: true } });
     render(<App />);
-    const panel = await screen.findByTestId("panel-sessions");
+    const panel = await showThePanel("Sessions");
     await userEvent.click(await within(panel).findByRole("button", { name: /Ship the widget/ }));
 
     await screen.findByTestId("session-record");
@@ -264,7 +264,7 @@ describe("the Sessions panel", () => {
   it("resumes a record from its row's menu as a new chat that says it was resumed", async () => {
     const { asked } = core();
     render(<App />);
-    const panel = await screen.findByTestId("panel-sessions");
+    const panel = await showThePanel("Sessions");
     const row = await within(panel).findByRole("button", { name: /Ship the widget/ });
 
     fireEvent.contextMenu(row);
@@ -281,7 +281,7 @@ describe("the Sessions panel", () => {
   it("resumes from the Resume button on the record's own tab", async () => {
     const { asked } = core();
     render(<App />);
-    const panel = await screen.findByTestId("panel-sessions");
+    const panel = await showThePanel("Sessions");
     await userEvent.click(await within(panel).findByRole("button", { name: /Ship the widget/ }));
     await screen.findByTestId("session-record");
 
@@ -335,7 +335,7 @@ describe("the Sessions panel", () => {
       ],
     });
     render(<App />);
-    const panel = await screen.findByTestId("panel-sessions");
+    const panel = await showThePanel("Sessions");
     fireEvent.contextMenu(await within(panel).findByRole("button", { name: /Ship the widget/ }));
     await userEvent.click(
       await screen.findByRole("menuitem", { name: "Resume session: Ship the widget" }),
@@ -359,7 +359,7 @@ describe("the Sessions panel", () => {
       ],
     });
     render(<App />);
-    const panel = await screen.findByTestId("panel-sessions");
+    const panel = await showThePanel("Sessions");
     fireEvent.contextMenu(await within(panel).findByRole("button", { name: /Plan it/ }));
     await userEvent.click(await screen.findByRole("menuitem", { name: "Resume session: Plan it" }));
 
@@ -383,7 +383,7 @@ describe("the Sessions panel", () => {
       ],
     });
     render(<App />);
-    const panel = await screen.findByTestId("panel-sessions");
+    const panel = await showThePanel("Sessions");
     fireEvent.contextMenu(await within(panel).findByRole("button", { name: /Ship the widget/ }));
     await userEvent.click(
       await screen.findByRole("menuitem", { name: "Resume session: Ship the widget" }),
@@ -420,7 +420,7 @@ describe("the palette's session rows", () => {
   it("offers to open and to resume each of the focused workspace's records", async () => {
     core();
     render(<App />);
-    await screen.findByTestId("panel-sessions");
+    await showThePanel("Sessions");
     await waitFor(() =>
       expect(screen.getByTestId("panel-sessions").textContent).toContain("Plan it"),
     );
@@ -455,8 +455,7 @@ describe("the plane root's tab", () => {
     );
     await userEvent.click(rootTab);
 
-    const panels = await screen.findByTestId("panels");
-    const sessions = await within(panels).findByTestId("panel-sessions");
+    const sessions = await showThePanel("Sessions");
     await waitFor(() => expect(within(sessions).getByText("Tidy personas")).toBeTruthy());
     expect(within(sessions).queryByText("Ship the widget")).toBeNull();
   });

@@ -171,15 +171,27 @@ export async function closeProject(closer: string): Promise<void> {
 }
 
 /**
- * **Shows a view of the left side** (#1673): presses its icon on the activity bar unless it is
+ * **Shows a view of a side** (#1673, #1678): presses its icon on the activity bar unless it is
  * already the open one, since a press of the open view puts the side away. The left side opens
- * on Chats, so a spec about the explorer's rows shows the Explorer first and puts Chats back
- * after, leaving the window as the next spec expects it.
+ * on Chats and the right on Memory, so a spec about the explorer's rows shows the Explorer first
+ * and puts Chats back after, leaving the window as the next spec expects it; a spec about another
+ * right-hand panel puts Memory back the same way.
  */
-export async function showView(name: "Chats" | "Explorer" | "Search" | "Changes"): Promise<void> {
-  const tab = await $(
-    `[role="tablist"][aria-label="Navigation"] [role="tab"][aria-label="${name}"]`,
-  );
+export async function showView(
+  name:
+    | "Chats"
+    | "Explorer"
+    | "Search"
+    | "Changes"
+    | "Todos"
+    | "Memory"
+    | "Personas"
+    | "Sessions"
+    | "Vaults",
+): Promise<void> {
+  const left = ["Chats", "Explorer", "Search", "Changes"].includes(name);
+  const side = left ? "Navigation" : "Attention";
+  const tab = await $(`[role="tablist"][aria-label="${side}"] [role="tab"][aria-label="${name}"]`);
   await tab.waitForExist({ timeout: 30_000 });
   if ((await tab.getAttribute("aria-selected")) !== "true") await tab.click();
   await browser.waitUntil(async () => (await tab.getAttribute("aria-selected")) === "true", {
