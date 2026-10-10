@@ -690,7 +690,12 @@ export function Explorer({
             </ReadRefused>
           )}
           {filterBox}
-          <div role="tree" aria-label={`Chats and files of ${name}`} onKeyDown={onTreeKey}>
+          <div
+            className="tree"
+            role="tree"
+            aria-label={`Chats and files of ${name}`}
+            onKeyDown={onTreeKey}
+          >
             <ChatList chats={drawnChats} {...chatRows} />
             {placeLine(ELSEWHERE_ROW, of.elsewhere, IN_THIS_BRANCH)}
             <ul className="files" role="group">
@@ -721,7 +726,7 @@ export function Explorer({
           are outside it. The ones about ONE clone (its worktrees could not be listed, are
           still coming, or are none) stay inside that clone's `<details>`, beside the row they
           explain, and so inside the tree: moving them out would take them away from it. */}
-        <div role="tree" aria-label="Repos and branches" onKeyDown={onTreeKey}>
+        <div className="tree" role="tree" aria-label="Repos and branches" onKeyDown={onTreeKey}>
           <RovingFocusGroup.Item asChild tabStopId={ROOT} active={spot === undefined}>
             <button
               type="button"

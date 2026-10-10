@@ -3,6 +3,7 @@ import { act, cleanup, render, screen } from "@testing-library/react";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
 import { ASK_AGAIN_MS, BranchTree } from "./BranchTree";
+import { drawnWith } from "../cascade.testkit";
 import { ReferenceChats, type ChatsForReferences } from "../references";
 import type {
   ChatTouching,
@@ -230,5 +231,25 @@ describe("the file tab's live marker", () => {
     await touch(3, "src/lib.rs");
     await settle();
     expect(asked.filter((cmd) => cmd === "worktree_list")).toHaveLength(2);
+  });
+});
+
+describe("the file tab's tree, in the window's one tree style (#1672)", () => {
+  it("draws the file it shows selected, and its folders' levels with a guide", async () => {
+    core([]);
+    render(<BranchTree plane={PLANE} place={CUT} picked="README.md" onPick={() => {}} />);
+    const file = await screen.findByRole("treeitem", { name: /^README\.md/ });
+    const tree = screen.getByRole("tree", { name: /^Files of/ });
+    expect(tree).toHaveClass("tree");
+
+    expect(file.getAttribute("aria-selected")).toBe("true");
+    expect(drawnWith(file, "background")).toBe("var(--list-selected)");
+    expect(drawnWith(file, "box-shadow")).toContain("var(--list-selected-edge)");
+    const folder = screen.getByRole("treeitem", { name: /^src/ });
+    expect(drawnWith(folder, "background", { hover: true })).toBe("var(--surface-hover)");
+    const groups = tree.querySelectorAll('[role="group"]');
+    expect(groups.length).toBeGreaterThan(0);
+    for (const group of groups)
+      expect(drawnWith(group, "border-inline-start")).toBe("1px solid var(--tree-guide)");
   });
 });

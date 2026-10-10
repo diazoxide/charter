@@ -42,7 +42,7 @@ Zed's, and it is the only one that can colour the terminal at all.
 ## The vocabulary
 
 `TOKENS` in `app/src/theme/theme.ts` is the list, with a comment on each group saying what it
-means. Seventy-one names in thirteen groups:
+means. Seventy-nine names in fifteen groups:
 
 | group                                  | tokens                                                                                          | what it is                                                                                        |
 | -------------------------------------- | ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
@@ -52,6 +52,8 @@ means. Seventy-one names in thirteen groups:
 | `border.*`                             | `subtle` `strong`                                                                               |                                                                                                   |
 | `accent.*`, `focus.ring`, `tab.active` | `base` `surface`                                                                                | what purlis is drawing attention to                                                              |
 | `layer.*`                              | `project` `workspace` `chat` `selected`                                                         | which of the three strips of the axis a row is, and the tab you are on                            |
+| `list.*`                               | `selected` `selected-edge`                                                                      | the row a tree or a list has selected: a fill in the accent's hue and an edge down its start      |
+| `tree.*`                               | `guide`                                                                                         | a tree's indent guides, one straight hairline per level                                           |
 | `needs-you.*`                          | `base` `text`                                                                                   | the one signal this app exists for                                                                |
 | `danger.*`                             | `base` `surface` `text` `wash`                                                                  | an answer that cannot be taken back                                                               |
 | `state.*`                              | `running` `waiting` `waiting-glow` `failed` `success` `unreadable`                              | what a chat, or a check on a branch, is doing                                                     |
@@ -103,6 +105,44 @@ strip, never under or around one — the operator's _"very very light visible bo
 little bit highlight separation"_. Its own token because `border.subtle` sat too close to the
 layer shades to be seen, and a theme should be able to lift the tabs apart without lifting every
 other subtle rule in the window.
+
+**One tree style, and a selected row that looks selected** (#1672). Every tree in the window —
+the Chats tree, the explorer, a file tab's files — is drawn by one class, `.tree` in `App.css`,
+and not by a shared component (ADR 0037): each tree keeps its own markup and keys, and the class
+draws its levels, its guides, its selected row and where the keyboard is.
+
+- **A level is one step in and one straight guide**, VS Code's: a hairline in `tree.guide` down
+  the whole level, under the row it hangs from. A tree whose levels are `role="group"`s (the
+  explorer, a file tab) draws it as the group's inline-start border; a flat tree whose rows say
+  their level (`<li data-level>`, the Chats tree) draws one guide per level above the row, as a
+  background of `--tree-depth` columns. No elbows: an elbow has to know where its row's first line
+  is, and every time a row's metrics moved the elbows pointed above the name. A straight line
+  knows nothing about the rows beside it and masks nothing, so it is right on whichever surface
+  a region is moved onto (ADR 0038).
+- **Selected is `list.selected` and an edge of `list.selected-edge`**, on a row that is
+  `aria-current` (a tree that marks the current item: the chat in front, the spot the next chat
+  starts in) or `aria-selected` (one that selects: the file a file tab shows). It is not
+  `surface.hover`, which is the pointer and which a selected chat used to be drawn in, so the
+  chat in front and a hovered one looked the same; and it is not `layer.selected`, which belongs
+  to the three strips of the axis. The edge is a shape, so selected is never told by colour
+  alone; it is an inset shadow and not a border, so selecting a row moves nothing in it. Both
+  turn with a workspace's colour, as the accent does (`TINTED_WINDOW`).
+- **The keyboard's place is a ring and only a ring**: the window's own `focus.ring` outline
+  round the row, with no fill, so a focused row is never read as selected and the selected row
+  the keyboard is on shows both.
+
+`contrast.test.ts` holds everything a row draws on `list.selected` — primary, secondary and
+muted text at 4.5:1, the state marks, the needs-you hand, the edge and the focus ring at 3:1 — and the guide on
+each surface a tree is drawn on, and holds `list.selected` apart from `surface.hover` and
+`layer.selected` in every theme and tint. The ceiling that sets is the needs-you hand: a fill
+light enough to read from across the room would take `needs-you.base` under 3:1 on it in
+charter-dark, so the dark fill is a deep accent blue and the edge does the shouting. The
+gallery (`gallery.test.tsx`) draws a tree of each shape in both themes, and
+`ChatsSection.window.test.tsx` holds the chat in front to the selected look, a hovered row to
+the hover's, and the keyboard's ring to neither, against the whole window
+(`cascade.testkit.ts` picks the winning declaration among `App.css`'s top-level rules by
+specificity and order, with `:hover` and `:focus-visible` as asked, since jsdom does neither;
+what it answers is the declared value, and a narrowing `@container` query is not in force).
 
 **A workspace's colour is a hue shift of the theme in force, not a colour of its own**
 (purlis#281, ADR 0048). A workspace names one of eight hues (`tint.PALETTE`, the same eight

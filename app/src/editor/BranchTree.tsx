@@ -165,6 +165,7 @@ export function BranchTree({
       <RovingFocusGroup.Root asChild orientation="vertical" {...stop}>
         <div
           ref={treeRef}
+          className="tree"
           role="tree"
           aria-label={`Files of ${placeName(place)}`}
           data-testid="piece-files-tree"

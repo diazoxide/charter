@@ -25,6 +25,9 @@
     "accent.surface": "#1f2a2f",
     "focus.ring": "#6a9fb5",
     "tab.active": "#2b3338",
+    "list.selected": "#14293a",
+    "list.selected-edge": "#6a9fb5",
+    "tree.guide": "#3a3a3a",
 
     "layer.project": "#131313",
     "layer.workspace": "#171717",
