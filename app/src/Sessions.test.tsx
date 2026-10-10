@@ -278,7 +278,7 @@ describe("the Sessions panel", () => {
     await waitFor(() => expect(tabNames()).toContain("steward 1"));
     const call = asked.find((one) => one.cmd === "resume_session");
     expect(call?.args).toMatchObject({ plane: PLANE, path: NEWER, insteadOf: null });
-    expect(await screen.findByText(/was resumed — conversation/)).toBeTruthy();
+    expect(await screen.findByText(/was resumed where it left off/)).toBeTruthy();
   });
 
   it("resumes from the Resume button on the record's own tab", async () => {
@@ -344,7 +344,7 @@ describe("the Sessions panel", () => {
       await screen.findByRole("menuitem", { name: "Resume session: Ship the widget" }),
     );
 
-    expect(await screen.findByText(/was resumed — conversation/)).toBeTruthy();
+    expect(await screen.findByText(/was resumed where it left off/)).toBeTruthy();
     expect(
       await screen.findByText(/does not say which directory it ran in, so it starts in/),
     ).toBeTruthy();
@@ -381,7 +381,7 @@ describe("the Sessions panel", () => {
           resumedChat(8, {
             resumed: null,
             fresh:
-              "claude could not bring back conversation 0f6c, so it starts with the record in its briefing",
+              "claude could not bring back its conversation, so it starts with the record in its briefing",
           }),
       ],
     });

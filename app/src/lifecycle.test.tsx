@@ -226,12 +226,16 @@ describe("what the window does with the chats the core already has", () => {
     await vi.waitFor(() => expect(panes()).toEqual(["session 8"]));
   });
 
-  it("says a chat was resumed, and by which conversation", async () => {
+  it("says a chat was resumed where it left off, and names no conversation id", async () => {
+    // #1646: the operator's screenshot read "… was resumed — conversation 082aefb8-…". An id
+    // means nothing to the person; the session record and Activity keep it.
     core([chat({ session: 7, resumed: "11111111-2222-4333-8444-555555555555", in_front: true })]);
 
     render(<App />);
 
-    expect(await screen.findByText(/resumed/i)).toHaveTextContent("11111111");
+    const note = await screen.findByText(/resumed/i);
+    expect(note).toHaveTextContent(/was resumed where it left off$/);
+    expect(note).not.toHaveTextContent("11111111");
   });
 
   it("says a chat came back as a new one, and why", async () => {

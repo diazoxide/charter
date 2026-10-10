@@ -327,7 +327,7 @@ describe("a dismissed Notice", () => {
     expect(await screen.findByText(/came back as a new chat/)).toBeInTheDocument();
   });
 
-  it("about a resumed chat names its conversation, so another one shows", async () => {
+  it("about a resumed chat is kept by its conversation, so another one shows", async () => {
     // D-NO2-9: the occurrence is the conversation the chat was resumed by.
     const resumed = (conversation: string) => [chat(1, "one", { resumed: conversation })];
     const { asked } = core(resumed("conv-a"), { gone: [] });
