@@ -2594,6 +2594,9 @@ impl Planes {
             let smart = Arc::clone(&self.smart);
             let me = Arc::clone(&me);
             let every_agent = Arc::clone(&self.kill_switch);
+            // The event log, and the key the hook channel records this project's chats under.
+            let events = self.events.clone();
+            let events_root = id.root().to_path_buf();
             chats
                 .sessions()
                 .when_one_ends(Arc::new(move |session, exit| {
@@ -2617,6 +2620,22 @@ impl Planes {
                         });
                     }
                     let changed = hooks::held_board(&board).exited(session, hooks::code_of(&exit));
+                    // **Its sub-agents' runs end with its own** (ADR 0076 §6, #1084), in the
+                    // end state and for the cause the host knows its run ended by: its own stop,
+                    // or the exit status. Never a hook line, which the chat writes.
+                    if let Some(events) = &events {
+                        let held = me.get().and_then(std::sync::Weak::upgrade);
+                        let by = the_host_s_stop(
+                            every_agent.is_stopped(),
+                            held.as_ref().is_some_and(|held| held.chats.ending()),
+                            held.as_ref()
+                                .is_some_and(|held| held.stopping().is_stopping(session)),
+                            held.as_ref()
+                                .is_some_and(|held| held.chats.recorded_chat(session).is_none()),
+                        );
+                        let (state, cause) = how_its_run_ended(by, &exit);
+                        its_children_end(events, &events_root, session, state, cause);
+                    }
                     // A persona chat that still owed its asking chat a report has ended
                     // without one: that chat is told it failed, now (#1443). Before the
                     // window is told, so what it reads next already says so. **Only for a
@@ -3431,6 +3450,75 @@ fn resolving_with(
                 why: Some(why),
             }
         }
+    }
+}
+
+/// **What the host ended chat `session`'s program for, if it was the host** (ADR 0076 §2,
+/// D-1084-1): the kill switch, then a quit or the project let go of, then the person's stop of
+/// it, then a close of its tab (a task ended at its report is closed too). `None` where the
+/// program ended by itself, which its exit status then tells. Read from the host's own state,
+/// never from anything a chat sent.
+fn the_host_s_stop(
+    killed: bool,
+    quitting: bool,
+    stopping: bool,
+    closed: bool,
+) -> Option<purlis_core::state::run::StopBy> {
+    use purlis_core::state::run::StopBy;
+    if killed {
+        Some(StopBy::Killed)
+    } else if quitting {
+        Some(StopBy::Quit)
+    } else if stopping {
+        Some(StopBy::Operator)
+    } else if closed {
+        Some(StopBy::Closed)
+    } else {
+        None
+    }
+}
+
+/// **The end state and cause of a chat's run whose program ended with `exit`**, stopped by the
+/// host for `by` where it was (ADR 0076 §2): a stop the host caused is `stopped` whatever the
+/// code says; otherwise code 0 is `completed` and anything else, a signal included, `failed`,
+/// for `exited`.
+fn how_its_run_ended(
+    by: Option<purlis_core::state::run::StopBy>,
+    exit: &purlis_core::session::Exit,
+) -> (
+    purlis_core::state::run::RunState,
+    purlis_core::state::run::Cause,
+) {
+    use purlis_core::state::run::{Cause, Exit, RunState};
+    if let Some(by) = by {
+        return (RunState::Stopped, Cause::Stop(by));
+    }
+    let exit = match hooks::code_of(exit) {
+        Some(code) => Exit::Code(code),
+        None => Exit::Signal,
+    };
+    let state = if exit == Exit::Code(0) {
+        RunState::Completed
+    } else {
+        RunState::Failed
+    };
+    (state, Cause::Exited(exit))
+}
+
+/// **Every sub-agent of chat `session` still live ends with its run** (ADR 0076 §6, #1084): a
+/// `run.ended` under each child run, in `state` for `cause`, written under the event log's
+/// lock. Nothing where none is live. A write that fails is warned of, and never holds up the
+/// rest of the chat's end.
+fn its_children_end(
+    events: &hooks::Events,
+    plane: &Path,
+    session: u32,
+    state: purlis_core::state::run::RunState,
+    cause: purlis_core::state::run::Cause,
+) {
+    let mut log = events.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Err(why) = log.end_children_with(plane, session, state, cause) {
+        tracing::warn!("purlis: a sub-agent's end was not written to the event log ({why})");
     }
 }
 
@@ -8493,6 +8581,248 @@ mod tests {
             .cloned()
             .expect("the window was told");
         assert_eq!(last.state, "failed");
+    }
+
+    // --- a chat's sub-agents end with its run (#1084) ------------------------------------ //
+
+    /// An event log in `dir`, as the app keeps one.
+    fn an_event_log(dir: &Path) -> hooks::Events {
+        use purlis_core::eventlog::{ArgsKey, Log, Recorder};
+        Arc::new(Mutex::new(Recorder::new(
+            Log::open(dir, "DEVICE").expect("a log"),
+            ArgsKey::open(dir).expect("a key"),
+        )))
+    }
+
+    /// A tool call that sub-agent `agent` of chat `chat` made: what begins its child run.
+    fn a_call_by(chat: u32, agent: &str) -> purlis_core::hookwire::ToolCall {
+        purlis_core::hookwire::ToolCall {
+            chat,
+            tool_hook: "pretooluse".to_owned(),
+            tool: Some("Bash".to_owned()),
+            call: Some(format!("call-{agent}")),
+            args: None,
+            decision: purlis_core::hookwire::Decision::None,
+            rule: None,
+            hook_ms: 1,
+            agent: Some(agent.to_owned()),
+            at_ms: 0,
+        }
+    }
+
+    /// The `run.ended` events in the log in `dir`, as (run, parent run, state, cause).
+    fn runs_ended(dir: &Path) -> Vec<(String, Option<String>, String, String)> {
+        purlis_core::eventlog::read(dir)
+            .expect("the log reads")
+            .into_iter()
+            .filter(|event| event.kind == "run.ended")
+            .map(|event| {
+                (
+                    event.run.unwrap_or_default(),
+                    event.parent_run,
+                    event.body["state"].as_str().unwrap_or_default().to_owned(),
+                    event.body["cause"].as_str().unwrap_or_default().to_owned(),
+                )
+            })
+            .collect()
+    }
+
+    /// Chat `chat` of project `plane` in `events`, at work, with a child run for each of
+    /// `agents`: its run, and the child runs in the order they began.
+    fn a_chat_with_sub_agents(
+        events: &hooks::Events,
+        plane: &Path,
+        chat: u32,
+        agents: &[&str],
+    ) -> (String, Vec<String>) {
+        let mut log = events.lock().expect("the log");
+        let run = log
+            .report(
+                plane,
+                &purlis_core::hookwire::Report {
+                    chat,
+                    event: purlis_core::state::Event::UserPromptSubmit,
+                    conversation: Default::default(),
+                    pid: None,
+                    agent: None,
+                    detail: Default::default(),
+                },
+                purlis_core::eventlog::Followed::No,
+            )
+            .expect("written")
+            .run
+            .expect("a run");
+        let children = agents
+            .iter()
+            .map(|agent| {
+                log.tool(plane, &a_call_by(chat, agent), std::time::Instant::now())
+                    .expect("written")
+                    .run
+                    .expect("a child run")
+            })
+            .collect();
+        (run, children)
+    }
+
+    #[test]
+    fn a_run_s_end_is_read_from_the_host_s_own_stop_and_then_the_exit_status() {
+        use purlis_core::session::Exit as Ended;
+        use purlis_core::state::run::{Cause, Exit, RunState, StopBy};
+        // D-1084-1: the host's own stop first, whatever the code says (ADR 0076 §2).
+        assert_eq!(
+            the_host_s_stop(true, true, true, true),
+            Some(StopBy::Killed)
+        );
+        assert_eq!(the_host_s_stop(false, true, true, true), Some(StopBy::Quit));
+        assert_eq!(
+            the_host_s_stop(false, false, true, true),
+            Some(StopBy::Operator)
+        );
+        assert_eq!(
+            the_host_s_stop(false, false, false, true),
+            Some(StopBy::Closed)
+        );
+        assert_eq!(the_host_s_stop(false, false, false, false), None);
+        assert_eq!(
+            how_its_run_ended(Some(StopBy::Killed), &Ended::Code(0)),
+            (RunState::Stopped, Cause::Stop(StopBy::Killed))
+        );
+        // By itself: 0 completes it, and anything else fails it, a signal included.
+        assert_eq!(
+            how_its_run_ended(None, &Ended::Code(0)),
+            (RunState::Completed, Cause::Exited(Exit::Code(0)))
+        );
+        assert_eq!(
+            how_its_run_ended(None, &Ended::Code(3)),
+            (RunState::Failed, Cause::Exited(Exit::Code(3)))
+        );
+        assert_eq!(
+            how_its_run_ended(None, &Ended::Signal("SIGKILL".to_owned())),
+            (RunState::Failed, Cause::Exited(Exit::Signal))
+        );
+    }
+
+    #[test]
+    fn a_run_that_ends_ends_each_of_its_live_sub_agents_in_its_own_end_state_and_cause() {
+        use purlis_core::state::run::{Cause, Exit, RunState, StopBy};
+        let dir = tempfile::tempdir().expect("a directory");
+        let events = an_event_log(dir.path());
+        let plane = Path::new("/plane");
+        let (run, children) = a_chat_with_sub_agents(&events, plane, 4, &["agent-1", "agent-2"]);
+
+        its_children_end(
+            &events,
+            plane,
+            4,
+            RunState::Failed,
+            Cause::Exited(Exit::Code(3)),
+        );
+
+        // In the order they began, which is the order of their ids (ULIDs).
+        let mut children = children;
+        children.sort();
+        let ended: Vec<_> = children
+            .iter()
+            .map(|child| {
+                (
+                    child.clone(),
+                    Some(run.clone()),
+                    "failed".to_owned(),
+                    "exited".to_owned(),
+                )
+            })
+            .collect();
+        assert_eq!(runs_ended(dir.path()), ended, "one run.ended per child");
+
+        // A stop by the host is `stopped`, for the stop's own cause.
+        let (run, children) = a_chat_with_sub_agents(&events, plane, 5, &["agent-3"]);
+        its_children_end(
+            &events,
+            plane,
+            5,
+            RunState::Stopped,
+            Cause::Stop(StopBy::Operator),
+        );
+        assert_eq!(
+            runs_ended(dir.path())[2..],
+            [(
+                children[0].clone(),
+                Some(run),
+                "stopped".to_owned(),
+                "operator".to_owned()
+            )]
+        );
+
+        // Ended once: a second end of the same run writes nothing more.
+        its_children_end(
+            &events,
+            plane,
+            5,
+            RunState::Completed,
+            Cause::Exited(Exit::Code(0)),
+        );
+        assert_eq!(runs_ended(dir.path()).len(), 3);
+    }
+
+    #[test]
+    fn a_run_with_no_sub_agent_live_writes_no_end_for_one() {
+        use purlis_core::state::run::{Cause, Exit, RunState};
+        let dir = tempfile::tempdir().expect("a directory");
+        let events = an_event_log(dir.path());
+        let plane = Path::new("/plane");
+        a_chat_with_sub_agents(&events, plane, 4, &[]);
+
+        its_children_end(
+            &events,
+            plane,
+            4,
+            RunState::Completed,
+            Cause::Exited(Exit::Code(0)),
+        );
+        // And a chat the log never heard of is no error.
+        its_children_end(
+            &events,
+            plane,
+            9,
+            RunState::Completed,
+            Cause::Exited(Exit::Code(0)),
+        );
+
+        assert!(runs_ended(dir.path()).is_empty());
+    }
+
+    #[test]
+    fn a_chat_whose_program_ends_ends_its_sub_agents_runs_in_the_event_log() {
+        // The app seam: the exit arrives through `SessionHost::when_one_ends`, as for every
+        // chat, and its sub-agents' runs end with it, `completed | exited` at code 0.
+        let dir = tempfile::tempdir().expect("a directory");
+        let logs = dir.path().join("events");
+        let events = an_event_log(&logs);
+        let host = Pretend::default();
+        let (planes, _told) = planes_on(&host);
+        let planes = planes.recording_events(Some(Arc::clone(&events)));
+        let plane = planes.open(&a_plane(&dir.path().join("plane")));
+        let held = planes.held(&plane).expect("it is held");
+        let session = held
+            .chats()
+            .start(&one_chat_on("/nowhere/a-harness").chats[0], STARTING)
+            .expect("the host starts it");
+        let (run, children) = a_chat_with_sub_agents(&events, plane.root(), session, &["agent-1"]);
+        let (_, others) =
+            a_chat_with_sub_agents(&events, plane.root(), session + 100, &["agent-9"]);
+
+        host.program_ends(session, purlis_core::session::Exit::Code(0));
+
+        assert_eq!(
+            runs_ended(&logs),
+            [(
+                children[0].clone(),
+                Some(run),
+                "completed".to_owned(),
+                "exited".to_owned()
+            )],
+            "only its own sub-agents end, and never another chat's ({others:?})"
+        );
     }
 
     /// The record on disk in `root`, as the next launch would read it.
