@@ -89,7 +89,8 @@ What keeps it from becoming the library this file forbids:
   `AnswerBar` (`app/src/AnswerBar.tsx`, #1210): a row, not a settings piece. A confirm whose only
   field is the typed name of what it ends is a question too, and ends in the bar with the delete
   last (D-1210-8, Delete vault), so no dialog puts an `ends-it` act in `SettingActions`;
-  `answerBar.guard.test.ts` holds that.
+  `answerBar.guard.test.ts` holds that. Its keyboard lands in the name box, not on the delete
+  (D-1210-9).
 - **A box the set's `Field` cannot hold goes in the row's control slot as a native element.**
   A `Field` is controlled; a secret's value is never held in React state (a vault's value box),
   so that box is a native `<input type="password">` drawn with `ui-field`, in a `SettingRow`.
