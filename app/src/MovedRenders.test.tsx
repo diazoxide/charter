@@ -80,6 +80,25 @@ function core(open: OpenChat[]): (moved: Moved) => void {
     }
     if (cmd === "plane_at_launch") return { plane: PLANE, from: PLANE, why: null };
     if (cmd === "opened_chats") return open;
+    // Read, so every chat is filed in its workspace and that workspace's tab counts it.
+    if (cmd === "plane_sidebar")
+      return {
+        root: PLANE,
+        workspaces: [
+          {
+            name: "ide",
+            path: `${PLANE}/workspaces/ide`,
+            vision: "",
+            todos: [],
+            chats: open,
+            colour: null,
+            live: false,
+          },
+        ],
+        personas: [],
+        persona: null,
+        unfiled: [],
+      };
     if (cmd === "chat_states") return [];
     if (cmd === "chats_that_would_not_start") return [];
     return null;
@@ -159,10 +178,30 @@ describe("a chat moving", () => {
     move(moving(3, "waiting", 11, [3]));
 
     expect(drawn.marks).toEqual(["waiting"]);
-    // The queue is the project's, and the project view still redraws for it: the pane in front
-    // with it, once at most (#1034 is narrowing that to the counts alone).
-    expect(drawn.panes.length).toBeLessThanOrEqual(1);
+    // **And the project view is not redrawn for it** (#1034): the counts read the queue
+    // themselves, so the pane in front is not drawn again.
+    expect(drawn.panes).toEqual([]);
     expect(screen.getAllByRole("img", { name: /waiting/i }).length).toBeGreaterThan(0);
+  });
+
+  it("still updates the counts and the title bar's list when the queue changes", async () => {
+    const move = await fiveChats();
+
+    move(moving(3, "waiting", 10, [3]));
+
+    // The workspace's tab counts it, and so does the title bar's ✋.
+    expect(screen.getByLabelText("1 chats need you in ide")).toBeTruthy();
+    expect(screen.getByTestId("needs-you-button").textContent).toBe("1");
+
+    move(moving(4, "waiting", 11, [3, 4]));
+    expect(screen.getByLabelText("2 chats need you in ide")).toBeTruthy();
+    expect(screen.getByTestId("needs-you-button").textContent).toBe("2");
+    expect(drawn.panes).toEqual([]);
+
+    move(moving(3, "running", 12, [4]));
+    expect(screen.getByLabelText("1 chats need you in ide")).toBeTruthy();
+    expect(screen.getByTestId("needs-you-button").textContent).toBe("1");
+    expect(drawn.panes).toEqual([]);
   });
 
   it("still counts the chats running on the status line, which reads them itself", async () => {
