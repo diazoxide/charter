@@ -302,6 +302,22 @@ describe.each(DRAWN)("%s can be read", (_name, theme) => {
  * at a time: a colour a rule takes from a parent's background, or a background a `:hover` rule
  * sets on its own, is held by the lines above by hand, not here.
  */
+/** What a colour or a background may be without naming a token: nothing is drawn by it. */
+const KEYWORDS = new Set(["inherit", "transparent", "none", "currentcolor", "unset", "initial"]);
+
+/**
+ * The colours the stylesheet check below cannot read, each as `rule | declaration`. None of
+ * these rules sets a background, so none draws a pair of its own; the colour each one mixes
+ * from is held by the lines of PAIRS above (`text.muted`, the change marks' state colours).
+ */
+const READ_BY_HAND: readonly string[] = [
+  ".explorer [data-mark] > .file-node > .spot-name | color: var(--change-colour)",
+  ".explorer .change-mark | color: var(--change-colour)",
+  ".explorer .chat | color: color-mix(in srgb, currentcolor 85%, transparent)",
+  ".explorer .chat .node-icon | color: color-mix(in srgb, var(--text-muted) 85%, transparent)",
+  ".explorer .unreported | color: color-mix(in srgb, currentcolor 70%, transparent)",
+];
+
 describe("every pair a stylesheet draws", () => {
   const byProperty = new Map(TOKENS.map((token) => [property(token), token]));
   const held = new Set(PAIRS.map(([front, back]) => `${front} on ${back}`));
@@ -309,8 +325,23 @@ describe("every pair a stylesheet draws", () => {
     readFileSync(join(process.cwd(), "src", file), "utf8").replace(/\/\*[\s\S]*?\*\//g, ""),
   );
   const drawn = new Map<string, string>();
+  /** Each colour or background a rule sets that is not one token, as `rule | declaration`. */
+  const unread: string[] = [];
   for (const sheet of sheets)
     for (const [, selector, body] of sheet.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+      const rule = selector
+        .trim()
+        .split(/\s*,\s*/)[0]
+        .replace(/\s+/g, " ");
+      for (const [, name, value] of body.matchAll(
+        /(?<![\w-])(color|background|background-color)\s*:\s*([^;]+)/g,
+      )) {
+        const said = value.trim().replace(/\s*!important$/, "");
+        const one = /^var\((--[\w-]+)\)$/.exec(said);
+        if (one !== null && byProperty.has(one[1])) continue;
+        if (KEYWORDS.has(said.toLowerCase())) continue;
+        unread.push(`${rule} | ${name}: ${said}`);
+      }
       const read = (pattern: RegExp) =>
         [...body.matchAll(pattern)]
           .map((hit) => byProperty.get(hit[1]))
@@ -322,6 +353,13 @@ describe("every pair a stylesheet draws", () => {
           if (!drawn.has(`${front} on ${back}`))
             drawn.set(`${front} on ${back}`, selector.trim().split(/\s*,\s*/)[0]);
     }
+
+  it("reads every colour and background a rule sets, or names the ones read by hand", () => {
+    // A value this check cannot resolve to one token (a `color-mix`, a property of the rule's
+    // own, a literal) would let its rule's pair through unmeasured, so each is listed here,
+    // and a new one fails until it is held by hand in PAIRS and added below.
+    expect(unread.sort()).toEqual([...READ_BY_HAND].sort());
+  });
 
   it("is found: the stylesheets draw text on a background", () => {
     expect(drawn.get("danger.text on danger.surface")).toBeDefined();
