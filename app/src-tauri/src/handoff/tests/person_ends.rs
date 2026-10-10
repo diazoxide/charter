@@ -635,13 +635,14 @@ fn a_task_ended_with_its_working_task_kept_leaves_that_one_running_and_names_not
         word[0].stopped.as_ref().map(|stopped| stopped.below.len()),
         Some(0)
     );
-    // It finishes, and reports to nobody: its report is kept for the workspace, and it stays
-    // an open chat whose asking chat has closed.
+    // It finishes, and reports to nobody: its report is kept for the workspace, and it is an
+    // open chat whose asking chat has closed until its turn is over, when it ends at its
+    // report as any task does (#1510).
     let said = reports(&held, &id, below);
     assert!(
         matches!(
             &said,
-            Answer::Reported {
+            Answer::Finished {
                 kept_for: Some(_),
                 ..
             }

@@ -880,6 +880,7 @@ fn a_brief_that_is_empty_or_carries_a_secret_is_refused_and_the_secret_is_never_
 fn finishes_it(tickets: &Tickets, connection: u64, ask: Ask) -> Answer {
     on_a_ticket(tickets, connection, ask, |_| Answer::Finished {
         to: "steward 1".to_owned(),
+        kept_for: None,
     })
 }
 
@@ -911,6 +912,44 @@ fn a_task_told_it_is_finished_is_told_its_program_ends_with_the_turn() {
         "purlis dispatch report: sent to 'steward 1' (done). It reaches that chat as context \
          on its next turn. This task is finished: this chat's program is ended once this turn \
          is over, so start nothing more.\n"
+    );
+}
+
+/// An app whose asking chat has gone: it keeps the report for the workspace and still ends
+/// the task (#1510).
+fn finishes_it_kept(tickets: &Tickets, connection: u64, ask: Ask) -> Answer {
+    on_a_ticket(tickets, connection, ask, |_| Answer::Finished {
+        to: "steward 1".to_owned(),
+        kept_for: Some("alpha".to_owned()),
+    })
+}
+
+#[test]
+fn an_orphaned_task_told_it_is_finished_is_told_where_its_report_is_kept() {
+    let tmp = daily();
+    let (app, _reading, _asked) = an_app(&tmp, finishes_it_kept);
+
+    let out = purlis_as(
+        &root(&tmp),
+        Some(&app),
+        STARTED,
+        &[
+            "dispatch",
+            "report",
+            "--outcome",
+            "done",
+            "Forty are stuck.",
+        ],
+        "",
+    );
+
+    assert_eq!(text(&out.stderr), "");
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(
+        text(&out.stdout),
+        "purlis dispatch report: 'steward 1' has closed, so the report is kept for workspace \
+         'alpha' (done), and the person reads it with this task. This task is finished: this \
+         chat's program is ended once this turn is over, so start nothing more.\n"
     );
 }
 

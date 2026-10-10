@@ -576,11 +576,16 @@ fn report_under(
     });
     let way = last_words.then_some(purlis_core::dispatchrecord::EndedWay::Stopped);
     crate::dispatches::reported(held, chat, outcome, &summary, changed.as_deref(), by, way);
-    if delivered.kept_for.is_none() {
+    // **Whether its program is now to be ended is the ledger's own word**, set as the report
+    // was delivered (#1485): from what this app holds of that delivery, never from a record on
+    // disk. A task whose asking chat has gone ends at its report too (#1510, V100-64).
+    let ends = held.tasks().ledger().ending(chat);
+    if delivered.kept_for.is_none() || ends {
         held.board().reported_to_its_asker(chat);
     } else if !last_words {
         // Nowhere to go, and the chat that wrote it stays open: the person is told there. So
-        // is the report of a task the person started whose tab chat is gone (D-1443-9).
+        // is the report of a task the person started whose tab chat is gone (D-1443-9), and a
+        // blocked one whose asking chat has gone.
         held.needs_the_person(
             chat,
             purlis_core::state::Need::ReportUndelivered {
@@ -589,11 +594,13 @@ fn report_under(
         );
     }
     let tell = (delivered.reached_the_chat && from.mode == Mode::Task).then_some(from.chat);
-    // **The chat is told its program will be ended only where it will be** (#1485): the
-    // ledger's own word, set as the report was delivered. Never a handoff's chat, a blocked
-    // task, one the person started, or one whose report reached no chat.
-    let answer = if delivered.kept_for.is_none() && held.tasks().ledger().ending(chat) {
-        Answer::Finished { to: delivered.to }
+    // **The chat is told its program will be ended only where it will be** (#1485). Never a
+    // handoff's chat, a blocked task or one the person started.
+    let answer = if ends {
+        Answer::Finished {
+            to: delivered.to,
+            kept_for: delivered.kept_for,
+        }
     } else {
         Answer::Reported {
             to: delivered.to,
@@ -708,13 +715,13 @@ pub(crate) fn deliver(
     // program). Only a file left for the chat itself is one a
     // wait may take back: one kept for a workspace is the next chat's there.
     if from.mode == Mode::Task {
-        crate::dispatched::reported(
-            held,
-            chat,
-            from.chat,
-            report.clone(),
-            parent_open.then_some(kept),
-        );
+        if parent_open {
+            crate::dispatched::reported(held, chat, from.chat, report.clone(), Some(kept));
+        } else {
+            // **And it ends at its report, as every other task does** (#1510, V100-64): the
+            // report is on its dispatch record, where the person reads it.
+            crate::dispatched::reported_with_its_asker_gone(held, chat, from.chat, report.clone());
+        }
     }
     if parent_open {
         // **A task that came to nothing is a needs-you item on the chat that asked** (#1491,
@@ -6270,6 +6277,7 @@ mod tests {
             said,
             Answer::Finished {
                 to: "claude 1".to_owned(),
+                kept_for: None,
             }
         );
         assert_eq!(
@@ -6415,7 +6423,7 @@ mod tests {
     }
 
     #[test]
-    fn a_report_whose_parent_has_closed_is_kept_for_its_workspace() {
+    fn a_report_whose_parent_has_closed_is_kept_for_its_workspace_and_ends_its_task() {
         let plane = Plane::new();
         let host = Pretend::default();
         let planes = planes_on(&host);
@@ -6429,23 +6437,60 @@ mod tests {
 
         let said = reports_back(&held, &id, &tickets, child, "Dropped it.");
 
+        // An orphaned task ends at its report, as every other task does (#1510, V100-64),
+        // and is told so.
         assert_eq!(
             said,
-            Answer::Reported {
+            Answer::Finished {
                 to: "claude 1".to_owned(),
                 // A task is filed where its asking chat worked: the project's root here.
                 kept_for: Some("plane root".to_owned()),
             }
         );
+        assert!(held.tasks().ledger().ending(child));
         let kept = purlis_core::handback::take(
             held.root(),
             purlis_core::handback::For::Place(&purlis_core::active::Place::PlaneRoot),
         );
         assert_eq!(kept.len(), 1);
         assert_eq!(kept[0].to, "claude 1");
-        // Nowhere to go is the one report that needs the person (#1448): an item on the chat
-        // that wrote it, which says whose it was.
-        assert_eq!(held.hooks().board().needs_you(), vec![child]);
+        // Its report is on its record, where the person reads it: nobody is asked for.
+        assert!(held.hooks().board().needs_you().is_empty());
+        assert!(held.hooks().board().needs_of(child).is_empty());
+    }
+
+    #[test]
+    fn a_blocked_task_whose_parent_has_closed_still_waits_for_the_person() {
+        // A blocked task is waiting on something, wherever its report went: it is not ended,
+        // and the person is told its report had nowhere to go (#1448).
+        let plane = Plane::new();
+        let host = Pretend::default();
+        let planes = planes_on(&host);
+        let id = planes.open(&plane.root);
+        let held = planes.held(&id).expect("held");
+        let asking = a_chat_on_work(&held, &plane.root);
+        let tickets = Tickets::default();
+        let (child, _) =
+            a_task_of_alpha(&held, &id, &tickets, asking, Some("drop commons")).expect("opened");
+        held.chats().close(asking).unwrap();
+
+        let said = tasks_report(
+            &held,
+            &id,
+            &tickets,
+            child,
+            purlis_core::handback::Outcome::Blocked,
+            None,
+        );
+
+        assert_eq!(
+            said,
+            Answer::Reported {
+                to: "claude 1".to_owned(),
+                kept_for: Some("plane root".to_owned()),
+            }
+        );
+        assert!(!held.tasks().ledger().ending(child));
         assert_eq!(
             held.hooks().board().needs_of(child),
             vec![purlis_core::state::Need::ReportUndelivered {
@@ -6802,7 +6847,7 @@ mod tests {
     }
 
     #[test]
-    fn a_report_still_waiting_when_its_asker_closes_is_a_needs_you_item_on_its_writer() {
+    fn a_report_still_waiting_when_its_asker_closes_raises_no_item_on_a_task_ending_at_it() {
         let plane = Plane::new();
         let host = Pretend::default();
         let planes = planes_on(&host);
@@ -6814,19 +6859,20 @@ mod tests {
             a_task_of_alpha(&held, &id, &tickets, asking, Some("drop commons")).expect("opened");
         let (quiet, _) = a_task_of_alpha(&held, &id, &tickets, asking, None).expect("opened");
         // It reached the chat that asked, which is open: nobody needs the person.
-        reports_back(&held, &id, &tickets, child, "Dropped it.");
+        let said = reports_back(&held, &id, &tickets, child, "Dropped it.");
+        assert!(
+            matches!(said, Answer::Finished { kept_for: None, .. }),
+            "{said:?}"
+        );
         assert!(held.hooks().board().needs_you().is_empty());
 
         // The asking chat is closed before any turn of it read the report.
         held.close_chat(asking).expect("closed");
 
-        assert_eq!(
-            held.hooks().board().needs_of(child),
-            vec![purlis_core::state::Need::ReportUndelivered {
-                asker: "claude 1".to_owned()
-            }]
-        );
-        assert_eq!(held.hooks().board().needs_you(), vec![child]);
+        // The task was ending at its report, and goes on ending (#1510, V100-64): the report
+        // is on its record, and nobody is asked for.
+        assert!(held.hooks().board().needs_of(child).is_empty());
+        assert!(held.hooks().board().needs_you().is_empty());
         assert!(
             held.hooks().board().needs_of(quiet).is_empty(),
             "a chat that had sent nothing has nothing with nowhere to go"
@@ -6921,7 +6967,7 @@ mod tests {
 
         assert_eq!(
             said,
-            Answer::Reported {
+            Answer::Finished {
                 to: "claude 1".to_owned(),
                 kept_for: Some("plane root".to_owned()),
             }
@@ -7855,7 +7901,7 @@ mod tests {
 
         assert_eq!(
             said,
-            Answer::Reported {
+            Answer::Finished {
                 to: "steward 1".to_owned(),
                 kept_for: Some("alpha".to_owned()),
             }
@@ -7991,6 +8037,7 @@ mod tests {
             said,
             Answer::Finished {
                 to: "steward 1".to_owned(),
+                kept_for: None,
             }
         );
         let waiting =
@@ -11687,7 +11734,7 @@ mod tests {
         // One reports, and one's program dies: both go to the workspace the chat asked from.
         assert_eq!(
             reports(&held, &id, kept),
-            Answer::Reported {
+            Answer::Finished {
                 to: "steward 1".to_owned(),
                 kept_for: Some("alpha".to_owned()),
             }
