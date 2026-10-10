@@ -42,6 +42,7 @@ import { UnsavedMark } from "./SavingView";
 import { SessionBusNotice } from "./SessionBusNotice";
 import { VaultsWaitingNotice } from "./VaultsWaitingNotice";
 import { Notice } from "./Notice";
+import { SaidLink } from "./SaidLink";
 import { GoneProjectNotice } from "./GoneProjectNotice";
 import { tellSaved, useRepoSaving } from "./saving";
 import {
@@ -49,10 +50,12 @@ import {
   catalogued,
   perform,
   projectRows,
+  saidOf,
   type Doing,
   type Offer,
   type Project,
   type Ran,
+  type Said,
 } from "./actions";
 import { countOf, useAlerts } from "./alerts";
 import { AlertsDrawer, type AlertsDrawerDoes } from "./AlertsDrawer";
@@ -61,7 +64,13 @@ import { ApprovePlane } from "./ApprovePlane";
 import { drawThemeFor, Extensions } from "./Extensions";
 import { Opener } from "./Opener";
 import { SettingsTab } from "./settings/SettingsTab";
-import { levelOf, linkToGroup, settingsPlace, type SettingsLink } from "./settings/links";
+import {
+  askSettingsLink,
+  levelOf,
+  linkToGroup,
+  settingsPlace,
+  type SettingsLink,
+} from "./settings/links";
 import { enterSettings } from "./settings/entering";
 import { machineChanged, whenRecentSettled } from "./settings/thisMachine";
 import { useExtensionsOn } from "./extensionsOn";
@@ -173,7 +182,7 @@ function App() {
    *  where the operator is standing when it happens. */
   const [openTrouble, setOpenTrouble] = useState<string>();
   /** What a window-level action answered, when it had something to say. */
-  const [report, setReport] = useState<{ from: string; refused: boolean; words: string }>();
+  const [report, setReport] = useState<Said>();
   /** Whether the palette is up, so what an action answered is said in one place rather than
    *  two: the palette is modal and draws over the line below it. */
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -877,6 +886,23 @@ function App() {
     } else setSettingsLinkAsk((was) => ({ plane, link: { group }, at: (was?.at ?? 0) + 1 }));
   }, []);
 
+  /**
+   * **Follows a refusal's way to its setting** (#1201): the link beside the last action's words,
+   * on the line under the strip or in the palette. Into the project in front's window, which
+   * opens that level's Settings tab at the group; with none, a You group is shown where the
+   * opener is.
+   */
+  const followSaid = useCallback((link: SettingsLink) => {
+    const plane = inFrontNow.current;
+    if (plane !== undefined) {
+      askSettingsLink(plane, link);
+      return;
+    }
+    if (levelOf(link.group) !== "you") return;
+    linkToGroup(settingsPlace("you"), link.group, link.setting);
+    showSettingsAlone(setSettingsAlone);
+  }, []);
+
   /** What the Alerts drawer's rows do in the window (NO-6). */
   const alertsDo = useMemo<AlertsDrawerDoes>(
     () => ({
@@ -1554,13 +1580,7 @@ function App() {
   const run = useCallback(
     async (offer: Offer): Promise<Ran> => {
       const answer = await perform(offer, windowDoing);
-      setReport(
-        answer.ok
-          ? answer.said
-            ? { from: offer.id, refused: false, words: answer.said }
-            : undefined
-          : { from: offer.id, refused: true, words: answer.refused },
-      );
+      setReport(saidOf(offer.id, answer));
       return answer;
     },
     [windowDoing],
@@ -1948,7 +1968,8 @@ function App() {
           className={said.refused ? "trouble" : "came-back"}
           role={said.refused ? "alert" : "status"}
         >
-          {said.words}
+          <span>{said.words}</span>
+          {said.settings !== undefined && <SaidLink way={said.settings} onFollow={followSaid} />}
         </p>
       )}
 
@@ -2156,6 +2177,7 @@ function App() {
         projects={{ rows: switcherRows, asked: switcherAsk }}
         files={files}
         said={said}
+        onSettings={followSaid}
         onRun={saying?.run ?? run}
         onOpened={setPaletteOpen}
       />

@@ -11,12 +11,15 @@ import {
   revealSaid,
   type Offer,
   type Ran,
+  type Said,
 } from "./actions";
 import { commands, type FileScope, type FoundFile, type PlaneId } from "./bindings";
 import { hitSaid, scopeSaid, useFileFind, type Part } from "./fileFind";
 import { opensTheSwitcher } from "./switcherKey";
 import { onAMac } from "./tabKeys";
 import { landSettingsFocus } from "./settings/entering";
+import type { SettingsLink } from "./settings/links";
+import { SaidLink } from "./SaidLink";
 import { FileIcon } from "./FileIcon";
 import { useFileIcons } from "./projectTheme";
 import { iconFor } from "./theme/icons";
@@ -93,6 +96,7 @@ export function Palette({
   projects,
   files,
   said,
+  onSettings,
   onRun,
   onOpened,
 }: {
@@ -113,7 +117,10 @@ export function Palette({
     onOpen: (file: FoundFile) => void;
   };
   /** What the last row answered, when it refused or had something to say. */
-  said?: { from: string; refused: boolean; words: string };
+  said?: Said;
+  /** Follows a refusal's way to its setting (#1201): the palette closes, and the window opens
+   *  Settings at the group. Absent, the link is not drawn. */
+  onSettings?: (link: SettingsLink) => void;
   /** The window carrying out a row. It answers what happened; this decides what to draw. */
   onRun: (offer: Offer) => Ran | Promise<Ran>;
   /** Told whenever the palette opens or closes, so the window can say it is open. */
@@ -138,7 +145,7 @@ export function Palette({
   /** Which rung of `files.ladder` the files are found in: Tab widens it (FM-7). */
   const [rung, setRung] = useState(0);
   /** What the aimed file's Copy path or Reveal answered (#1143), said on the palette's line. */
-  const [fileSaid, setFileSaid] = useState<{ refused: boolean; words: string }>();
+  const [fileSaid, setFileSaid] = useState<Omit<Said, "from">>();
 
   /** The rows and the dispatcher as they are right now, for the ONE keydown listener: it is
    *  registered once and must not be rebuilt on every render, so it cannot close over
@@ -571,7 +578,16 @@ export function Palette({
               className={showing.refused ? "refusal said" : "said"}
               role={showing.refused ? "alert" : "status"}
             >
-              {showing.words}
+              <span>{showing.words}</span>
+              {showing.settings !== undefined && onSettings !== undefined && (
+                <SaidLink
+                  way={showing.settings}
+                  onFollow={(link) => {
+                    close();
+                    onSettings(link);
+                  }}
+                />
+              )}
             </p>
           )}
           {held && (

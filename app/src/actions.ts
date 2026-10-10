@@ -70,7 +70,7 @@ import { taskKeyNote, taskKeySaid } from "./taskKeys";
 import { todoOpenId, todoView } from "./todos";
 import { onAMac } from "./tabKeys";
 import { SETTINGS_GROUPS } from "./settings/catalogue";
-import { askSettingsLink, linkToGroup, settingsPlace } from "./settings/links";
+import { askSettingsLink, linkToGroup, settingsPlace, type SettingsLink } from "./settings/links";
 import {
   changesTitle,
   changesView,
@@ -89,8 +89,33 @@ import {
   type ViewRef,
 } from "./tabs";
 
-/** What running an action answered: one line to say, or a refusal in the words it came in. */
-export type Ran = { ok: true; said?: string } | { ok: false; refused: string };
+/**
+ * **Where a refusal is put right, when that is a setting** (#1201, SE-22): the words of the link
+ * and the Settings group it opens. "Choose your editor in Settings first." names a setting, and
+ * a sentence that names one without a way to it leaves the person to find it.
+ */
+export type SettingsWay = { label: string; link: SettingsLink };
+
+/** What running an action answered: one line to say, or a refusal in the words it came in —
+ *  with the Settings group that puts it right, where a setting does. */
+export type Ran =
+  { ok: true; said?: string } | { ok: false; refused: string; settings?: SettingsWay };
+
+/**
+ * **What the window says about the last action** — the line under the strip, and the palette's
+ * line while it is up: one state drawn in two places. `settings` is a refusal's way to the
+ * setting that puts it right (#1201), drawn as a link beside the words, and either line
+ * follows it.
+ */
+export type Said = { from: string; refused: boolean; words: string; settings?: SettingsWay };
+
+/** What the window says of a row's answer: nothing for a quiet success. */
+export function saidOf(from: string, answer: Ran): Said | undefined {
+  if (answer.ok) return answer.said ? { from, refused: false, words: answer.said } : undefined;
+  return answer.settings === undefined
+    ? { from, refused: true, words: answer.refused }
+    : { from, refused: true, words: answer.refused, settings: answer.settings };
+}
 
 /**
  * The key the palette claims, and the key it can hand back.

@@ -88,6 +88,7 @@ import {
   PASS_THROUGH_BYTES,
   PASS_THROUGH_KEY,
   RENAMES_ON_F2,
+  saidOf,
   CHAT_KEYBOARD,
   type BranchPath,
   type Clone,
@@ -97,6 +98,7 @@ import {
   type Offer,
   type Project,
   type Ran,
+  type Said,
   type TaskEndWay,
 } from "./actions";
 import { yourEditor } from "./yourEditor";
@@ -831,7 +833,7 @@ export const PlaneView = memo(function PlaneView({
   const [pinning, setPinning] = useState(0);
   /** What the last action answered: one line, or a refusal in the words it came in. The
    *  window draws it, beside the palette that shares it. */
-  const [report, setReport] = useState<{ from: string; refused: boolean; words: string }>();
+  const [report, setReport] = useState<Said>();
   /** Whether the core has answered what this project already has open. Until it has, "no
    *  tabs" is "not yet", which is not the same thing as "nothing is running" — and a quit
    *  decides on it. */
@@ -2573,8 +2575,13 @@ export const PlaneView = memo(function PlaneView({
         answered(commands.revealBranchPath(plane, at.workspace, at.repo, at.piece, at.path)),
       openInEditor: async (at: BranchPath, line: number): Promise<Ran> => {
         const editor = yourEditor();
+        // The refusal names a setting, so it carries the way to it (#1201, #1244).
         if (editor === undefined)
-          return { ok: false, refused: "Choose your editor in Settings first." };
+          return {
+            ok: false,
+            refused: NO_EDITOR,
+            settings: { label: "Choose your editor", link: CHOOSE_EDITOR },
+          };
         return answered(
           commands.openInYourEditor(plane, at.workspace, at.repo, at.piece, at.path, line, editor),
         );
@@ -3754,15 +3761,26 @@ export const PlaneView = memo(function PlaneView({
         words: `Cloning ${repos.length} repo(s) into ${name}…`,
       });
       const failed = await cloneRepos(plane, name, repos);
-      setReport({
-        from: "workspace.create",
-        refused: failed.length > 0,
-        words:
-          failed.length === 0
-            ? `Cloned ${repos.join(", ")} into ${name}.`
-            : `Could not clone ${failed.map((f) => f.repo).join(", ")} into ${name} — ` +
-              `${failed[0].said} Retry from the workspace's settings.`,
-      });
+      setReport(
+        failed.length === 0
+          ? {
+              from: "workspace.create",
+              refused: false,
+              words: `Cloned ${repos.join(", ")} into ${name}.`,
+            }
+          : {
+              from: "workspace.create",
+              refused: true,
+              words:
+                `Could not clone ${failed.map((f) => f.repo).join(", ")} into ${name} — ` +
+                `${failed[0].said} Retry from the workspace's settings.`,
+              // Where it is retried: that workspace's Repos (#1201, SE-22).
+              settings: {
+                label: `Open ${name}'s repo settings`,
+                link: { group: "workspace.repos", workspace: name },
+              },
+            },
+      );
       setReplan((asked) => asked + 1);
     },
     [pinWorkspace, plane],
@@ -6050,13 +6068,7 @@ export const PlaneView = memo(function PlaneView({
   const carryOut = useCallback(
     async (offer: Offer): Promise<Ran> => {
       const answer = await perform(offer, doing);
-      setReport(
-        answer.ok
-          ? answer.said
-            ? { from: offer.id, refused: false, words: answer.said }
-            : undefined
-          : { from: offer.id, refused: true, words: answer.refused },
-      );
+      setReport(saidOf(offer.id, answer));
       return answer;
     },
     [doing],
@@ -8270,7 +8282,7 @@ export type PlaneReport = {
    *  runs reaches this project's live arrangement and no other's. */
   run: (offer: Offer) => Promise<Ran>;
   /** What its last action answered, drawn by the window beside the palette. */
-  said?: { from: string; refused: boolean; words: string };
+  said?: Said;
   /** Its chats asking for the operator: for its own tab to count, and for the title bar's
    *  list (charter-app#249). */
   asking: Asking[];

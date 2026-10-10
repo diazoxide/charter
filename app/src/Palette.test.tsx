@@ -163,6 +163,30 @@ describe("the command palette", () => {
     );
   });
 
+  it("follows a refusal's way to its setting, and closes (#1201)", async () => {
+    const onSettings = vi.fn();
+    render(
+      <Palette
+        offers={OFFERS}
+        said={{
+          from: "file.editor:x",
+          refused: true,
+          words: "Choose your editor in Settings first.",
+          settings: { label: "Choose your editor", link: { group: "you.editor" } },
+        }}
+        onSettings={onSettings}
+        onRun={ok}
+      />,
+    );
+    await open();
+
+    const alert = within(screen.getByRole("dialog")).getByRole("alert");
+    await userEvent.click(within(alert).getByRole("button", { name: "Choose your editor" }));
+
+    expect(onSettings).toHaveBeenCalledWith({ group: "you.editor" });
+    await vi.waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+
   it("leaves on Escape, having run nothing", async () => {
     const onRun = vi.fn(ok);
     render(<Palette offers={[ready("chat.new", "New tab")]} onRun={onRun} />);
