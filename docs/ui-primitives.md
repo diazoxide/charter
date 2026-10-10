@@ -726,6 +726,15 @@ model and a select-on-`mousedown` this window's strips do not have:
   Left to close or climb, and a typed letter to the next row it starts. `Explorer.tsx` says
   why the levels are written down and not left to the DOM. A tree's rows are `treeitem`s and
   no longer `button`s to a role query, so a test reaches them by that role.
+- **Explorer is three sections, and each tree is its own Tab stop** (#1677): _Workspaces_,
+  _Repos and branches_ and _Files_, in that order, each under a heading that is a disclosure
+  button (`aria-expanded`, `aria-controls`) and folds it — a button and not a `<details>`, since
+  a `<summary>` cannot hold the `h2` the section's title is. Tab goes heading, tree, heading, tree.
+  A folded section is `hidden` and stays mounted, so its stop is taken out of the order and its
+  folds come back with it. The Workspaces rows mark the focused workspace with `aria-current`,
+  as the picked spot is marked, and never `aria-selected`: the strip stays the axis (ADR 0036),
+  and a row's press is the strip tab's own catalogue row. A view's key gives the keyboard to the
+  first tree drawn in the view, past the headings.
 - **Every other control says `tabIndex={0}`**, and a tab's `×` says `-1`: fifty closers would be
   fifty stops again. **Delete on a focused project or chat tab presses the row its `×` presses**
   (purlis#239, `closeOnDelete` in `app/src/tabKeys.ts`), and so does Backspace on a Mac,

@@ -2814,7 +2814,8 @@ button.show-more:focus-visible {
   color: var(--text-muted);
 }
 
-.explorer .file-node .twisty[data-open] {
+.explorer .file-node .twisty[data-open],
+.explorer .explorer-section-head .twisty[data-open] {
   rotate: 90deg;
 }
 
@@ -3207,6 +3208,42 @@ h2.sidebar-title .node-icon {
 
 .explorer h2 {
   margin: 0.75rem 0 0.25rem;
+}
+
+/* **Explorer's sections** (#1677): each heading is the disclosure that folds its section, an
+   editor's explorer's, drawn as the sidebar title it is. The button fills the heading so the
+   whole line is the target; what the section is of follows in the row's quiet weight. The first
+   section sits at the region's top. A folded section's body is `hidden`, never unmounted. */
+.explorer .explorer-section:first-child > h2 {
+  margin-top: 0;
+}
+.explorer .explorer-section-head > button {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  gap: 0.35rem;
+  align-items: center;
+  padding: 0.15rem 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  text-align: start;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.explorer .explorer-section-head .section-of {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: normal;
+  color: var(--text-muted);
+}
+.explorer .explorer-section-head .twisty {
+  flex: none;
 }
 
 .explorer .absent {
@@ -7568,7 +7605,8 @@ h2.sidebar-title .node-icon {
 
 /* The explorer's twisty turns with the disclosure: motion that is the direct answer to a click,
    saying which way the thing just went. */
-.explorer .clone > summary .twisty {
+.explorer .clone > summary .twisty,
+.explorer .explorer-section-head .twisty {
   transition: rotate var(--motion-duration-quick) var(--motion-easing-standard);
 }
 

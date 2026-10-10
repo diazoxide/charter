@@ -90,6 +90,9 @@ function core(
     const a = (args ?? {}) as Record<string, unknown>;
     asked.push({ cmd, args: a });
     if (cmd === "plane_at_launch") return { plane: PLANE, from: PLANE, why: null };
+    // A picked branch's files are drawn in Explorer's Files section (#1677), with its changes.
+    if (cmd === "branch_tree") return { entries: [], more: 0 };
+    if (cmd === "branch_status") return { changes: [], folders: [], more: 0, base: "main" };
     if (cmd === "opened_chats") return [];
     if (cmd === "start_chat") {
       const answer = () => {
