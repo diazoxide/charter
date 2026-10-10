@@ -86,17 +86,36 @@ export function usePlaneSaving(plane: PlaneId | undefined): {
   return { saving: saving?.plane === plane ? saving?.standing : undefined, reread };
 }
 
+/** How close a focus and a beat (the show's read among them) must be to count as one return
+ *  (D-1392-6). The engine sends the two as separate events a few milliseconds apart; a second is
+ *  far inside the beat, so a beat it folds away costs nothing a person sees. */
+export const RETURN_FOLD_MS = 1_000;
+
 /** Ask again on focus, after any save, and every {@link SAVING_REREAD_MS} while the window is
  *  shown — on the window's one beat (`whileShown.ts`), which asks once more when it is shown
- *  again rather than running `git status` for a window nobody sees. */
+ *  again rather than running `git status` for a window nobody sees.
+ *
+ *  **One read on return** (#1392, D-1392-6): coming back to the window both shows it and focuses
+ *  it, and each asked on its own, so a return ran `git status` twice. A focus or a beat within
+ *  {@link RETURN_FOLD_MS} of the last read asked here is the same return and asks nothing. A
+ *  finished save always asks: it is news, not a return. */
 function useRereads(setAsked: (next: (n: number) => number) => void): void {
   useEffect(() => {
-    const again = () => setAsked((n) => n + 1);
-    window.addEventListener("focus", again);
+    // The monotonic clock: a wall clock set back would fold every return until it caught up.
+    let last: number | undefined;
+    const again = () => {
+      last = performance.now();
+      setAsked((n) => n + 1);
+    };
+    const returned = () => {
+      if (last !== undefined && performance.now() - last < RETURN_FOLD_MS) return;
+      again();
+    };
+    window.addEventListener("focus", returned);
     window.addEventListener(PLANE_SAVED, again);
-    const stop = everyWhileShown(SAVING_REREAD_MS, again);
+    const stop = everyWhileShown(SAVING_REREAD_MS, returned);
     return () => {
-      window.removeEventListener("focus", again);
+      window.removeEventListener("focus", returned);
       window.removeEventListener(PLANE_SAVED, again);
       stop();
     };
