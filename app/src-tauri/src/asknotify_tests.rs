@@ -370,3 +370,30 @@ fn a_notification_says_what_kind_of_ask_and_never_what_it_asks() {
     );
     assert!(!sent[0].body.contains("prod.internal"));
 }
+
+#[test]
+fn a_task_that_failed_never_makes_a_chat_s_own_wait_an_update() {
+    use crate::hooks::{HowFailed, Need};
+    let failed = Need::TaskFailed {
+        id: "d1".to_owned(),
+        chat: None,
+        task: "drill".to_owned(),
+        how: HowFailed::Failed,
+        why: "it said it was blocked".to_owned(),
+    };
+    let undelivered = Need::ReportUndelivered {
+        asker: "steward 12".to_owned(),
+    };
+    // A failure left unlooked-at beside a turn that ended on the person: still an ask.
+    assert_eq!(
+        reasons_besides_failures(Some(std::slice::from_ref(&failed)), 0),
+        0
+    );
+    assert_eq!(reasons_besides_failures(None, 0), 0);
+    // A report with nowhere to go, or a refused commit: the app's reasons, an update.
+    assert_eq!(
+        reasons_besides_failures(Some(&[failed.clone(), undelivered]), 0),
+        1
+    );
+    assert_eq!(reasons_besides_failures(Some(&[failed]), 2), 2);
+}

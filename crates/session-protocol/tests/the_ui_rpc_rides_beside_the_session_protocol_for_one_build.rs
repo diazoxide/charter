@@ -211,9 +211,18 @@ async fn answering_an_ask_is_never_served_on_the_link_even_to_the_window() {
     assert!(ui::WINDOW_ONLY.contains(&"open_extension_record"));
     // And every ask that waits on the person, from every source (#1690).
     assert!(ui::WINDOW_ONLY.contains(&"asks_waiting"));
+    // And the Inbox's updates: what happened to the person's chats, and what they put away
+    // (#1693).
+    for command in [
+        "inbox_updates",
+        "note_inbox_updates",
+        "settle_inbox_updates",
+    ] {
+        assert!(ui::WINDOW_ONLY.contains(&command), "{command}");
+    }
     assert_eq!(
         ui::WINDOW_ONLY.len(),
-        35 + 26 + 3 + 2 + 3 + 1 + 2 + 1 + 1 + 2 + 1
+        35 + 26 + 3 + 2 + 3 + 1 + 2 + 1 + 1 + 2 + 1 + 3
     );
 }
 

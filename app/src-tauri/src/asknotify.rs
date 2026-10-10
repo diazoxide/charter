@@ -195,10 +195,10 @@ fn notice(plane: &PlaneId, session: u32, asks: &[&Shown]) -> Notice {
 }
 
 /// **Whether an item of the registry is an update, not an ask**: a chat in the needs-you queue
-/// for `reasons` of the app's own — a task of its that failed, a report with nowhere to go, a
-/// commit refused — and not for anything it asked. The Inbox says such a chat's reason in
-/// place of a reply box (#1692) until #1693 moves them to the updates. Every other source is a
-/// decision the person owes, whatever else the chat waits for.
+/// for `reasons` of the app's own — a report with nowhere to go, a commit refused
+/// ([`reasons_besides_failures`]) — and not for anything it asked. The Inbox says such a
+/// chat's reason in place of a reply box (#1692). Every other source is a decision the person
+/// owes, whatever else the chat waits for.
 pub fn an_update(ask: &Shown, reasons: usize) -> bool {
     ask.source == AskSource::Question && reasons > 0
 }
@@ -206,7 +206,20 @@ pub fn an_update(ask: &Shown, reasons: usize) -> bool {
 /// The reasons of the app's own chat `session` is in the queue for, as the board says them.
 fn app_reasons(board: &dyn crate::host::ChatBoard, session: u32) -> usize {
     let now = board.now(session);
-    now.needs.map_or(0, |needs| needs.len()) + now.refusals.len()
+    reasons_besides_failures(now.needs.as_deref(), now.refusals.len())
+}
+
+/// **The app's reasons that make a chat's wait an update**: a report with nowhere to go and a
+/// refused commit. Not a task of its that came to nothing (#1693): a chat in the queue only for
+/// those asks nothing and is no ask at all (`asking::derive`), and one that also waits on the
+/// person for itself still asks, so a failure left unlooked-at never silences its notification.
+pub fn reasons_besides_failures(needs: Option<&[crate::hooks::Need]>, refusals: usize) -> usize {
+    needs.map_or(0, |needs| {
+        needs
+            .iter()
+            .filter(|need| !matches!(need, crate::hooks::Need::TaskFailed { .. }))
+            .count()
+    }) + refusals
 }
 
 /// **Whether the person is looking at a chat's asks**: all of the window's questions, each
