@@ -66,7 +66,13 @@ describe("the window's keyboard reach", () => {
         };
       }),
     );
-    expect(strips.map((one) => one.strip)).toEqual(["Projects", "Workspaces", "Tabs"]);
+    // The left side's activity bar is a tab list too (#1673), and comes after the tab strip.
+    expect(strips.map((one) => one.strip)).toEqual([
+      "Projects",
+      "Workspaces",
+      "Tabs",
+      "Navigation",
+    ]);
     for (const one of strips)
       expect(one).toEqual({ ...one, stops: 1, selectedIsTheStop: true, rest: true });
   });

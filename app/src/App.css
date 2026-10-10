@@ -2585,6 +2585,13 @@ button.show-more:focus-visible {
   flex-direction: column;
 }
 
+/* `hidden` is the browser's `display: none`, and the `display: flex` above outranks it, so a
+   hidden view would be drawn under the open one. Said again here, after it. */
+.region-views[hidden],
+.region-view[hidden] {
+  display: none;
+}
+
 .region-view > .explorer {
   flex: 1 1 0;
   height: auto;

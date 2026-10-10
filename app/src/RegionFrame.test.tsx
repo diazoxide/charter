@@ -4,6 +4,7 @@ import { cleanup, render as renderBare, screen, within } from "@testing-library/
 import { userEvent } from "@testing-library/user-event";
 import { RegionFrame } from "./RegionFrame";
 import { ActivityCount } from "./ActivityBar";
+import { drawnWith } from "./cascade.testkit";
 import {
   DEFAULT_ARRANGEMENT,
   type Arrangement,
@@ -243,6 +244,18 @@ describe("the activity bar of a region with views (#1673)", () => {
       "aria-controls",
       screen.getByRole("tabpanel", { name: "Chats" }).id,
     );
+  });
+
+  it("draws a hidden view as nothing, though the stylesheet lays the views out as boxes", () => {
+    render(<WithViews from={DEFAULT_ARRANGEMENT} />);
+
+    // `hidden` is the browser's `display: none`, which any `display` a class sets outranks: the
+    // real window drew the Explorer under the Chats view until App.css said it again (train 34).
+    const open = screen.getByRole("tabpanel", { name: "Chats" });
+    const shut = screen.getByTestId("v-explorer").closest('[role="tabpanel"]') as HTMLElement;
+    expect(shut).toHaveAttribute("hidden");
+    expect(drawnWith(open, "display")).toBe("flex");
+    expect(drawnWith(shut, "display")).toBe("none");
   });
 
   it("says a press of a tab, and the content does not change until the arrangement does", async () => {
