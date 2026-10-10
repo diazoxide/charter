@@ -297,10 +297,11 @@ fn an_orphaned_task_s_report_is_not_lost_and_is_delivered_when_its_asker_is_reop
     // The task finishes with nobody to tell.
     works(&held, task);
     let said = reports(&held, &id, task);
+    // And it ends at its report, as every task does (#1510).
     assert!(
         matches!(
             &said,
-            Answer::Reported {
+            Answer::Finished {
                 kept_for: Some(_),
                 ..
             }

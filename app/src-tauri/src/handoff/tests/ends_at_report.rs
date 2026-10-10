@@ -573,12 +573,48 @@ fn on_the_clock_a_task_whose_turn_has_ended_is_ended_within_moments() {
 }
 
 #[test]
-fn a_task_whose_asking_chat_has_gone_is_not_ended_by_its_report() {
-    // Its report reaches no chat: it is kept for the workspace, and the chat that wrote it
-    // stays open, which is where the person is told the report had nowhere to go.
+fn an_orphaned_task_ends_at_its_report_as_every_other_task_does() {
+    // #1510 line 4, V100-64: its report reaches no chat, and is kept for the workspace and on
+    // its dispatch record, where the person reads it. The task is ended as one whose report
+    // reached its chat, and nobody is asked for.
     let (_plane, _host, _planes, id, held, steward, task) = a_steward_and_its_task();
     closes(&held, steward).expect("closed, and the task kept running");
     works(&held, task);
+
+    let said = reports(&held, &id, task);
+
+    assert!(
+        matches!(
+            &said,
+            Answer::Finished {
+                kept_for: Some(_),
+                ..
+            }
+        ),
+        "{said:?}"
+    );
+    assert!(
+        record_of(&held, task).report.is_some(),
+        "the report is on its record"
+    );
+    its_turn_ends(&held, task);
+    settles(&held, task);
+    assert!(!open_chats(&held).contains(&task), "ended at its report");
+    assert!(!held.hooks().board().needs_you().contains(&task));
+}
+
+#[test]
+fn a_task_the_person_started_from_a_tab_still_waits_for_them_when_that_chat_has_gone() {
+    // D-1443-9: the person's own task is theirs, wherever its report went.
+    let plane = a_plane_with_personas();
+    let host = Pretend::default();
+    let (planes, id, steward) = a_steward_chat(&host, &plane);
+    let held = planes.held(&id).expect("held");
+    let task = ask_from_the_tab(&held, &id, steward, "devops", "check prod")
+        .expect("it starts")
+        .session;
+    works(&held, task);
+    held.close_chat(steward).expect("closed");
 
     let said = reports(&held, &id, task);
 

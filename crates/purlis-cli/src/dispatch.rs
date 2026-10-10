@@ -547,11 +547,24 @@ pub fn report(outcome: &str, text: &str, changed: Option<&str>) -> Result<String
         // Delivered, and the app says the task is over (#1485): the chat is told its program
         // ends with this turn, so it starts nothing it would lose. Only where the app says
         // so: a handoff's chat, a blocked task and one the person started are not ended.
-        Ok(Answer::Finished { to }) => Ok(format!(
+        Ok(Answer::Finished { to, kept_for: None }) => Ok(format!(
             "{REPORT_SAYS} sent to '{}' ({}). It reaches that chat as context on its next turn. \
              This task is finished: this chat's program is ended once this turn is over, so \
              start nothing more.",
             purlis_core::personas::one_line(&to),
+            outcome.word()
+        )),
+        // The chat that asked has gone, and the task still ends at its report (#1510): the
+        // person reads it on the task's record.
+        Ok(Answer::Finished {
+            to,
+            kept_for: Some(kept),
+        }) => Ok(format!(
+            "{REPORT_SAYS} '{}' has closed, so the report is kept for {} ({}), and the person \
+             reads it with this task. This task is finished: this chat's program is ended once \
+             this turn is over, so start nothing more.",
+            purlis_core::personas::one_line(&to),
+            kept_place(&kept),
             outcome.word()
         )),
         Ok(Answer::Reported { to, kept_for: None }) => Ok(format!(
@@ -572,17 +585,12 @@ pub fn report(outcome: &str, text: &str, changed: Option<&str>) -> Result<String
         Ok(Answer::Reported {
             to,
             kept_for: Some(kept),
-        }) => {
-            let kept_for = match purlis_core::active::Place::read(&kept) {
-                Some(place) => place.said(),
-                None => format!("'{}'", purlis_core::personas::one_line(&kept)),
-            };
-            Ok(format!(
-                "{REPORT_SAYS} '{}' has closed, so the report is kept for {kept_for}. The next \
-                 chat that starts there reads it.",
-                purlis_core::personas::one_line(&to),
-            ))
-        }
+        }) => Ok(format!(
+            "{REPORT_SAYS} '{}' has closed, so the report is kept for {}. The next chat that \
+             starts there reads it.",
+            purlis_core::personas::one_line(&to),
+            kept_place(&kept),
+        )),
         Ok(Answer::No { why }) => Err(not_sent(&why)),
         Ok(
             Answer::Ticket { .. }
@@ -604,6 +612,15 @@ pub fn report(outcome: &str, text: &str, changed: Option<&str>) -> Result<String
 }
 
 /// A report refusal in this command's words, as its recorded answers have it.
+/// Where a report with nowhere to go was kept, as a sentence names it: a workspace or the
+/// project root, by `Place::word`.
+fn kept_place(kept: &str) -> String {
+    match purlis_core::active::Place::read(kept) {
+        Some(place) => place.said(),
+        None => format!("'{}'", purlis_core::personas::one_line(kept)),
+    }
+}
+
 fn words(bad: &handoff::BadReport) -> String {
     match bad {
         handoff::BadReport::Empty => "the report is empty, so nothing was sent. Say what was \

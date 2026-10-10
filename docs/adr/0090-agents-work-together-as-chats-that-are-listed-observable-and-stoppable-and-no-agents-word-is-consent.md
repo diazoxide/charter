@@ -1117,7 +1117,20 @@ The operator's rulings V100-63 and V100-64 (spec #1483, built in #1513).
   entry the record contradicts is told and reported for in nothing already, and the record of
   open chats is out of a sandboxed chat's reach).
 
-**Interim, owned by #1510** (accepted by the operator, 2026-10-09): a task whose asker has gone
-does not yet end at its report as other tasks do. It stays open and asks for the person, as
-#1448 had it, until Past tasks (#1510) gives its report a place in the window; "an orphaned
-task ends at its report" is an acceptance line of #1510.
+**An orphaned task ends at its report** (#1510, 2026-10-10; delegated to the dispatcher under
+V100-64, awaiting the operator's confirmation). This replaces the interim of 2026-10-09, which
+kept a task whose asker had gone open, asking for the person as #1448 had it, until Past tasks
+gave its report a place in the window. Past tasks is now the Dispatches tab, narrowed to a
+workspace and a date, and it shows the report from the task's dispatch record.
+
+- **A task whose asking chat has gone ends at its report, as every other task does.** Its
+  report is kept on its record and for the workspace, as before. The task is told it is
+  finished, and its program is ended once its turn is over, by the same rules as a task whose
+  report reached its chat: held while a chat it started is at work or while the person is
+  looking at it. No needs-you item is raised for it, at its report or when the chat that asked
+  closes after it reported.
+- **What decides it is the app's own record of the delivery it just made**, never the
+  dispatch record on disk.
+- **What stays open is what stays open anywhere**: a task the person started from a tab
+  (D-1443-9), a blocked task, a handoff's chat, and a task the person has taken up again since
+  it reported. Each of these is a needs-you item that says its report had nowhere to go.
