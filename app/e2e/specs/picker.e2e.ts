@@ -112,8 +112,9 @@ describe("starting a chat", () => {
     // the program's name — the program here is `claude-stand-in`, a wrapper, and
     // `Harness::of_command` answers `None` for one exactly as it does for a shell.
     //
-    // On the row's hover in the Chats list since #1673: the explorer, which said it on the
-    // chat's row, lists no chats, and the Chats view is open by default.
+    // In the row's card in the Chats list (#1673, #1675): the explorer, which said it on the
+    // chat's row, lists no chats, and the Chats view is open by default. The card comes up
+    // once the pointer rests on the row, so each row is rested on in turn and its card read.
     const list = await $('[data-testid="chats-section"]');
     await list.waitForDisplayed({ timeout: 20_000 });
 
@@ -121,17 +122,19 @@ describe("starting a chat", () => {
     await browser
       .waitUntil(
         async () => {
-          said = await browser.execute(() =>
-            [
-              ...document.querySelectorAll<HTMLElement>(
-                '[data-testid="chats-section"] [role="treeitem"][title]',
-              ),
-            ].map((row) => row.title),
-          );
-          return said.some((title) => title.includes("needs-approval (claude)"));
+          said = [];
+          const rows = await $$('[data-testid="chats-section"] [role="treeitem"]').getElements();
+          for (const row of rows) {
+            const session = await row.getAttribute("data-session");
+            await row.moveTo();
+            const card = await $(`[role="tooltip"][data-testid="chat-card-${session}"]`);
+            const up = await card.waitForExist({ timeout: 3_000 }).catch(() => false);
+            if (up) said.push(await card.getText());
+          }
+          return said.some((text) => text.includes("needs-approval (claude)"));
         },
         {
-          timeout: 20_000,
+          timeout: 40_000,
           interval: 250,
           timeoutMsg: "the Chats list never named the profile the chat started on",
         },

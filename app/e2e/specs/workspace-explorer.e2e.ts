@@ -59,6 +59,9 @@ async function untilListed(expected: string[]): Promise<void> {
  * Focused rather than assumed, for the reason in this file's own docstring: one app process
  * serves the whole run, so what this spec finds depends on what ran before it.
  */
+/** The header of the fixture branch's cockpit, and nothing else that names the branch. */
+const COCKPIT_HEAD = 'section.cockpit-head[aria-label="Branch fix-login"]';
+
 async function onAlpha(): Promise<void> {
   await untilListed(["alpha", "beta"]);
   await focus("alpha");
@@ -537,7 +540,8 @@ describe("the explorer", () => {
       await $('[role="menuitem"][aria-label="Focus on branch fix-login"]').click();
 
       // By role and name: the header region, the breadcrumb, and the cockpit's own tree.
-      const head = await $("aria/Branch fix-login");
+      // The cockpit's own header: the Search view's scope list names the branch too (#1676).
+      const head = await $(COCKPIT_HEAD);
       await head.waitForDisplayed({ timeout: 20_000 });
       await browser.waitUntil(
         async () => (await head.getText()).includes("0 ahead, 0 behind main"),
@@ -566,7 +570,7 @@ describe("the explorer", () => {
         timeout: 20_000,
         timeoutMsg: "Esc did not step back out of the cockpit",
       });
-      await expect(await $("aria/Branch fix-login")).not.toBeExisting();
+      await expect(await $(COCKPIT_HEAD)).not.toBeExisting();
     } finally {
       // One app process serves the whole run: the explorer and the clone are left as found.
       const crumb = await $("aria/Breadcrumb");
@@ -1028,9 +1032,7 @@ describe("the explorer", () => {
       });
       started = await tabInFront();
 
-      const files = await $('[data-testid="files-svc-fix-login"] .file-node');
-      await files.waitForExist({ timeout: 20_000 });
-      if ((await files.getAttribute("aria-expanded")) !== "true") await files.click();
+      await showFilesOf("fix-login");
       const readme = inExplorer('[data-row="file:svc/fix-login:README.md"] .touch-mark');
       await explorerRow("fix-login", "README.md");
       await $(readme).waitForExist({
@@ -1209,7 +1211,7 @@ describe("the explorer's rows, in a region too narrow for them", () => {
 
     const guides = await browser.execute(() => {
       const tree = document.querySelector<HTMLElement>(
-        '[data-testid="explorer"] [role="tree"].tree',
+        '[data-testid="explorer"] [role="tree"].tree[aria-label="Repos and branches"]',
       );
       if (!tree) throw new Error("no explorer tree drawn in the shared tree style");
       return [...tree.querySelectorAll<HTMLElement>('[role="group"]')].flatMap((group) => {

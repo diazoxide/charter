@@ -66,12 +66,14 @@ describe("the window's keyboard reach", () => {
         };
       }),
     );
-    // The left side's activity bar is a tab list too (#1673), and comes after the tab strip.
+    // Each side's activity bar is a tab list too (#1673, #1678): the left one after the tab
+    // strip, and the right one last, at the window's right edge.
     expect(strips.map((one) => one.strip)).toEqual([
       "Projects",
       "Workspaces",
       "Tabs",
       "Navigation",
+      "Attention",
     ]);
     for (const one of strips)
       expect(one).toEqual({ ...one, stops: 1, selectedIsTheStop: true, rest: true });
@@ -86,7 +88,7 @@ describe("the window's keyboard reach", () => {
         ["workspaces", '[data-strip="Workspaces"]'],
         ["chats", '[data-strip="Tabs"]'],
         // The left side's open view (#1673): its other view is hidden, and not a stop.
-        ["navigation", ".region-view:not([hidden])"],
+        ["navigation", '.region-views[data-region="navigation"] .region-view:not([hidden])'],
         ["panes", ".panes"],
         // The right side's open view (#1678): its others are hidden, and not stops.
         ["attention", '.region-views[data-region="aside"] .region-view:not([hidden])'],
