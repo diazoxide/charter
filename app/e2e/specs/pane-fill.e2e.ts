@@ -7,7 +7,8 @@ import { endChat, pressAndStart } from "../opening.js";
  * again after the region beside it changes size.
  *
  * The operator reported the opposite from the real app: the terminal stopped roughly 420 px
- * down and the rest of the centre was empty down to the bottom bar, with one pane and with two.
+ * down and the rest of the centre was empty down to the bottom bar (the bottom region, gone
+ * since #1676), with one pane and with two.
  * Every word of that is about pixels, and **jsdom lays nothing out**, so no unit test can say
  * it or say it is fixed; this is where it is asked, the way `status-line.e2e.ts` asks where the
  * status line is.
@@ -32,7 +33,14 @@ import { endChat, pressAndStart } from "../opening.js";
 /** The centre region's box, each pane's box, and each pane's terminal grid. */
 type Measured = {
   centre: { top: number; bottom: number };
-  panes: { top: number; bottom: number; screenBottom: number; rows: number; rowHeight: number }[];
+  panes: {
+    top: number;
+    bottom: number;
+    screenBottom: number;
+    screenWidth: number;
+    rows: number;
+    rowHeight: number;
+  }[];
 };
 
 /** Everything the assertions read, in one pass through the real layout. */
@@ -51,6 +59,7 @@ async function measure(): Promise<Measured> {
           top: own.top,
           bottom: own.bottom,
           screenBottom: screen?.bottom ?? Number.NaN,
+          screenWidth: screen?.width ?? Number.NaN,
           rows,
           rowHeight: rows > 0 ? height / rows : Number.NaN,
         };
@@ -130,12 +139,14 @@ async function tabNames(): Promise<string[]> {
   );
 }
 
-/** Brings the State region back if a failed assertion left it put away. */
-async function stateRegionBack(): Promise<void> {
-  const away = await $('button[aria-pressed="false"][aria-label="State"]');
+/** Brings the Navigation region back if a failed assertion left it put away. */
+async function navigationBack(): Promise<void> {
+  const away = await $('button[aria-pressed="false"][aria-label="Navigation"]');
   if (await away.isExisting()) {
     await away.click();
-    await $('[data-testid="bottom-bar"]').waitForExist({ timeout: 20_000 });
+    await $('button[aria-pressed="true"][aria-label="Navigation"]').waitForExist({
+      timeout: 20_000,
+    });
   }
 }
 
@@ -150,7 +161,7 @@ describe("the terminal in the centre region", () => {
   afterEach(async () => {
     const picker = await $('[role="dialog"][aria-labelledby="start-chat"]');
     if (await picker.isDisplayed().catch(() => false)) await browser.keys(["Escape"]);
-    await stateRegionBack();
+    await navigationBack();
   });
 
   // Every chat this file opened is ended. A split tab's `End chat` may leave its other pane
@@ -169,19 +180,19 @@ describe("the terminal in the centre region", () => {
   });
 
   it("reaches the bottom of the centre with one pane", async () => {
-    await $('[data-testid="bottom-bar"]').waitForExist({ timeout: 20_000 });
+    await $('[data-testid="panels"]').waitForExist({ timeout: 20_000 });
     await pressAndStart("New tab");
     await untilShows(0, READY);
 
     const filled = await untilTheyFill(1);
-    // And the centre is not itself the short thing: it runs down to the bottom region, which
-    // is where the operator's screenshot showed the empty space ending.
-    const bottomRegion = await browser.execute(
+    // And the centre is not itself the short thing: it runs down to the status line, the
+    // window's last line, since the bottom region went (#1676).
+    const line = await browser.execute(
       () =>
-        document.querySelector('[data-panel][id="region-bottom"]')?.getBoundingClientRect().top ??
+        document.querySelector('[data-testid="status-line"]')?.getBoundingClientRect().top ??
         Number.NaN,
     );
-    expect(Math.abs(bottomRegion - filled.centre.bottom)).toBeLessThanOrEqual(2);
+    expect(Math.abs(line - filled.centre.bottom)).toBeLessThanOrEqual(2);
   });
 
   /**
@@ -207,7 +218,7 @@ describe("the terminal in the centre region", () => {
    * `rgb(0, 0, 0)` from `DIV.xterm-viewport`.
    */
   it("paints the slack under the last row in the terminal's colour, not black", async () => {
-    await $('[data-testid="bottom-bar"]').waitForExist({ timeout: 20_000 });
+    await $('[data-testid="panels"]').waitForExist({ timeout: 20_000 });
     await pressAndStart("New tab");
     // The grid, not the harness's words: what is asked is the colour of the room the rows
     // do not use, which exists as soon as the terminal is fitted.
@@ -267,22 +278,30 @@ describe("the terminal in the centre region", () => {
 
   it("fits again when the centre grows, and again when it shrinks back", async () => {
     // A terminal that fills on its first paint and not after a resize is the same bug: the
-    // fit has to follow the box, not be taken once at mount.
+    // fit has to follow the box, not be taken once at mount. The centre is the window's whole
+    // height since #1676, so it grows sideways: the left side put away.
     const before = await untilTheyFill(1);
+    const slot = await $('[data-panel][id="region-left"]');
 
-    await (await $('button[aria-pressed="true"][aria-label="State"]')).click();
-    await browser.waitUntil(async () => !(await $('[data-testid="bottom-bar"]').isExisting()), {
+    await (await $('button[aria-pressed="true"][aria-label="Navigation"]')).click();
+    await browser.waitUntil(async () => ((await slot.getSize("width")) as number) === 0, {
       timeout: 20_000,
-      timeoutMsg: "the bottom region did not go away when it was put away",
+      timeoutMsg: "the left side did not go away when it was put away",
     });
-    const grown = await untilTheyFill(1);
-    expect(grown.centre.bottom).toBeGreaterThan(before.centre.bottom);
-    expect(grown.panes[0].rows).toBeGreaterThan(before.panes[0].rows);
+    let grown = before;
+    await browser.waitUntil(
+      async () => {
+        grown = await untilTheyFill(1);
+        return grown.panes[0].screenWidth > before.panes[0].screenWidth;
+      },
+      { timeout: 20_000, timeoutMsg: "the terminal did not widen with the centre" },
+    );
 
-    await (await $('button[aria-pressed="false"][aria-label="State"]')).click();
-    await $('[data-testid="bottom-bar"]').waitForExist({ timeout: 20_000 });
-    const back = await untilTheyFill(1);
-    expect(back.panes[0].rows).toBeLessThan(grown.panes[0].rows);
+    await (await $('button[aria-pressed="false"][aria-label="Navigation"]')).click();
+    await browser.waitUntil(
+      async () => (await untilTheyFill(1)).panes[0].screenWidth < grown.panes[0].screenWidth,
+      { timeout: 20_000, timeoutMsg: "the terminal did not narrow back with the centre" },
+    );
   });
 
   it("reaches the bottom of the centre in both halves of a split", async () => {

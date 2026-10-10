@@ -226,8 +226,15 @@ side, which is what that rejection waited for.
 - **The left side is navigation, as the reading above has it.** Its region is called
   _Navigation_ now, and holds two views: **Chats** (the chats and their tasks, as the
   2026-10-07 and first 2026-10-10 amendments describe them) and **Explorer** (the workspace, its
-  repos and branches, and their files). Chats is open by default. Search and Changes join it as
-  views later (#1671); the bottom bar's content becomes the Changes view then.
+  repos and branches, and their files). Chats is open by default. **Search** (the files'
+  content, ⌘⇧F) and **Changes** (⌃⇧G) joined it in #1676.
+- **The bottom region is gone** (B-7, #1676). What it drew, each repo's branch, uncommitted
+  files, branches and pipeline, is the Changes view, unchanged and still with nothing to press,
+  so "the bottom is state" above now reads "the Changes view is state". The terminals have the
+  window's whole height. Its icon counts the files git has uncommitted, in the plain count's
+  colours since nothing is asking. A layout file that still places the `bottom` region is read
+  past without a word. A bottom panel may come back one day for output only; it would be a new
+  decision.
 - **The right side stays the "for you" side**: Todos, Memory, Personas, Sessions, Vaults and the
   extensions' panels, each a view there (#1678). What it holds does not change, only that it
   shows one at a time.
@@ -238,8 +245,9 @@ side, which is what that rejection waited for.
   that view. The bar stays at the edge while the side is away, with its badges: the Chats icon
   counts the chats that need the person, in the needs-you colours. Putting a side away hides its
   views and never unmounts them, so a view keeps its folds, scroll and filter.
-- **Keys and the palette.** ⌘B puts the left side away and brings it back, ⌘⇧E shows Explorer
-  and ⌘⇧C shows Chats (Ctrl on other platforms); every view is a row in the palette.
+- **Keys and the palette.** ⌘B puts the left side away and brings it back, ⌘⇧E shows Explorer,
+  ⌘⇧C shows Chats and ⌘⇧F shows Search (Ctrl on other platforms), and ⌃⇧G shows Changes on
+  every platform; every view is a row in the palette (Search's is _Search in files_).
 - **Remembered per project, on this machine**, in the layout file (version 2): which view each
   side shows, its width and whether it is away. The needs-you queue stays in the title bar,
   where nothing competes with it.

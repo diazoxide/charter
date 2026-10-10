@@ -1,6 +1,9 @@
 /**
  * **The Search view tab** (FM-8, #1111; #1103, V86 F9/F10): ⌘⇧F's content search, as a view tab.
  *
+ * **And the left side's Search view** (#1676): ⌘⇧F shows the view, which draws this same
+ * component in the side, keyed by what it asks just as a tab is (`PlaneView`'s `sideSearch`).
+ *
  * A query box with its three switches — match case, whole word, regular expression — and where
  * to look: the branch the tab was opened on, its workspace, this project, or every project open
  * in charter. Hits stream in grouped project → branch → file, each file with its matching lines
@@ -58,11 +61,16 @@ export function SearchTab({
   plane,
   view,
   onAsk,
+  takesKeyboard = true,
 }: {
   plane: PlaneId;
   view: ViewRef;
   /** The tab now asks something else: its view follows, so it is keyed by what it shows. */
   onAsk?: (from: ViewRef, to: ViewRef, title: string) => void;
+  /** Whether the box takes the keyboard when it is drawn, as a tab just opened should. The
+   *  Search view (#1676) is drawn when it is first shown and may be drawn at launch, so the
+   *  window gives it the keyboard when a person asks for it, and never on its own. */
+  takesKeyboard?: boolean;
 }) {
   const fromView = useMemo(() => searchOf(view), [view]);
   const [ask, setAsk] = useState<SearchAsk | undefined>(fromView);
@@ -112,6 +120,7 @@ export function SearchTab({
   return (
     <SearchBody
       plane={plane}
+      takesKeyboard={takesKeyboard}
       ask={ask}
       draft={draft}
       onDraft={setDraft}
@@ -122,12 +131,14 @@ export function SearchTab({
 
 function SearchBody({
   plane,
+  takesKeyboard,
   ask,
   draft,
   onDraft,
   onAsk,
 }: {
   plane: PlaneId;
+  takesKeyboard: boolean;
   ask: SearchAsk;
   draft: string;
   onDraft: (draft: string) => void;
@@ -137,8 +148,8 @@ function SearchBody({
   const box = useRef<HTMLInputElement>(null);
   const list = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    box.current?.focus();
-  }, []);
+    if (takesKeyboard) box.current?.focus();
+  }, [takesKeyboard]);
 
   const toggle = (which: keyof Matching) =>
     onAsk({ ...ask, matching: { ...ask.matching, [which]: !ask.matching[which] } });

@@ -12,12 +12,14 @@ import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
 import { forgetThisLaunch } from "./regions";
+import { showTheChanges } from "./test-strips";
 
 /**
- * **A refused read has its way out with the explorer hidden** (#1244). The bottom region says
- * what purlis could not read and, by ADR 0038, holds nothing to press; its Read again was the
- * explorer's Notice. With the explorer put away, the refusal line's menu and the palette both
- * have the same Read again, and it asks the workspace's reads again.
+ * **A refused read has its way out with the explorer hidden** (#1244). The Changes view (the
+ * bottom region until #1676) says what purlis could not read and, by ADR 0038, holds nothing to
+ * press; its Read again was the explorer's Notice. With the Explorer view not shown, the refusal
+ * line's menu and the palette both have the same Read again, and it asks the workspace's reads
+ * again.
  */
 
 vi.mock("./SessionPane", () => ({
@@ -83,17 +85,17 @@ afterEach(() => {
   clearMocks();
 });
 
-/** Puts the explorer away, as the navigation region's toggle does (#1673: the explorer is one
- *  of that region's views). */
+/** Leaves the Explorer view for the Changes view (#1676), so the explorer's own Read again is
+ *  not on screen: the left side shows one view at a time (#1673). */
 async function hideTheExplorer() {
   await screen.findByRole("tabpanel", { name: "Chats" });
-  await userEvent.click(screen.getByRole("button", { name: "Navigation", pressed: true }));
-  await waitFor(() => expect(screen.queryByRole("tabpanel")).toBeNull());
+  await showTheChanges();
+  expect(screen.queryByRole("navigation", { name: "Explorer" })).toBeNull();
 }
 
-/** The bottom region's line saying the refusal. */
+/** The Changes view's line saying the refusal. */
 const refusal = () =>
-  within(screen.getByTestId("bottom-bar")).findByText(REFUSED, { exact: false });
+  within(screen.getByTestId("changes-view")).findByText(REFUSED, { exact: false });
 
 describe("Read again with the explorer hidden (#1244)", () => {
   it("is on the refusal line's menu, and reads the workspace again", async () => {
@@ -112,7 +114,7 @@ describe("Read again with the explorer hidden (#1244)", () => {
       expect(asked.filter((cmd) => cmd === "workspace_repos").length).toBeGreaterThan(before),
     );
     await waitFor(() =>
-      expect(within(screen.getByTestId("bottom-bar")).queryByText(REFUSED)).toBeNull(),
+      expect(within(screen.getByTestId("changes-view")).queryByText(REFUSED)).toBeNull(),
     );
   });
 

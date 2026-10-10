@@ -254,7 +254,7 @@ export function useWorkspaceState(
 /**
  * **Whether any read of the workspace stands refused** (#1244): the workspace itself, the forge
  * cache, a repo the plane will not read, a working tree git could not read, or a clone whose
- * branches could not be listed. Each is said in the bottom region, and each is asked again by
+ * branches could not be listed. Each is said in the Changes view, and each is asked again by
  * the same Read again.
  */
 export function readRefusedIn(state: WorkspaceState): boolean {

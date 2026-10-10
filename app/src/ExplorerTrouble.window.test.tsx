@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render as renderBare, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
-import { showTheExplorer } from "./test-strips";
+import { showTheChanges, showTheExplorer } from "./test-strips";
 import App from "./App";
 import { forgetThisLaunch } from "./regions";
 
@@ -123,9 +123,11 @@ describe("a read the explorer was refused", () => {
       await within(await screen.findByTestId("explorer")).findByText(REPOS_REFUSED)
     ).closest("[data-cause]") as HTMLElement;
     expect(notice.getAttribute("data-cause")).toBe("workspace-read:alpha");
-    // The bottom bar says it too, and has nothing to press (ADR 0038).
-    expect(within(screen.getByTestId("bottom-bar")).getByText(REPOS_REFUSED)).toBeVisible();
-    expect(within(screen.getByTestId("bottom-bar")).queryAllByRole("button")).toEqual([]);
+    // The Changes view says it too, and has nothing to press (ADR 0038, #1676).
+    const changes = await showTheChanges();
+    expect(within(changes).getByText(REPOS_REFUSED)).toBeVisible();
+    expect(within(changes).queryAllByRole("button")).toEqual([]);
+    await showTheExplorer();
     const before = count(asked, "workspace_repos");
 
     await userEvent.click(within(notice).getByRole("button", { name: "Read again" }));

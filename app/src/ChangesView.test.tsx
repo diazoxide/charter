@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
-import { BottomBar } from "./BottomBar";
+import { ChangesView } from "./ChangesView";
 import { catalogue, catalogued, type Catalogued } from "./actions";
 import { noTabs } from "./tabs";
 import type { FactColumn, Panels as PanelsModel, Piece, RepoState } from "./bindings";
@@ -78,10 +78,10 @@ const NO_MENUS: Catalogued = new Map();
 const row = (name: string) => screen.getByTestId(`repo-${name}`);
 const ci = (name: string) => screen.getByTestId(`ci-${name}`);
 
-describe("the bottom bar", () => {
+describe("the Changes view", () => {
   it("shows each repo's branch, how far it is from its upstream, and what is uncommitted", () => {
     render(
-      <BottomBar
+      <ChangesView
         offers={NO_MENUS}
         onPress={() => {}}
         workspace="alpha"
@@ -115,7 +115,7 @@ describe("the bottom bar", () => {
     // The whole reason the core has a third state. "Clean" here is a lie that reads as
     // "nothing to do", which is exactly the wrong thing to tell someone in a hurry.
     render(
-      <BottomBar
+      <ChangesView
         offers={NO_MENUS}
         onPress={() => {}}
         workspace="alpha"
@@ -143,7 +143,7 @@ describe("the bottom bar", () => {
 
   it("says a branch has no commits yet rather than drawing it like any other", () => {
     render(
-      <BottomBar
+      <ChangesView
         offers={NO_MENUS}
         onPress={() => {}}
         workspace="alpha"
@@ -162,7 +162,7 @@ describe("the bottom bar", () => {
 
   it("names the commit a detached checkout sits on", () => {
     render(
-      <BottomBar
+      <ChangesView
         offers={NO_MENUS}
         onPress={() => {}}
         workspace="alpha"
@@ -181,7 +181,7 @@ describe("the bottom bar", () => {
 
   it("says the git answer is still coming rather than drawing a repo as unread", () => {
     render(
-      <BottomBar
+      <ChangesView
         offers={NO_MENUS}
         onPress={() => {}}
         workspace="alpha"
@@ -193,12 +193,12 @@ describe("the bottom bar", () => {
   });
 
   // ---------------------------------------------------------------------------------------
-  // Worktrees, which are the bottom bar's half of the pair (ADR 0038)
+  // Worktrees, which are the Changes view's half of the pair (ADR 0038)
   // ---------------------------------------------------------------------------------------
 
   it("counts the worktrees cut off each clone", () => {
     render(
-      <BottomBar
+      <ChangesView
         offers={NO_MENUS}
         onPress={() => {}}
         workspace="alpha"
@@ -214,7 +214,7 @@ describe("the bottom bar", () => {
     // The two states that change what starting a chat in one MEANS. Counted here; the row a
     // person acts on is the explorer's.
     render(
-      <BottomBar
+      <ChangesView
         offers={NO_MENUS}
         onPress={() => {}}
         workspace="alpha"
@@ -230,7 +230,7 @@ describe("the bottom bar", () => {
 
   it("never says a clone has no worktrees when git would not answer", () => {
     render(
-      <BottomBar
+      <ChangesView
         offers={NO_MENUS}
         onPress={() => {}}
         workspace="alpha"
@@ -243,7 +243,7 @@ describe("the bottom bar", () => {
   });
 
   it("says a listing is still on its way rather than counting nothing", () => {
-    render(<BottomBar offers={NO_MENUS} onPress={() => {}} workspace="alpha" state={state()} />);
+    render(<ChangesView offers={NO_MENUS} onPress={() => {}} workspace="alpha" state={state()} />);
 
     expect(screen.getByTestId("worktrees-svc")).toHaveTextContent("asking git");
   });
@@ -254,7 +254,7 @@ describe("the bottom bar", () => {
 
   it("shows the CI state the cache holds, with the change and how old the answer is", () => {
     render(
-      <BottomBar
+      <ChangesView
         offers={NO_MENUS}
         onPress={() => {}}
         workspace="alpha"
@@ -284,7 +284,7 @@ describe("the bottom bar", () => {
 
   it("says why there is no CI state rather than leaving the cell blank", () => {
     render(
-      <BottomBar
+      <ChangesView
         offers={NO_MENUS}
         onPress={() => {}}
         workspace="alpha"
@@ -304,7 +304,7 @@ describe("the bottom bar", () => {
 
   it("tells a fetch that named no pipeline from no fetch at all", () => {
     render(
-      <BottomBar
+      <ChangesView
         offers={NO_MENUS}
         onPress={() => {}}
         workspace="alpha"
@@ -323,14 +323,14 @@ describe("the bottom bar", () => {
   });
 
   it("says the app reads CI state and does not fetch it", () => {
-    render(<BottomBar offers={NO_MENUS} onPress={() => {}} workspace="alpha" state={state()} />);
+    render(<ChangesView offers={NO_MENUS} onPress={() => {}} workspace="alpha" state={state()} />);
 
-    expect(screen.getByTestId("bottom-bar")).toHaveTextContent("never fetches");
+    expect(screen.getByTestId("changes-view")).toHaveTextContent("never fetches");
   });
 
   it("shows a forge cache charter refused, once for the listing", () => {
     render(
-      <BottomBar
+      <ChangesView
         offers={NO_MENUS}
         onPress={() => {}}
         workspace="alpha"
@@ -353,7 +353,7 @@ describe("the bottom bar", () => {
 
   it("shows what purlis would not read instead of a workspace with fewer repos in it", () => {
     render(
-      <BottomBar
+      <ChangesView
         offers={NO_MENUS}
         onPress={() => {}}
         workspace="alpha"
@@ -374,7 +374,7 @@ describe("the bottom bar", () => {
 
   it("shows a repo the manifest names that nobody has cloned", () => {
     render(
-      <BottomBar
+      <ChangesView
         offers={NO_MENUS}
         onPress={() => {}}
         workspace="alpha"
@@ -387,7 +387,7 @@ describe("the bottom bar", () => {
 
   it("says when the core refused the workspace outright", () => {
     render(
-      <BottomBar
+      <ChangesView
         offers={NO_MENUS}
         onPress={() => {}}
         workspace="ghost"
@@ -400,7 +400,7 @@ describe("the bottom bar", () => {
 
   it("draws nothing about a workspace when none is focused", () => {
     render(
-      <BottomBar offers={NO_MENUS} onPress={() => {}} workspace={undefined} state={state()} />,
+      <ChangesView offers={NO_MENUS} onPress={() => {}} workspace={undefined} state={state()} />,
     );
 
     expect(screen.getByText("No workspace focused.")).toBeInTheDocument();
@@ -413,7 +413,7 @@ describe("the bottom bar", () => {
 
   it("lays the repos out in named columns, one row per repo", () => {
     render(
-      <BottomBar
+      <ChangesView
         offers={NO_MENUS}
         onPress={() => {}}
         workspace="alpha"
@@ -449,7 +449,7 @@ describe("the bottom bar", () => {
 
   it("gives every row the same five columns, whatever charter could read of it", () => {
     render(
-      <BottomBar
+      <ChangesView
         offers={NO_MENUS}
         onPress={() => {}}
         workspace="alpha"
@@ -472,7 +472,7 @@ describe("the bottom bar", () => {
 
   it("draws a clone's worktrees as a tree under its row, each with its branch and state", () => {
     render(
-      <BottomBar
+      <ChangesView
         offers={NO_MENUS}
         onPress={() => {}}
         workspace="alpha"
@@ -520,7 +520,7 @@ describe("the bottom bar", () => {
     "marks a %s pipeline with its own shape, moving only if it is still going",
     (ci, mark, moves) => {
       render(
-        <BottomBar
+        <ChangesView
           offers={NO_MENUS}
           onPress={() => {}}
           workspace="alpha"
@@ -549,7 +549,7 @@ describe("the bottom bar", () => {
 
   it("settles a pipeline's mark when the run finishes on screen, and only then", () => {
     const bar = (ci: string) => (
-      <BottomBar
+      <ChangesView
         offers={NO_MENUS}
         onPress={() => {}}
         workspace="alpha"
@@ -576,7 +576,7 @@ describe("the bottom bar", () => {
     // A bar opened on a workspace whose pipelines all finished an hour ago is a row of
     // settled answers, and a row of them all growing into place at once is decoration.
     render(
-      <BottomBar
+      <ChangesView
         offers={NO_MENUS}
         onPress={() => {}}
         workspace="alpha"
@@ -594,7 +594,7 @@ describe("the bottom bar", () => {
 
   it("draws an answer it does not recognise as a fetch that names nothing, and keeps still", () => {
     render(
-      <BottomBar
+      <ChangesView
         offers={NO_MENUS}
         onPress={() => {}}
         workspace="alpha"
@@ -614,13 +614,13 @@ describe("the bottom bar", () => {
   });
 
   /**
-   * **No table cell in the bottom bar is ever a flex container.** A `<td>` given `display: flex`
+   * **No table cell in the Changes view is ever a flex container.** A `<td>` given `display: flex`
    * stops being a table-cell, and the column it was laid out in goes with it — which is the whole
    * reason this region is a table. Everything inside a cell is laid out inline. jsdom lays out
    * nothing, so this reads the stylesheet, and it is what stops the obvious "just flex the icon
    * and the text" fix from quietly un-aligning every column.
    */
-  describe("the bottom bar's stylesheet", () => {
+  describe("the Changes view's stylesheet", () => {
     const css = readFileSync(join(process.cwd(), "src/App.css"), "utf8").replace(
       /\/\*[\s\S]*?\*\//g,
       "",
@@ -657,9 +657,9 @@ describe("the bottom bar", () => {
   // The rule, as far as a test can hold it (ADR 0038)
   // ---------------------------------------------------------------------------------------
 
-  it("has nothing in it to press, because the bottom is what is true and not what you do", () => {
+  it("has nothing in it to press, because Changes is what is true and not what you do", () => {
     render(
-      <BottomBar
+      <ChangesView
         offers={NO_MENUS}
         onPress={() => {}}
         workspace="alpha"
@@ -675,7 +675,9 @@ describe("the bottom bar", () => {
     );
 
     expect(
-      screen.getByTestId("bottom-bar").querySelectorAll("button, input, textarea, select, a[href]"),
+      screen
+        .getByTestId("changes-view")
+        .querySelectorAll("button, input, textarea, select, a[href]"),
     ).toHaveLength(0);
   });
 });
@@ -709,7 +711,7 @@ describe("a repo row's menu", () => {
     );
   const bar = (onPress: (id: string) => void = () => {}) =>
     render(
-      <BottomBar
+      <ChangesView
         workspace="alpha"
         offers={offers()}
         onPress={(offer) => onPress(offer.id)}
@@ -774,7 +776,9 @@ describe("a repo row's menu", () => {
     bar();
 
     expect(
-      screen.getByTestId("bottom-bar").querySelectorAll("button, input, textarea, select, a[href]"),
+      screen
+        .getByTestId("changes-view")
+        .querySelectorAll("button, input, textarea, select, a[href]"),
     ).toHaveLength(0);
   });
 });
@@ -805,7 +809,7 @@ describe("a refused read's menu (#1244)", () => {
   it("offers Read again on the workspace's refusal, and hands the row back", async () => {
     const pressed: string[] = [];
     render(
-      <BottomBar
+      <ChangesView
         workspace="alpha"
         offers={offers(true)}
         onPress={(offer) => pressed.push(offer.id)}
@@ -822,7 +826,7 @@ describe("a refused read's menu (#1244)", () => {
 
   it("offers it on the forge cache's refusal and on a repo it could not read", async () => {
     render(
-      <BottomBar
+      <ChangesView
         workspace="alpha"
         offers={offers(true)}
         onPress={() => {}}
@@ -855,7 +859,7 @@ describe("a refused read's menu (#1244)", () => {
 
   it("is not on a repo's menu while nothing is refused", async () => {
     render(
-      <BottomBar
+      <ChangesView
         workspace="alpha"
         offers={offers(false)}
         onPress={() => {}}
@@ -880,7 +884,7 @@ describe("an extension's repo columns (charter-app#340)", () => {
 
   it("adds a heading for each column and a cell for each repo its facts file filled", () => {
     render(
-      <BottomBar
+      <ChangesView
         offers={NO_MENUS}
         onPress={() => {}}
         workspace="alpha"
@@ -897,7 +901,7 @@ describe("an extension's repo columns (charter-app#340)", () => {
 
   it("dims a stale cell and says how old it is", () => {
     render(
-      <BottomBar
+      <ChangesView
         offers={NO_MENUS}
         onPress={() => {}}
         workspace="alpha"
@@ -912,7 +916,7 @@ describe("an extension's repo columns (charter-app#340)", () => {
   });
 
   it("draws the five columns it always drew when no extension adds one", () => {
-    render(<BottomBar offers={NO_MENUS} onPress={() => {}} workspace="alpha" state={state()} />);
+    render(<ChangesView offers={NO_MENUS} onPress={() => {}} workspace="alpha" state={state()} />);
 
     expect(screen.getAllByRole("columnheader")).toHaveLength(5);
   });

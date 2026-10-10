@@ -46,7 +46,8 @@ describe("the layout file", () => {
     expect(seen as Seen).toEqual({
       explorer: ["region-right"],
       panels: ["region-left"],
-      // `bottom` is put away, so its content was never mounted at all.
+      // `bottom` is no region since #1676 (its content is the Changes view), so the file's
+      // placement of it is read past without a word and nothing is drawn for it.
     });
   });
 
@@ -55,9 +56,7 @@ describe("the layout file", () => {
 
     // The explorer's slot started at the file's 30%, against the catalogue's 16%.
     const share = await browser.execute(() => {
-      const row = document
-        .querySelector('[data-panel][id="region-upper"]')
-        ?.getBoundingClientRect();
+      const row = document.querySelector(".regions")?.getBoundingClientRect();
       const slot = document
         .querySelector('[data-panel][id="region-right"]')
         ?.getBoundingClientRect();

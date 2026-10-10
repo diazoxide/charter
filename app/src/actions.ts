@@ -59,7 +59,7 @@ import {
   type MemoryRef,
 } from "./memories";
 import { publishedSaid } from "./memoryMoves";
-import { searchFromFocus, searchTitle, searchView, type SearchAsk } from "./contentSearch";
+import { searchFromFocus, type SearchAsk } from "./contentSearch";
 import { pieceFilesTitle, pieceFilesView, type Place } from "./pieceViews";
 import { searchKeySaid } from "./searchKey";
 import { SESSION_VIEW, sessionTitle, sessionTitleOf, sessionView } from "./sessions";
@@ -1272,9 +1272,11 @@ export const sideViewId = (view: ViewId) => `view.show:${view}`;
 /** The palette's row that puts the navigation region away or brings it back (#1673). */
 export const TOGGLE_NAVIGATION_ID = "view.toggle:navigation";
 /** What each view is, on its palette row. */
-const VIEW_NOTES: Record<ViewId, string> = {
+const VIEW_NOTES: Record<Exclude<ViewId, "search">, string> = {
   chats: "The project's chats and their tasks, on the left.",
   explorer: "The focused workspace's repos, branches and files, on the left.",
+  changes:
+    "The focused workspace's repos: branch, uncommitted files, branches and pipeline, on the left.",
 };
 
 /** The row that opens `harness`'s card (#1134). */
@@ -1387,9 +1389,10 @@ export function catalogue(now: Now): Offer[] {
   // It is about the machine and not about a project, which is why it does not wait for one.
   offers.push(can("extensions.show", "Extensions…", { verb: "showExtensions" }));
 
-  // **Search in files** (FM-8, #1137): the Search tab ⌘⇧F opens, as narrow as the focus — the
-  // branch nearest the operator, else the workspace in front, else the project. The key is said
-  // on the row, so the palette is where it is learned.
+  // **Search in files** (FM-8, #1137): the Search view ⌘⇧F shows on the left (#1676), searching
+  // as narrow as the focus — the branch nearest the operator, else the workspace in front, else
+  // the project. The key is said on the row, so the palette is where it is learned. It is the
+  // Search view's palette row: the views' rows below leave Search out rather than say it twice.
   {
     const ask = searchFromFocus(
       now.branch,
@@ -1403,12 +1406,8 @@ export function catalogue(now: Now): Offer[] {
             "No project is open, so there are no files to search.",
           )
         : {
-            ...can(SEARCH_ID, "Search in files", {
-              verb: "openView",
-              view: searchView(ask),
-              title: searchTitle(ask),
-            }),
-            note: `Every file of ${searchedSaid(ask)}, in a Search tab. ${SEARCH_KEY_SAID}.`,
+            ...can(SEARCH_ID, "Search in files", { verb: "showSideView", view: "search" }),
+            note: `Every file of ${searchedSaid(ask)}, in the Search view. ${SEARCH_KEY_SAID}.`,
           },
     );
   }
@@ -1416,6 +1415,7 @@ export function catalogue(now: Now): Offer[] {
   // **The left side's views, and the side itself** (#1673, B-10): every view is a row, with its
   // key said, so the palette is where the keys are learned — as Search's is.
   for (const view of Object.keys(VIEWS) as ViewId[]) {
+    if (view === "search") continue;
     offers.push({
       ...can(sideViewId(view), `Show the ${VIEWS[view].name} view`, { verb: "showSideView", view }),
       note: `${VIEW_NOTES[view]} ${SIDE_KEYS_SAID[view]}.`,
@@ -1429,7 +1429,7 @@ export function catalogue(now: Now): Offer[] {
         : "Put the Navigation region away",
       { verb: "toggleRegion", region: "navigation" },
     ),
-    note: `The Chats and Explorer views on the left. ${SIDE_KEYS_SAID.navigation}.`,
+    note: `The Chats, Explorer, Search and Changes views on the left. ${SIDE_KEYS_SAID.navigation}.`,
   });
 
   // **A harness's card with no chat open** (HP-19, #1134): one row per harness the project
@@ -4139,8 +4139,8 @@ export type MenuOn =
   /** The panes — the centre of the window, where a chat is. Not about any one pane: a split
    *  acts on the pane that has the keyboard, which is what the bar's buttons act on too. */
   | { on: "pane" }
-  /** A refused read of the focused workspace, on the bottom region's line that says it
-   *  (#1244). */
+  /** A refused read of the focused workspace, on the Changes view's line that says it
+   *  (#1244; the bottom region's until #1676). */
   | { on: "refusal" }
   /** A finished task's row in the chats list, by its dispatch's id (#1534). */
   | { on: "finished"; id: string };

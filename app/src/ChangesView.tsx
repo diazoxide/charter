@@ -21,15 +21,21 @@ import type { CloneState } from "./repoClones";
 import { useArrived } from "./lib/arrived";
 
 /**
- * The bottom region: what the focused workspace's repos are doing (ADR 0038).
+ * The Changes view: what the focused workspace's repos are doing (ADR 0038 as amended
+ * 2026-10-10, #1676).
  *
  * Repo git state, worktrees and pipelines, which used to be two sections of the right-hand
  * side. They moved because the right-hand side is what is asking for you and this is not: it
- * is what is true, and nothing in it can be pressed.
+ * is what is true, and nothing in it can be pressed. **They were the bottom region until
+ * #1676** (B-7): the bottom took height from the terminals, so it became a view on the left
+ * side's activity bar, beside Chats, Explorer and Search, and the bottom of the window is the
+ * terminals'. The content is the same; only where it is drawn moved. Its tab counts the files
+ * git has uncommitted ({@link uncommitted}).
  *
  * **Read-only, and that is asserted rather than described** — `regions.e2e.ts` presses on
  * every control in here and expects to find none. It is the one half of ADR 0038's reading
- * ("the bottom is where you read what is true and do not touch it") that a test can hold.
+ * ("the bottom is where you read what is true and do not touch it", where "the bottom" is
+ * now this view) that a test can hold.
  *
  * **A repo row has a context menu, and a menu is not a control** (charter-app#174). It is the
  * explorer's clone menu — `New tab in <repo>` and `Start new chats in <repo>` — drawn from the
@@ -104,7 +110,7 @@ import { useArrived } from "./lib/arrived";
  *  extension adds. */
 const BUILT_IN_COLUMNS = 5;
 
-export function BottomBar({
+export function ChangesView({
   workspace,
   state,
   offers,
@@ -129,9 +135,9 @@ export function BottomBar({
 }) {
   if (workspace === undefined) {
     return (
-      <footer className="state-bar" aria-label="Repository state" data-testid="bottom-bar">
+      <section className="state-bar" aria-label="Repository state" data-testid="changes-view">
         <p className="empty">No workspace focused.</p>
-      </footer>
+      </section>
     );
   }
 
@@ -140,7 +146,7 @@ export function BottomBar({
   const names = panels?.repos ?? [];
 
   return (
-    <footer className="state-bar" aria-label="Repository state" data-testid="bottom-bar">
+    <section className="state-bar" aria-label="Repository state" data-testid="changes-view">
       {trouble && (
         <Trouble offers={offers} onPress={onPress}>
           {trouble}
@@ -223,7 +229,7 @@ export function BottomBar({
       <p className="note">
         CI was last fetched by a refresher. charter-app reads this, never fetches it.
       </p>
-    </footer>
+    </section>
   );
 }
 
@@ -520,6 +526,18 @@ function headOf(state: RepoState): string {
   if (state.detached !== null) return `detached at ${state.detached || "an unnamed commit"}`;
   if (state.branch === null) return "no branch";
   return state.unborn ? `${state.branch} (no commits yet)` : state.branch;
+}
+
+/**
+ * **The files git has uncommitted in the focused workspace's clones**: what the Changes tab
+ * counts (B-8, #1676), changed and untracked alike, as {@link dirtOf} says them per repo. A
+ * tree purlis could not read adds nothing: its counts are zero and mean "not known", and the
+ * view says so on its row.
+ */
+export function uncommitted(state: WorkspaceState): number {
+  return (state.repos?.repos ?? [])
+    .filter((repo) => repo.unreadable === null)
+    .reduce((sum, repo) => sum + repo.tracked + repo.untracked, 0);
 }
 
 /** Whether there is anything uncommitted, counted the way git counts it. */

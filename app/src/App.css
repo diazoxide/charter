@@ -2452,9 +2452,9 @@ button.show-more:focus-visible {
   min-height: 0;
 }
 
-/* **The four regions** (ADR 0038). The outer group stacks the upper half over the
-   bottom bar; the inner one puts the explorer, the panes and the right-hand side in a row.
-   Every boundary is a `[data-separator]`, which is the same handle the pane splits use. */
+/* **The regions** (ADR 0038). One group puts the left side, the panes and the right-hand side in
+   a row, each the window's whole height: nothing is drawn along the bottom since #1676. Every
+   boundary is a `[data-separator]`, which is the same handle the pane splits use. */
 .regions {
   flex: 1;
   min-width: 0;
@@ -2600,8 +2600,6 @@ button.show-more:focus-visible {
 
 /* `react-resizable-panels` draws a panel as a box with the class on an inner div, and that
    inner div is what has to fill the box. */
-.region-upper,
-.region-row,
 .region-centre,
 .region-slot {
   height: 100%;
@@ -2619,11 +2617,6 @@ button.show-more:focus-visible {
 
 .slot-right {
   border-left: 1px solid var(--border-subtle);
-}
-
-.slot-bottom {
-  border-top: 1px solid var(--border-subtle);
-  background: var(--surface-deep);
 }
 
 /* The buttons that put a region away and bring it back are NOT drawn here any more. They are
@@ -4031,8 +4024,10 @@ h2.sidebar-title .node-icon {
   color: var(--needs-you-base);
 }
 
-/* The bottom region: what the focused workspace's repos are doing. Nothing in it can be
-   pressed, which is the half of ADR 0038's reading a test can hold. */
+/* The Changes view (#1676, the bottom region until then): what the focused workspace's repos
+   are doing. Nothing in it can be pressed, which is the half of ADR 0038's reading a test can
+   hold. In a side it is narrower than it was along the bottom, so it scrolls sideways, as the
+   trees do, and never folds a name. */
 .state-bar {
   height: 100%;
   overflow: auto;
@@ -4040,7 +4035,7 @@ h2.sidebar-title .node-icon {
   font-size: 0.8rem;
 }
 
-/* **Columns, because "which of these is dirty" is a column question.** `BottomBar.tsx` has the
+/* **Columns, because "which of these is dirty" is a column question.** `ChangesView.tsx` has the
    argument; what matters here is that no cell is ever given `display: flex`. A `<td>` told to
    be a flex container stops being a table-cell, and the columns it was laid out in go with it
    — which is the whole reason this is a table and not four `<span>`s in a row. Everything
@@ -8042,6 +8037,22 @@ h2.sidebar-title .node-icon {
 }
 
 .search-query {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* **In the left side's Search view** (#1676) the head is a side's width, not a tab's: the box
+   takes the whole first line, as an editor's search view has it, and the switches and where
+   to search follow on the next, the scope taking what is left. */
+.region-view .search-head {
+  flex-wrap: wrap;
+}
+
+.region-view .search-query {
+  flex-basis: 100%;
+}
+
+.region-view .search-scope {
   flex: 1 1 auto;
   min-width: 0;
 }

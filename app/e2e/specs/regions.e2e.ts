@@ -1,9 +1,10 @@
 import { browser, expect, $, $$ } from "@wdio/globals";
 import { textOfEach } from "../reading.js";
+import { showView } from "../opening.js";
 
 /**
- * The right region and the bottom one (ADR 0038), against the real app started in a
- * copy of the `daily` fixture plane — with real clones in it, one real piece cut off `svc`,
+ * The right region and the left side's Changes view (ADR 0038; the bottom region until #1676),
+ * against the real app started in a copy of the `daily` fixture plane — with real clones in it, one real piece cut off `svc`,
  * and the forge cache a refresher would have left.
  *
  * Nothing is stubbed. The app runs git against those clones and reads that cache, and what
@@ -73,7 +74,20 @@ async function untilTheStripIsRead(): Promise<void> {
   );
 }
 
-describe("the bottom bar", () => {
+/**
+ * **The Changes view** (#1676): what the bottom region drew, the same content, as a view of the
+ * left side. WebDriver reads only what is displayed, so the view is shown first, and the side
+ * is left on Chats after, as it was found.
+ */
+describe("the Changes view", () => {
+  before(async () => {
+    await untilTheStripIsRead();
+    await showView("Changes");
+  });
+  after(async () => {
+    await showView("Chats");
+  });
+
   it("lists the focused workspace's repos with the branch each is on", async () => {
     await onAlpha();
 
@@ -116,7 +130,7 @@ describe("the bottom bar", () => {
   it("says the app reads CI state and never fetches it", async () => {
     await untilTheStripIsRead();
 
-    await untilSays("bottom-bar", "never fetches");
+    await untilSays("changes-view", "never fetches");
   });
 
   it("follows the focus to another workspace", async () => {
@@ -125,7 +139,7 @@ describe("the bottom bar", () => {
     await focus("beta");
 
     // `beta` holds no repos.
-    await untilSays("bottom-bar", "No repos in this workspace");
+    await untilSays("changes-view", "No repos in this workspace");
 
     await focus("alpha");
     await untilSays("repo-svc", "main");
@@ -154,11 +168,10 @@ describe("the bottom bar", () => {
     await untilSays("repo-svc", "main");
 
     const measured = await browser.execute(() => {
-      const bar = document.querySelector<HTMLElement>('[data-testid="bottom-bar"]');
-      if (!bar) throw new Error("no bottom region to narrow");
-      // **The region's own box is narrowed.** The bottom region is the full width of the
-      // window — its slot's size is a HEIGHT — so there is no separator that makes it narrow,
-      // and the question is about this scroll container at a width narrower than its content.
+      const bar = document.querySelector<HTMLElement>('[data-testid="changes-view"]');
+      if (!bar) throw new Error("no Changes view to narrow");
+      // **The view's own box is narrowed**, to a width narrower than its content whatever the
+      // side's width is: the question is about this scroll container, not about the slot.
       const was = bar.getAttribute("style") ?? "";
       bar.style.width = "200px";
 
@@ -247,13 +260,13 @@ describe("the bottom bar", () => {
     expect(wraps).toBe("normal");
   });
 
-  it("has nothing in it to press, because the bottom is what is true and not what you do", async () => {
+  it("has nothing in it to press, because Changes is what is true and not what you do", async () => {
     // ADR 0038's reading — *"the bottom is where you read what is true and do not
-    // touch it"* — as far as a test can hold it.
+    // touch it"*, the bottom being this view since #1676 — as far as a test can hold it.
     await onAlpha();
     await untilSays("repo-svc", "main");
 
-    const bar = await $('[data-testid="bottom-bar"]');
+    const bar = await $('[data-testid="changes-view"]');
     const pressable = await bar.$$("button, input, textarea, select, a[href]").getElements();
 
     expect(pressable.length).toBe(0);
@@ -330,9 +343,9 @@ describe("the right-hand region", () => {
     expect(await $('[data-testid="panel-alerts"]').isExisting()).toBe(false);
   });
 
-  it("no longer holds the repos or the CI, which went to the bottom bar", async () => {
+  it("no longer holds the repos or the CI, which are the Changes view's", async () => {
     await onAlpha();
-    await untilSays("repo-svc", "main");
+    await $('[data-testid="repo-svc"]').waitForExist({ timeout: 30_000 });
 
     const panels = await $('[data-testid="panels"]');
     await expect(panels).not.toHaveText(expect.stringContaining("not fetched"));
@@ -402,7 +415,7 @@ describe("the left side's activity bar", () => {
       return found ? { left: found.left, right: found.right, width: found.width } : null;
     }, selector);
 
-  it("switches the side between Chats and Explorer, one view at a time", async () => {
+  it("switches the side between its views, one view at a time", async () => {
     await untilTheStripIsRead();
     await (await tab("Chats")).waitForExist({ timeout: 20_000 });
     await expect(await $('[data-testid="chats-section"]')).toBeDisplayed();
@@ -451,6 +464,66 @@ describe("the left side's activity bar", () => {
 });
 
 /**
+ * **No view lies over the terminals** (#1676): every view of the left side, the right-hand
+ * region and both activity bars, each laid out in the real window and measured against the
+ * centre, whose panes are the product. And with nothing along the bottom any more, the centre
+ * runs down to the status line: the terminals have the window's whole height.
+ */
+describe("the views and the terminals", () => {
+  type Box = { left: number; right: number; top: number; bottom: number };
+  const boxOf = (selector: string) =>
+    browser.execute((where: string) => {
+      const found = document.querySelector(where);
+      if (found === null) return null;
+      const box = found.getBoundingClientRect();
+      return { left: box.left, right: box.right, top: box.top, bottom: box.bottom };
+    }, selector);
+  /** Whether two boxes share any area; touching edges, a pixel either way, is not overlap. */
+  const overlaps = (a: Box, b: Box) =>
+    Math.min(a.right, b.right) - Math.max(a.left, b.left) > 1 &&
+    Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > 1;
+
+  after(async () => {
+    await showView("Chats");
+  });
+
+  for (const view of ["Chats", "Explorer", "Search", "Changes"] as const) {
+    it(`draws the ${view} view beside the terminals, never over them`, async () => {
+      await untilTheStripIsRead();
+      await showView(view);
+      const panel = `.region-views > [role="tabpanel"][aria-labelledby]:not([hidden])`;
+      await $(panel).waitForDisplayed({ timeout: 20_000 });
+
+      const centre = await boxOf('[data-panel][id="region-centre"]');
+      if (centre === null) throw new Error("no centre to measure against");
+      const regions: [string, Box | null][] = [
+        [`the ${view} view`, await boxOf(panel)],
+        ["the left slot", await boxOf('[data-panel][id="region-left"]')],
+        ["the right-hand region", await boxOf('[data-panel][id="region-right"]')],
+        ["the left activity bar", await boxOf(".activity-bar[data-side='left']")],
+      ];
+      expect(regions[0][1]).not.toBeNull();
+      const over = regions
+        .filter((entry): entry is [string, Box] => entry[1] !== null)
+        .filter(([, box]) => overlaps(box, centre))
+        .map(([name, box]) => `${name} ${JSON.stringify(box)} over ${JSON.stringify(centre)}`);
+      expect(over).toEqual([]);
+    });
+  }
+
+  it("gives the terminals the window's whole height, down to the status line", async () => {
+    await untilTheStripIsRead();
+    const centre = await boxOf('[data-panel][id="region-centre"]');
+    const line = await boxOf('[data-testid="status-line"]');
+    if (centre === null || line === null) throw new Error("no centre or status line to measure");
+
+    // Nothing between them: the bottom region is gone (#1676).
+    await expect(await $('[data-panel][id="region-bottom"]')).not.toBeExisting();
+    expect(Math.abs(line.top - centre.bottom)).toBeLessThanOrEqual(2);
+  });
+});
+
+/**
  * **The arrangement drives the window** (`app/src/regions.ts`), against the real app.
  *
  * jsdom gives every element a size of zero, so `react-resizable-panels` defers its layout there
@@ -463,13 +536,14 @@ describe("the layout as data", () => {
     await $('[data-testid="explorer"]').waitForExist({ timeout: 20_000 });
 
     // The default arrangement (ADR 0038), read off the real DOM rather than off the
-    // JSX: the explorer in the left slot, what is asking for you in the right, the repo state
-    // along the bottom.
+    // JSX: the navigation region's views in the left slot, the repo state among them since
+    // #1676, and what is asking for you in the right. Nothing along the bottom.
     await expect(await $('[data-panel][id="region-left"] [data-testid="explorer"]')).toBeExisting();
-    await expect(await $('[data-panel][id="region-right"] [data-testid="panels"]')).toBeExisting();
     await expect(
-      await $('[data-panel][id="region-bottom"] [data-testid="bottom-bar"]'),
+      await $('[data-panel][id="region-left"] [data-testid="changes-view"]'),
     ).toBeExisting();
+    await expect(await $('[data-panel][id="region-right"] [data-testid="panels"]')).toBeExisting();
+    await expect(await $('[data-panel][id="region-bottom"]')).not.toBeExisting();
   });
 
   it("gives a slot the width the arrangement asks for, and not an equal share", async () => {

@@ -5,7 +5,7 @@ import { RegionToggle } from "./RegionFrame";
 import type { Placement, RegionId } from "./regions";
 import { PinItem } from "./Updates";
 import type { FactBadge, PinReport } from "./bindings";
-import { ago } from "./BottomBar";
+import { ago } from "./ChangesView";
 
 /**
  * **charter's status line**: one line at the very bottom of the window, under everything.
@@ -18,7 +18,7 @@ import { ago } from "./BottomBar";
  *
  * # It is NOT a region, and that is a decision
  *
- * ADR 0038's window is four regions — left, centre, right, bottom — and
+ * ADR 0038's window is regions — left, centre, right (and a bottom one until #1676) — and
  * `app/src/regions.ts` makes adding one a line in a catalogue and a line in an arrangement.
  * This is deliberately not that, and the reasons are in the shape of the thing rather than in
  * taste:
@@ -37,7 +37,7 @@ import { ago } from "./BottomBar";
  *   which is what makes it the frame rather than a tenant. `FourRegions.test.tsx`'s *"cannot be
  *   put away, because it is not a region"* is the guard.
  * - **It is the frame, not a tenant of it.** `.projects`, in the title bar, sits above the
- *   regions and is not in the arrangement either. The window is chrome, four regions, chrome;
+ *   regions and is not in the arrangement either. The window is chrome, regions, chrome;
  *   this is the bottom half of the chrome, and `RegionFrame` is untouched by it — which is also
  *   why this change moved no JSX inside the frame and added no fourth `Panel` to a live group
  *   (charter-app#141's throw is a thing to stay away from, not a thing to test against).
@@ -77,8 +77,8 @@ import { ago } from "./BottomBar";
  * have no renderer ported — ADR 0038 names both as open, and a window-wide gauge would be one
  * conversation's number under fifty. `doctor` is one button here (`Doctor.tsx` argues why the
  * frame and not a region) and the plane's pin is another (`Updates.tsx`). Repos and
- * CI are the bottom region's, and a status line that drew them would be a second bottom bar
- * one line below the first.
+ * CI are the Changes view's (the bottom region's until #1676), and a status line that drew
+ * them would be a second copy of it.
  *
  * **And the update offer is NOT here any more.** It was, beside the pin, and the two read as
  * one pair of "version facts" — but only one of them is about a project. The pin is
