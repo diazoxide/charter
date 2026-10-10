@@ -110,6 +110,43 @@ export function heard(was: Timeline, line: ActivityLine): Timeline {
   return { lines, chats, tasks };
 }
 
+/**
+ * **The session each chat on the timeline has, as its lines say it**, by the chat's key
+ * (`ActivityLine.from_key`): `null` for a chat that was closed when its line was read or told.
+ * The newest line says it, so a line told after the read stands over what the read said.
+ */
+export function chatsOn(lines: readonly Drawn[]): ReadonlyMap<string, number | null> {
+  const chats = new Map<string, number | null>();
+  for (const { line } of lines) chats.set(line.from_key, line.from_session);
+  return chats;
+}
+
+/**
+ * **The chats to ask the app about again, now that the window's open chats are `after`** and
+ * were `before` (#1457): by key, from `chats`, the session each chat on the timeline is known to
+ * have (`null`: closed).
+ *
+ * A chat whose session left the window's chats may have closed, or been restarted under another
+ * number: only the app can say which, so it is asked, and only for those. Where a chat came in,
+ * a chat known to be closed may be the one that came back, so those are asked too. A chat whose
+ * session is still open, or that the window never held, is not asked: a press still asks.
+ */
+export function askAgain(
+  chats: ReadonlyMap<string, number | null>,
+  before: ReadonlySet<number>,
+  after: ReadonlySet<number>,
+): string[] {
+  const came = [...after].some((one) => !before.has(one));
+  return [...chats]
+    .filter(([, session]) => (session === null ? came : before.has(session) && !after.has(session)))
+    .map(([key]) => key);
+}
+
+/** What the Answer form says where the task's chat closed while the person was typing. */
+export function chatClosedSaid(line: ActivityLine): string {
+  return `${line.from}'s chat has closed, so an answer would reach no turn of its work.`;
+}
+
 /** The kinds of line that end a task: after one, none of its questions takes an answer. */
 const ENDS_A_TASK: readonly string[] = ["report", "stopped"];
 

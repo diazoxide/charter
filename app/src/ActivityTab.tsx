@@ -4,11 +4,20 @@ import { Activity as ActivityMark, LoaderCircle, TriangleAlert } from "lucide-re
 import { AnswerQuestion } from "./AnswerQuestion";
 import { EmptyState } from "./EmptyState";
 import { Notice } from "./Notice";
-import { commands, type ActivityHeard, type ActivityLine, type PlaneId } from "./bindings";
+import {
+  commands,
+  type Activity,
+  type ActivityHeard,
+  type ActivityLine,
+  type PlaneId,
+} from "./bindings";
 import {
   ACTIVITY_HEARD,
   alsoSaid,
   answerable,
+  askAgain,
+  chatClosedSaid,
+  chatsOn,
   clipped,
   closedWhy,
   EXPIRED_SAID,
@@ -22,9 +31,21 @@ import {
   type Timeline,
 } from "./activity";
 import { saidAt } from "./dispatches";
+import { usePretendActivity } from "./e2eActivity";
+import { useReferenceChats } from "./references";
+import { useTasksBelow } from "./TasksBelow";
 
 /** A count as the tab says it: `2,000`. */
 const count = (n: number) => n.toLocaleString("en-US");
+
+/** `was` with what the core said of `key`'s chat: the same map where it says that already. */
+function toldOf(
+  was: ReadonlyMap<string, number | null>,
+  key: string,
+  now: number | null,
+): ReadonlyMap<string, number | null> {
+  return was.has(key) && was.get(key) === now ? was : new Map(was).set(key, now);
+}
 
 /** What the tab has read: the chat's name, the timeline, and the tasks it could not list. */
 type Read = {
@@ -39,6 +60,19 @@ type Read = {
   mostListed: number;
   mostRead: number;
 };
+
+/** What the tab has read, from the core's answer, with the lines heard while it was asked. */
+function readOf(answer: Activity, early: readonly ActivityLine[] = []): Read {
+  return {
+    name: answer.name,
+    timeline: early.reduce(heard, timelineOf(answer)),
+    undrawn: answer.undrawn,
+    unlisted: answer.unlisted,
+    unread: answer.unread,
+    mostListed: answer.most_listed,
+    mostRead: answer.most_read,
+  };
+}
 
 /** What the tab knows: nothing yet, the timeline, that its chat is not open, or why not. */
 type Said = { read?: Read; closed?: true; trouble?: string };
@@ -65,7 +99,14 @@ type Said = { read?: Read; closed?: true; trouble?: string };
  *
  * **A line opens the chat it came from**: the chat's name is the control. The press asks the core
  * which session that chat has now, so it reaches a chat that was restarted since the timeline
- * was read; a chat that has closed by then is named in plain text from there on.
+ * was read; a chat that has closed by then is named in plain text from there on, with "(chat
+ * closed)" after it.
+ *
+ * **The control follows the chats while the tab is open** (#1457). The window's own chats (the
+ * ones its tabs hold, and the session's open tasks) are watched; where a chat on the timeline
+ * leaves them, the core is asked which session it has now, so a chat that closed loses its
+ * control and its Answer, and one that was restarted keeps them. Nothing is asked while no chat
+ * comes or goes.
  *
  * **What a chat said is drawn as text.** A brief, a message and a report are a chat's own words:
  * they are put on the screen as characters, with their line breaks, and never read as Markdown
@@ -99,8 +140,10 @@ export function ActivityTab({
   const [again, setAgain] = useState(0);
   /** The lines shown in full, by {@link lineKey}. */
   const [open, setOpen] = useState<ReadonlySet<string>>(new Set());
-  /** The chats a press found closed, by key: named in plain text from then on. */
-  const [gone, setGone] = useState<ReadonlySet<string>>(new Set());
+  /** What the core said, since the timeline was read, of the session a chat has now, by its
+   *  key: asked by a press, or as the window's chats changed. `null`: it is closed. A line told
+   *  after that says it again, and takes its chat out of here. */
+  const [told, setTold] = useState<ReadonlyMap<string, number | null>>(new Map());
   /** The question being answered: its line, and the session its task has now. */
   const [answering, setAnswering] = useState<{ key: string; session: number }>();
   /** The questions answered from this tab, by {@link lineKey}: each offers Answer no more,
@@ -109,14 +152,17 @@ export function ActivityTab({
   /** Each line's controls, by {@link lineKey}, while they are drawn: Answer, and its chat. */
   const answerControls = useRef(new Map<string, HTMLButtonElement>());
   const chatControls = useRef(new Map<string, HTMLButtonElement>());
+  /** The timeline itself: where the keyboard goes when a line has no control left. */
+  const list = useRef<HTMLOListElement>(null);
   /** The question whose form was just put away: where the keyboard goes back to. Its Answer
-   *  control where that is still drawn (the form was cancelled), else its line's chat. */
+   *  control where that is still drawn (the form was cancelled), else its line's chat, else,
+   *  where that chat has closed, the timeline. */
   const backTo = useRef<string | undefined>(undefined);
   useEffect(() => {
     if (answering !== undefined || backTo.current === undefined) return;
     const key = backTo.current;
     backTo.current = undefined;
-    (answerControls.current.get(key) ?? chatControls.current.get(key))?.focus();
+    (answerControls.current.get(key) ?? chatControls.current.get(key) ?? list.current)?.focus();
   }, [answering]);
   /** The questions whose chat a press could not find, by {@link lineKey}, and why. */
   const [unfound, setUnfound] = useState<ReadonlyMap<string, string>>(new Map());
@@ -141,6 +187,12 @@ export function ActivityTab({
               ? was
               : { read: { ...was.read, timeline: heard(was.read.timeline, line) } },
           );
+          setTold((was) => {
+            if (!was.has(line.from_key)) return was;
+            const less = new Map(was);
+            less.delete(line.from_key);
+            return less;
+          });
         });
         if (left) unlisten();
         else stop = unlisten;
@@ -159,12 +211,9 @@ export function ActivityTab({
         setSaid({ closed: true });
         return;
       }
-      const { name, undrawn, unlisted, unread } = answer.data;
-      const mostListed = answer.data.most_listed;
-      const mostRead = answer.data.most_read;
-      const timeline = (early ?? []).reduce(heard, timelineOf(answer.data));
+      const read = readOf(answer.data, early);
       early = undefined;
-      setSaid({ read: { name, timeline, undrawn, unlisted, unread, mostListed, mostRead } });
+      setSaid({ read });
     })();
     return () => {
       left = true;
@@ -172,9 +221,61 @@ export function ActivityTab({
     };
   }, [plane, session, again]);
 
+  /* A timeline a scenario spec hands the tab (`e2eActivity.ts`): only in the e2e build. */
+  usePretendActivity((read) => setSaid({ read: readOf(read) }));
+
   const lines = said?.read?.timeline.lines;
   const also = useMemo(() => namedByOthers(lines ?? []), [lines]);
   const toAnswer = useMemo(() => answerable(lines ?? []), [lines]);
+  /** The session each chat on the timeline has now, by key: its lines, under what was told. */
+  const chats = useMemo(() => {
+    const now = new Map(chatsOn(lines ?? []));
+    for (const [key, session] of told) if (now.has(key)) now.set(key, session);
+    return now;
+  }, [lines, told]);
+  const closed = (key: string) => chats.get(key) === null;
+
+  /* The window's open chats, as its own stores hold them: the chats its tabs show, and this
+     session's open tasks at any depth (#1457). Only what changes them is followed. */
+  const lent = useReferenceChats();
+  const below = useTasksBelow(session);
+  const openNow = useMemo(
+    () =>
+      lent === undefined
+        ? undefined
+        : [
+            ...new Set([
+              ...lent.chats.map((one) => one.session),
+              ...below.open.map((one) => one.session),
+            ]),
+          ]
+            .sort((a, b) => a - b)
+            .join(","),
+    [lent, below],
+  );
+  const openBefore = useRef<string | undefined>(undefined);
+  const chatsNow = useRef(chats);
+  useEffect(() => {
+    chatsNow.current = chats;
+  }, [chats]);
+  useEffect(() => {
+    const before = openBefore.current;
+    openBefore.current = openNow;
+    if (before === undefined || openNow === undefined || before === openNow) return;
+    const set = (said: string) => new Set(said === "" ? [] : said.split(",").map(Number));
+    let left = false;
+    for (const key of askAgain(chatsNow.current, set(before), set(openNow))) {
+      void commands
+        .activityChat(plane, key)
+        .then((now) => {
+          if (!left && now.status === "ok") setTold((was) => toldOf(was, key, now.data));
+        })
+        .catch(() => undefined);
+    }
+    return () => {
+      left = true;
+    };
+  }, [openNow, plane]);
 
   /** Answer was pressed on a question: the session its task has now is asked for. */
   const answer = async (line: ActivityLine) => {
@@ -193,8 +294,8 @@ export function ActivityTab({
       less.delete(key);
       return less;
     });
+    setTold((was) => toldOf(was, line.from_key, now.data));
     if (now.data !== null) setAnswering({ key, session: now.data });
-    else setGone((was) => new Set(was).add(line.from_key));
   };
 
   /** A line's chat was pressed: the session it has now is asked for, and shown. */
@@ -202,8 +303,9 @@ export function ActivityTab({
     const now = await commands
       .activityChat(plane, line.from_key)
       .catch(() => ({ status: "error" as const, error: "" }));
-    if (now.status === "ok" && now.data !== null) onShowChat(now.data);
-    else if (now.status === "ok") setGone((was) => new Set(was).add(line.from_key));
+    if (now.status !== "ok") return;
+    setTold((was) => toldOf(was, line.from_key, now.data));
+    if (now.data !== null) onShowChat(now.data);
   };
 
   if (session === undefined) {
@@ -289,33 +391,35 @@ export function ActivityTab({
   return (
     <>
       {older}
-      <ol className="activity" aria-label={`Activity of ${name}`}>
+      <ol ref={list} className="activity" aria-label={`Activity of ${name}`} tabIndex={-1}>
         {timeline.lines.map(({ line, depth }) => {
           const key = lineKey(line);
           const full = open.has(key);
           const { shown, more } = clipped(line.text);
-          const chat =
-            line.from_session === null || gone.has(line.from_key) ? (
+          const chat = closed(line.from_key) ? (
+            <>
               <span className="activity-gone" title="Its chat is closed">
                 {line.from}
               </span>
-            ) : (
-              <button
-                type="button"
-                className="vault-secret"
-                // #190: WebKit leaves a control out of the tab sequence without `tabIndex`.
-                tabIndex={0}
-                ref={(node) => {
-                  if (node === null) chatControls.current.delete(key);
-                  else chatControls.current.set(key, node);
-                }}
-                aria-label={`Show chat ${line.from}`}
-                title="Show its chat"
-                onClick={() => void show(line)}
-              >
-                {line.from}
-              </button>
-            );
+              <span className="activity-absent"> (chat closed)</span>
+            </>
+          ) : (
+            <button
+              type="button"
+              className="vault-secret"
+              // #190: WebKit leaves a control out of the tab sequence without `tabIndex`.
+              tabIndex={0}
+              ref={(node) => {
+                if (node === null) chatControls.current.delete(key);
+                else chatControls.current.set(key, node);
+              }}
+              aria-label={`Show chat ${line.from}`}
+              title="Show its chat"
+              onClick={() => void show(line)}
+            >
+              {line.from}
+            </button>
+          );
           return (
             <li
               key={key}
@@ -398,7 +502,13 @@ export function ActivityTab({
                   task={line.from}
                   number={line.asks ?? 0}
                   question={line.text}
-                  closed={toAnswer.has(key) ? undefined : closedWhy(line, lines ?? [])}
+                  closed={
+                    closed(line.from_key)
+                      ? chatClosedSaid(line)
+                      : toAnswer.has(key)
+                        ? undefined
+                        : closedWhy(line, lines ?? [])
+                  }
                   onDone={() => {
                     // Answer is gone from the line, so the keyboard goes to its chat.
                     backTo.current = key;
@@ -417,8 +527,7 @@ export function ActivityTab({
                    its chat is open. */
                 toAnswer.has(key) &&
                 !answered.has(key) &&
-                line.from_session !== null &&
-                !gone.has(line.from_key) && (
+                !closed(line.from_key) && (
                   <button
                     type="button"
                     className="panel-view activity-answer"
