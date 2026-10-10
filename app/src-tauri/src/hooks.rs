@@ -1516,6 +1516,7 @@ impl ChatBoard for Hooks {
             state: board.state(session),
             asking: board.asking(session),
             turns: board.turns(session),
+            prompt: board.its_prompt(session),
         }
     }
 

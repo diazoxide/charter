@@ -5,7 +5,7 @@ use std::path::Path;
 use std::time::Instant;
 
 use purlis_core::harness::asks::{Admitted, Answerer, Asks};
-use purlis_core::harness::model::{Ask, Channel, Choice, ChoiceKind, ChoiceScope};
+use purlis_core::harness::model::{Ask, Channel, Choice, ChoiceKind, ChoiceScope, Prompt};
 use purlis_core::sandbox::policy::Locks;
 
 use super::*;
@@ -80,6 +80,8 @@ struct World {
     permissions: Vec<purlis_core::harness::asks::Raised>,
     queue: Vec<u32>,
     at_prompt: Vec<u32>,
+    /// Chats stopped on a prompt whose kind their nudge named (#1691).
+    prompts: Vec<(u32, Prompt)>,
     dispatches: Vec<DispatchPending>,
     blocks: Vec<(u32, HeldBlock)>,
     locks: Locks,
@@ -93,6 +95,7 @@ impl World {
             permissions: Vec::new(),
             queue: Vec::new(),
             at_prompt: Vec::new(),
+            prompts: Vec::new(),
             dispatches: Vec::new(),
             blocks: Vec::new(),
             locks: Locks::none(),
@@ -102,7 +105,13 @@ impl World {
     }
 
     fn asks(&self) -> Vec<Shown> {
-        let at_prompt = |session: u32| self.at_prompt.contains(&session);
+        let at_prompt = |session: u32| {
+            self.prompts
+                .iter()
+                .find(|(one, _)| *one == session)
+                .map(|(_, prompt)| *prompt)
+                .or_else(|| self.at_prompt.contains(&session).then_some(Prompt::Unsaid))
+        };
         let name_of = |session: u32| {
             self.names
                 .iter()
@@ -283,6 +292,34 @@ fn a_chat_in_the_queue_is_a_terminal_prompt_where_it_stopped_on_one_and_a_questi
     );
     assert!(asks.iter().all(|ask| ask.answer == AnswerPath::InItsPane));
     assert_eq!(asks[0].says, "Waiting in its terminal");
+}
+
+#[test]
+fn a_terminal_prompt_says_which_prompt_waits_there_and_is_answered_only_in_its_chat() {
+    // #1691: what the harness's nudge named, so the person knows what they go to the chat
+    // for; nothing the window could send answers it, so no chat can answer it either (V16a).
+    let mut world = World::new();
+    world.queue = vec![2, 3];
+    world.prompts = vec![(2, Prompt::Permission), (3, Prompt::Form)];
+
+    let asks = world.asks();
+
+    let said: Vec<(u32, &str)> = asks
+        .iter()
+        .map(|ask| (ask.session, ask.says.as_str()))
+        .collect();
+    assert_eq!(
+        said,
+        [
+            (2, "Waiting in its terminal: a permission prompt"),
+            (3, "Waiting in its terminal: a form to fill"),
+        ]
+    );
+    for ask in &asks {
+        assert_eq!(ask.source, AskSource::Terminal);
+        assert!(ask.options.is_empty());
+        assert_eq!(ask.answer, AnswerPath::InItsPane);
+    }
 }
 
 #[test]

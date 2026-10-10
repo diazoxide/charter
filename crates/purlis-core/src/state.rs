@@ -138,6 +138,10 @@ pub struct Detail {
     /// before.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub idle: bool,
+    /// On a `Notification`: which prompt its terminal shows, or that it only informs (#1691,
+    /// [`Notified`]). Absent from an older hook, which reads as a prompt of no kind, as before.
+    #[serde(default, skip_serializing_if = "Notified::is_unsaid")]
+    pub notified: Notified,
     /// On a `SessionStart`: the model the harness said the session runs on, as its provider
     /// names it (Claude Code's payload carries `model`). What a commit's `Assisted-by` names
     /// once the app has recorded it for the chat (ADR 0087 §6, #1021). Absent where the harness
@@ -148,6 +152,29 @@ pub struct Detail {
         deserialize_with = "Model::lenient"
     )]
     pub model: Option<Model>,
+}
+
+/// **What a harness's notification says it is** (#1691): a prompt its terminal shows, of the
+/// kind it names, or a notice that asks nothing. Read from Claude Code's `notification_type`
+/// ([`crate::hookwire::Report::read`]); the idle nudge is [`Detail::idle`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Notified {
+    /// It said no kind, or one purlis does not know: a prompt, so nothing waits unseen.
+    #[default]
+    Unsaid,
+    /// A prompt of this kind.
+    Asks(crate::harness::model::Prompt),
+    /// Something told that asks nothing: no state moves on it.
+    Informs,
+    /// The prompt it showed was answered (a form's answer sent): the turn goes on.
+    Answered,
+}
+
+impl Notified {
+    fn is_unsaid(&self) -> bool {
+        *self == Self::Unsaid
+    }
 }
 
 /// A model's name as a harness reported it: one word of printable ASCII, at most
@@ -279,7 +306,15 @@ impl Event {
             }),
             Self::UserPromptSubmit => Said::Turn(Turn::Began),
             Self::Notification if detail.idle => Said::Turn(Turn::SitsIdle),
-            Self::Notification => Said::Ask(Ask::default()),
+            Self::Notification => match detail.notified {
+                Notified::Informs => Said::Item(Item::Told),
+                Notified::Answered => Said::Item(Item::Answered),
+                Notified::Asks(prompt) => Said::Ask(Ask {
+                    prompt,
+                    ..Ask::default()
+                }),
+                Notified::Unsaid => Said::Ask(Ask::default()),
+            },
             Self::SubagentStop => Said::Item(Item::ChildEnded),
             Self::Stop if detail.helpers_at_work => Said::Turn(Turn::AwaitsItsHelpers),
             Self::Stop => Said::Turn(Turn::Ended),
@@ -486,6 +521,9 @@ pub struct Chat {
     /// why this is a fact of its own and not `needs_you`. Only while the chat still waits on
     /// that prompt is it part of what a reader is shown ([`Chat::waits_on_its_prompt`], #1601).
     asking: bool,
+    /// The prompt its terminal shows while it asks, as its nudge named it (#1691): what a
+    /// row says of it. Meaningful only while [`Chat::waits_on_its_prompt`].
+    prompt: crate::harness::model::Prompt,
     /// Whether a tool of the chat's own began after it came to wait on its prompt (#1601): what
     /// a tool that comes back must follow to say the chat got past the prompt
     /// ([`Chat::tool_said`]). Cleared by each prompt it asks and each turn it begins.
@@ -520,6 +558,7 @@ impl Chat {
             reported: false,
             refusals: Vec::new(),
             asking: false,
+            prompt: crate::harness::model::Prompt::Unsaid,
             began_past_its_prompt: false,
             turns: 0,
             children: children::Children::default(),
@@ -572,6 +611,12 @@ impl Chat {
     /// own hold of the prompt.
     pub fn waits_on_its_prompt(&self) -> bool {
         self.asking && self.state == State::Waiting
+    }
+
+    /// **Which prompt its terminal shows, while it waits on it** (#1691): `None` once nothing
+    /// holds it there ([`Chat::waits_on_its_prompt`]).
+    pub fn its_prompt(&self) -> Option<crate::harness::model::Prompt> {
+        self.waits_on_its_prompt().then_some(self.prompt)
     }
 
     /// How many prompts have started a turn of this chat, as the app has heard them.
@@ -833,8 +878,11 @@ impl Chat {
                 self.turns = self.turns.saturating_add(1);
             }
             // The turn has not ended, but it cannot go on without an answer.
-            Said::Ask(_) => {
+            Said::Ask(ask) => {
                 // Asked in the middle of a turn. After one has ended it is only a nudge.
+                if self.state == State::Running || !ask.prompt.is_unsaid() {
+                    self.prompt = ask.prompt;
+                }
                 self.asking = self.asking || self.state == State::Running;
                 self.state = State::Waiting;
                 self.began_past_its_prompt = false;
@@ -891,6 +939,15 @@ impl Chat {
             // turn that dispatched it, and a fan-out would blink the chat out of `running`
             // several times over (`charter/hooks.py:stop`).
             Said::Item(Item::ChildEnded) => {}
+            // A notice that asks nothing (#1691): a prompt it showed stands.
+            Said::Item(Item::Told) => {}
+            // The harness said the prompt it showed was answered, wherever (#1691).
+            Said::Item(Item::Answered) => {
+                if self.waits_on_its_prompt() {
+                    self.state = State::Running;
+                    self.needs_you = false;
+                }
+            }
             // **`/clear` ends a CONVERSATION, not the session** — measured on claude 2.1.276,
             // where typing it fires `SessionEnd(reason=clear)` and then
             // `SessionStart(source=clear)` from the same process. The `SessionStart` that
@@ -1534,6 +1591,13 @@ impl Board {
         self.chats
             .get(&number)
             .is_some_and(|tracked| tracked.chat.waits_on_its_prompt())
+    }
+
+    /// Which prompt chat `number` waits on in its terminal now ([`Chat::its_prompt`], #1691).
+    pub fn its_prompt(&self, number: u32) -> Option<crate::harness::model::Prompt> {
+        self.chats
+            .get(&number)
+            .and_then(|tracked| tracked.chat.its_prompt())
     }
 
     /// How many prompts have started a turn of this chat ([`Chat::turns`]); none for a chat the
@@ -2843,6 +2907,54 @@ mod tests {
         assert!(chat.waits_on_its_prompt());
         assert!(!chat.tool_said(&back));
         assert!(chat.waits_on_its_prompt());
+    }
+
+    #[test]
+    fn a_chat_says_which_prompt_its_terminal_shows_while_it_waits_on_it() {
+        // #1691: a harness's notice names the prompt it shows; one that only informs asks
+        // nothing.
+        use crate::harness::model::Prompt;
+        let notice = |notified| Detail {
+            notified,
+            ..Detail::default()
+        };
+        let mut chat = Chat::new();
+        chat.reported(Event::UserPromptSubmit);
+        assert!(!chat.reported_from(Event::Notification, notice(Notified::Informs)));
+        assert_eq!((chat.state(), chat.its_prompt()), (State::Running, None));
+
+        chat.reported_from(Event::Notification, notice(Notified::Asks(Prompt::Form)));
+        assert_eq!(chat.its_prompt(), Some(Prompt::Form));
+        // A notice that informs while it waits leaves the prompt standing.
+        chat.reported_from(Event::Notification, notice(Notified::Informs));
+        assert_eq!(chat.its_prompt(), Some(Prompt::Form));
+        // Its answer sent: the turn goes on.
+        chat.reported_from(Event::Notification, notice(Notified::Answered));
+        assert_eq!((chat.state(), chat.its_prompt()), (State::Running, None));
+        chat.reported_from(Event::Notification, notice(Notified::Asks(Prompt::Link)));
+        chat.reported(Event::Stop);
+        assert_eq!(chat.its_prompt(), None);
+
+        // A notice that names no kind is still a prompt, of no kind it named.
+        chat.reported(Event::UserPromptSubmit);
+        chat.reported(Event::Notification);
+        assert_eq!(chat.its_prompt(), Some(Prompt::Unsaid));
+        assert!(chat.answered());
+        assert_eq!(chat.its_prompt(), None, "answered");
+    }
+
+    #[test]
+    fn the_board_says_which_prompt_a_chat_waits_on() {
+        use crate::harness::model::Prompt;
+        let mut board = Board::new();
+        claude_chat(&mut board, 7, Some(A));
+        board.reported(&report(7, Event::UserPromptSubmit, Some(A)));
+        assert_eq!(board.its_prompt(7), None);
+        let mut asked = report(7, Event::Notification, Some(A));
+        asked.detail.notified = Notified::Asks(Prompt::Permission);
+        board.reported(&asked);
+        assert_eq!(board.its_prompt(7), Some(Prompt::Permission));
+        assert_eq!(board.its_prompt(9), None, "a chat the board does not have");
     }
 
     #[test]

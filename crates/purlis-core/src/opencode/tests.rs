@@ -290,3 +290,48 @@ fn a_failed_shell_commands_one_stream_is_read_as_its_standard_error() {
         "{text}"
     );
 }
+
+#[test]
+fn opencode_s_permission_prompt_is_also_an_ask_answered_on_opencode_s_own_client() {
+    // #1691: the shim hands opencode's ask to purlis's permission hook, which the app holds
+    // until the person answers in the window; the hook's reply word goes to opencode's own
+    // client. Answered in opencode's pane first, the hook is stopped and its ask withdrawn.
+    let text = shim(Arming::Session);
+    assert!(
+        text.contains(&format!(
+            "spawn([BINARY, \"hook\", \"{}\"]",
+            crate::harness::hooked::WORD
+        )),
+        "{text}"
+    );
+    assert!(
+        text.contains(&format!(
+            "{} * 1000",
+            crate::harness::hooked::HOOK_TIMEOUT.as_secs()
+        )),
+        "{text}"
+    );
+    assert!(text.contains("REPLIES.includes(word)"), "{text}");
+    assert!(
+        text.contains("postSessionIdPermissionsPermissionId"),
+        "{text}"
+    );
+    assert!(text.contains("permission?.reply"), "{text}");
+    assert!(text.contains("case \"permission.replied\""), "{text}");
+    assert!(
+        text.contains("settled(props?.requestID ?? props?.permissionID)"),
+        "{text}"
+    );
+    assert!(text.contains("asked(props)"), "{text}");
+    // The installed guard-only copy asks nothing of an app.
+    let installed = shim(Arming::GuardOnly(Path::new("/bin/charter")));
+    assert!(!installed.contains("REPLIES"), "{installed}");
+}
+
+#[test]
+fn a_question_opencode_asks_is_a_prompt_waiting_in_its_terminal() {
+    // #1691: opencode's `question.asked` is named as a question, as its permission is.
+    let text = shim(Arming::Session);
+    assert!(text.contains("case \"question.asked\""), "{text}");
+    assert!(text.contains("notification_type: \"question\""), "{text}");
+}

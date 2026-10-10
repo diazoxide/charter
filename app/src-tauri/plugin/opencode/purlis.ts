@@ -239,6 +239,73 @@ export const CharterPlugin = async (plugin, options) => {
     if (why !== null) throw new Error(why)
   }
 
+  // opencode's permission asks held in the window, by request id, and their hooks (#1691).
+  const REPLIES = ["once", "always", "reject"]
+  const holding = new Map()
+  const client = plugin?.client
+
+  const settled = (id) => {
+    const child = holding.get(id)
+    if (!child) return
+    holding.delete(id)
+    try {
+      child.kill(9)
+    } catch {}
+  }
+
+  const reply = async (props, word) => {
+    if (typeof client?.permission?.reply === "function") {
+      return client.permission.reply({ requestID: props.id, reply: word })
+    }
+    if (typeof client?.postSessionIdPermissionsPermissionId === "function") {
+      return client.postSessionIdPermissionsPermissionId({
+        path: { id: props.sessionID, permissionID: props.id },
+        body: { response: word },
+      })
+    }
+  }
+
+  const asked = async (props) => {
+    const id = props?.id
+    if (!BINARY || typeof id !== "string" || typeof props?.sessionID !== "string") return
+    if (holding.has(id)) return
+    let child
+    try {
+      child = spawn([BINARY, "hook", "permissionrequest"], {
+        cwd: directory,
+        env: { ...env, PURLIS_SESSION_ID: rootOf(props.sessionID), CHARTER_SESSION_ID: rootOf(props.sessionID) },
+        stdin: new Blob([stringify(props)]),
+        stdout: "pipe",
+        stderr: "ignore",
+      })
+    } catch {
+      return
+    }
+    holding.set(id, child)
+    const timer = setTimeout(() => settled(id), 60 * 1000)
+    let out = ""
+    try {
+      out = await new Response(child.stdout).text()
+      await child.exited
+    } catch {
+    } finally {
+      clearTimeout(timer)
+    }
+    if (holding.get(id) !== child) return
+    holding.delete(id)
+    let word
+    try {
+      word = parse(out.trim() || "null")?.reply
+    } catch {
+      return
+    }
+    if (typeof word !== "string" || !REPLIES.includes(word)) return
+    try {
+      const sent = reply(props, word)
+      if (sent && typeof sent.catch === "function") sent.catch(() => {})
+    } catch {}
+  }
+
   return {
     // purlis's skills, beside every skills path the operator's configs name. opencode hands
     // this hook its live merged config before it discovers any skill, and scans each path in
@@ -345,6 +412,25 @@ export const CharterPlugin = async (plugin, options) => {
             cwd: directory,
             notification_type: "permission_prompt",
             message: `opencode asks permission to use ${String(props?.permission ?? "a tool")}`,
+          }, sid)
+          void asked(props)
+          return
+        }
+        // Answered in opencode's own pane, or anywhere else: the window's ask is withdrawn.
+        case "permission.replied": {
+          settled(props?.requestID ?? props?.permissionID)
+          return
+        }
+        // A question opencode asks the person is a prompt in its terminal too (#1691).
+        case "question.asked": {
+          const sid = rootOf(props?.sessionID)
+          if (!sid) return
+          void run("notification", {
+            hook_event_name: "Notification",
+            session_id: sid,
+            cwd: directory,
+            notification_type: "question",
+            message: "opencode asks you a question",
           }, sid)
           return
         }

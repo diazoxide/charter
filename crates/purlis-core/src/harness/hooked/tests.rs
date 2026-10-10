@@ -387,3 +387,154 @@ fn a_suggestion_whose_words_draw_otherwise_is_not_offered() {
     );
     assert_eq!(decision(Source::ClaudeCode, &payload, "suggestion:0"), None);
 }
+
+/// Codex's `PermissionRequest` payload, as codex-cli 0.147.0's own schema for it lists the
+/// fields (`permission-request.command.input`), in permission mode `mode`.
+fn codex_payload(mode: &str) -> Value {
+    serde_json::json!({
+        "session_id": "s", "turn_id": "t", "cwd": "/w", "model": "m",
+        "transcript_path": null, "hook_event_name": "PermissionRequest",
+        "permission_mode": mode,
+        "tool_name": "Bash", "tool_input": {"command": "npm test"}
+    })
+}
+
+/// opencode's `permission.asked` properties, which its shim hands the hook as they came.
+fn opencode_props(permission: &str, patterns: &[&str]) -> Value {
+    serde_json::json!({
+        "id": "per_1", "sessionID": "ses_1", "permission": permission,
+        "patterns": patterns, "always": patterns, "metadata": {}
+    })
+}
+
+#[test]
+fn a_codex_permission_hook_asks_allow_or_deny_for_this_call_on_its_own_hook() {
+    // #1691: Codex's `PermissionRequest` answers allow or deny for this call and nothing
+    // longer; its schema fails closed on `updatedPermissions` and on `interrupt`.
+    let asked = ask(Source::Codex, &codex_payload("default"));
+    assert_eq!(asked.channel, Channel::Hook);
+    assert_eq!(asked.deadline, Deadline::Within(58_000));
+    let ids: Vec<&str> = asked.options.iter().map(|o| o.id.as_str()).collect();
+    assert_eq!(ids, ["allow", "deny"]);
+
+    let read = |chosen: &str| -> Value {
+        let line = decision(Source::Codex, &codex_payload("default"), chosen).expect("a decision");
+        let doc: Value = serde_json::from_str(&line).expect("JSON");
+        assert_eq!(
+            doc["hookSpecificOutput"]["hookEventName"],
+            "PermissionRequest"
+        );
+        doc["hookSpecificOutput"]["decision"].clone()
+    };
+    assert_eq!(read("allow"), serde_json::json!({"behavior": "allow"}));
+    let denied = read("deny");
+    assert_eq!(denied["behavior"], "deny");
+    assert!(denied["message"].is_string());
+    assert!(denied.get("updatedPermissions").is_none() && denied.get("interrupt").is_none());
+    assert_eq!(
+        decision(Source::Codex, &codex_payload("default"), "maybe"),
+        None
+    );
+}
+
+#[test]
+fn an_opencode_permission_is_held_on_its_hook_and_answered_with_opencode_s_own_reply() {
+    // #1691: the shim hands the hook opencode's ask, and replies on opencode's own client
+    // with the word the hook prints.
+    let props = opencode_props("webfetch", &["https://example.com"]);
+    let asked = ask(Source::Opencode, &props);
+    assert_eq!(asked.channel, Channel::Hook);
+    assert_eq!(asked.deadline, Deadline::Within(58_000));
+    let ids: Vec<&str> = asked.options.iter().map(|o| o.id.as_str()).collect();
+    assert_eq!(ids, ["once", "always", "reject"]);
+    for reply in ["once", "always", "reject"] {
+        assert_eq!(
+            decision(Source::Opencode, &props, reply),
+            Some(format!("{{\"reply\":\"{reply}\"}}"))
+        );
+    }
+    assert_eq!(decision(Source::Opencode, &props, "allow"), None);
+}
+
+#[test]
+fn an_opencode_command_or_edit_is_never_allowed_from_the_window() {
+    // Its patterns name the commands opencode matched, not the line that runs, and an edit
+    // shows only its path: Reject is answered from the window, an allow only in the pane.
+    for props in [
+        opencode_props("bash", &["npm test"]),
+        opencode_props("bash", &["ls", "rm -rf x"]),
+        opencode_props("edit", &["src/main.rs"]),
+    ] {
+        let ids: Vec<String> = ask(Source::Opencode, &props)
+            .options
+            .into_iter()
+            .map(|o| o.id)
+            .collect();
+        assert_eq!(ids, ["reject"], "{props}");
+        assert_eq!(decision(Source::Opencode, &props, "once"), None);
+    }
+}
+
+#[test]
+fn no_permission_mode_answers_an_ask_without_the_window() {
+    // #1691: whatever mode the harness runs in, an ask waits for the person; the hook prints a
+    // decision only for an option the person chose, and the mode changes nothing offered.
+    let t0 = Instant::now();
+    for mode in [
+        "default",
+        "acceptEdits",
+        "plan",
+        "auto",
+        "dontAsk",
+        "bypassPermissions",
+    ] {
+        let mut claude = payload();
+        claude["permission_mode"] = mode.into();
+        let codex = codex_payload(mode);
+        for (source, said, plain) in [
+            (Source::ClaudeCode, &claude, payload()),
+            (Source::Codex, &codex, codex_payload("default")),
+        ] {
+            assert_eq!(
+                ask(source, said).options,
+                ask(source, &plain).options,
+                "{mode}"
+            );
+            assert_eq!(decision(source, said, ""), None, "{mode}");
+            let hooks = hooks();
+            let held = hooks.raise("3", source, said, t0).expect("raised");
+            assert!(
+                held.answered.try_recv().is_err(),
+                "{mode}: answered by itself"
+            );
+            assert!(hooks.time_out(t0).is_empty(), "{mode}");
+            assert_eq!(hooks.pending(t0).len(), 1, "{mode}");
+        }
+    }
+    let hooks = hooks();
+    let held = hooks
+        .raise(
+            "3",
+            Source::Opencode,
+            &opencode_props("webfetch", &["https://x.test"]),
+            t0,
+        )
+        .expect("raised");
+    assert!(held.answered.try_recv().is_err());
+    assert_eq!(hooks.pending(t0).len(), 1);
+}
+
+#[test]
+fn the_harness_a_chat_runs_names_the_hook_s_source() {
+    // The registry names a profile carries (`profiles::KINDS`).
+    assert_eq!(Source::of_harness(Some("codex")), Some(Source::Codex));
+    assert_eq!(Source::of_harness(Some("opencode")), Some(Source::Opencode));
+    assert_eq!(
+        Source::of_harness(Some("claude-code")),
+        Some(Source::ClaudeCode)
+    );
+    assert_eq!(Source::of_harness(None), Some(Source::ClaudeCode));
+    // A name it does not know decides nothing, rather than in another harness's words.
+    assert_eq!(Source::of_harness(Some("claude")), None);
+    assert_eq!(Source::of_harness(Some("a-later-harness")), None);
+}
