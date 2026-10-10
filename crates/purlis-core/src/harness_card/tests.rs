@@ -310,7 +310,8 @@ fn the_card_tab_draws_its_label_where_it_comes_from_and_a_row_per_line() {
         waiting.detail,
         Some(Detail::Text(
             "Codex does not tell purlis when it is waiting, so its chats will not show needs \
-             you. Why: Codex never says when it stops mid-turn for your approval."
+             you. Why: Codex says only when it stops mid-turn for your approval, never when \
+             it waits on anything else."
                 .to_owned()
         ))
     );
