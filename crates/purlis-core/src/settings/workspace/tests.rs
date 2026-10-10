@@ -205,16 +205,18 @@ fn a_manifest_that_is_not_json_has_no_form() {
     let dir = plane(Some("{\"name\": "));
     let read = read_file(dir.path(), "alpha").unwrap();
     assert!(!read.parsed);
+    let whys: Vec<String> = read.refusals.iter().map(|one| one.why.clone()).collect();
     assert_eq!(
-        read.refusals,
+        whys,
         vec![
             "workspaces/alpha/workspace.json is not a JSON object, so purlis reads no settings \
              from it — mend it by hand"
                 .to_owned()
         ]
     );
+    assert_eq!(read.refusals[0].key, None);
     let refused = save(dir.path(), "alpha", Some("{\"name\": "), &[off()]).unwrap_err();
-    assert_eq!(refused, read.refusals);
+    assert_eq!(refused, whys);
 }
 
 #[test]
@@ -846,4 +848,23 @@ fn what_the_manifest_held_lets_through_only_that_value_never_a_new_one_in_its_pl
     let kept = r#"{"name": "beta", "repos": [5, {"name": "widget"}], "description": "x"}"#;
     save_text(dir.path(), "alpha", Some(held), kept).unwrap();
     assert_eq!(on_disk(dir.path()), kept);
+}
+
+/// **A workspace's standing refusals say their key under `settings`** (#1292): the key a setting
+/// at the Workspace level holds, with a dotted extension id as one step.
+#[test]
+fn a_workspace_refusal_carries_its_key_under_settings() {
+    let manifest =
+        r#"{"name": "alpha", "settings": {"extensions": {"my.ext": {"enabled": 1}}, "odd": 1}}"#;
+    let refusals = standing(manifest, "alpha");
+    let keys: Vec<_> = refusals.iter().map(|one| one.key.clone()).collect();
+    assert!(keys.contains(&Some(vec!["odd".to_owned()])), "{refusals:?}");
+    assert!(
+        keys.contains(&Some(vec![
+            "extensions".to_owned(),
+            "my.ext".to_owned(),
+            "enabled".to_owned()
+        ])),
+        "{refusals:?}"
+    );
 }

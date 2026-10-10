@@ -408,7 +408,9 @@ describe("the Workspace level", () => {
   it("says what purlis does not take from the settings as they stand", async () => {
     core({
       ...ALPHA,
-      refusals: ["settings.colour in workspaces/alpha/workspace.json is not read"],
+      refusals: [
+        { why: "settings.colour in workspaces/alpha/workspace.json is not read", key: ["colour"] },
+      ],
     });
     await at();
 
@@ -1150,7 +1152,10 @@ describe("Edit as JSON (NO-7, #1232)", () => {
       parsed: false,
       fields: [],
       refusals: [
-        "workspaces/alpha/workspace.json is not a JSON object, so purlis reads no settings from it — mend it by hand",
+        {
+          why: "workspaces/alpha/workspace.json is not a JSON object, so purlis reads no settings from it — mend it by hand",
+          key: null,
+        },
       ],
     });
     await at();
@@ -1168,7 +1173,10 @@ describe("a standing refusal at the Workspace level (NO-7, #1232)", () => {
     core({
       ...ALPHA,
       refusals: [
-        "settings.theme.icons in workspaces/alpha/workspace.json is 7, not an icon theme's pick",
+        {
+          why: "settings.theme.icons in workspaces/alpha/workspace.json is 7, not an icon theme's pick",
+          key: ["theme", "icons"],
+        },
       ],
     });
     await at();
@@ -1185,7 +1193,9 @@ describe("a standing refusal at the Workspace level (NO-7, #1232)", () => {
   it("draws no link for a key no setting here holds", async () => {
     core({
       ...ALPHA,
-      refusals: ["settings.colour in workspaces/alpha/workspace.json is not read"],
+      refusals: [
+        { why: "settings.colour in workspaces/alpha/workspace.json is not read", key: ["colour"] },
+      ],
     });
     await at();
 

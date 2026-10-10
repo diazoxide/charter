@@ -23,7 +23,7 @@ use std::path::Path;
 
 use serde_json::{Map, Value as Json};
 
-use super::{Edit, Found, Step, Value};
+use super::{Edit, Found, Refusal, Step, Value};
 use crate::extension::project;
 use crate::manifest::Ownership;
 use crate::workspaces::{Plane, Workspace};
@@ -92,32 +92,45 @@ pub fn read(root: &Path, workspace: &str) -> Option<toml::Table> {
 /// Everything charter would not read in the settings of the manifest whose text this is, one
 /// sentence each. Empty when there is nothing to refuse, and when it has no settings.
 pub fn refusals(text: &str, workspace: &str) -> Vec<String> {
+    standing(text, workspace)
+        .into_iter()
+        .map(|one| one.why)
+        .collect()
+}
+
+/// [`refusals`], each with the key it is about under `settings` (#1292), as a setting at the
+/// Workspace level holds it: what [`read_file`] gives the Settings tab.
+pub fn standing(text: &str, workspace: &str) -> Vec<Refusal> {
     let file = named(workspace);
+    let whole = |why: String| vec![Refusal { why, key: None }];
     let Ok(Json::Object(doc)) = serde_json::from_str::<Json>(text) else {
-        return vec![format!(
+        return whole(format!(
             "{file} is not a JSON object, so purlis reads no settings from it — mend it by hand"
-        )];
+        ));
     };
     let Some(settings) = doc.get(KEY) else {
         return Vec::new();
     };
     let Some(settings) = settings.as_object() else {
-        return vec![format!(
+        return whole(format!(
             "{KEY} in {file} is not an object — a workspace's settings are \
              {{\"{}\": {{\"<id>\": {{\"{}\": …, \"{}\": {{…}}}}}}}}",
             project::TABLE,
             project::ENABLED,
             project::SETTINGS
-        )];
+        ));
     };
-    let mut out: Vec<String> = settings
+    let mut out: Vec<Refusal> = settings
         .keys()
         .filter(|key| !READ.contains(&key.as_str()))
         .map(|key| {
-            format!(
-                "{KEY}.{key} in {file} is not read — a workspace's settings hold {} and nothing \
-                 else",
-                READ.join(", ")
+            Refusal::at(
+                format!(
+                    "{KEY}.{key} in {file} is not read — a workspace's settings hold {} and \
+                     nothing else",
+                    READ.join(", ")
+                ),
+                &[key.as_str()],
             )
         })
         .collect();
@@ -125,14 +138,19 @@ pub fn refusals(text: &str, workspace: &str) -> Vec<String> {
         toml::Value::Table(table) => Some(table),
         _ => None,
     }) {
-        out.extend(project::refusals_in(&table, &file, "settings."));
-        out.extend(crate::harness_plugin::refusals_in(
+        let said = |whys: Vec<String>| {
+            whys.into_iter()
+                .map(|why| Refusal::said(why, &file, Some(KEY)))
+                .collect::<Vec<_>>()
+        };
+        out.extend(project::keyed_in(&table, &file, "settings."));
+        out.extend(said(crate::harness_plugin::refusals_in(
             &table,
             &file,
             "settings.",
-        ));
+        )));
         // And `theme` (charter-app#281), by the one reader of a theme.
-        out.extend(project::theme::refusals_in_workspace(&table, &file));
+        out.extend(said(project::theme::refusals_in_workspace(&table, &file)));
     }
     out
 }
@@ -229,8 +247,9 @@ pub struct Read {
     pub exists: bool,
     /// Its text, or empty — what a save is checked against.
     pub text: String,
-    /// What charter does not take from its settings as they stand.
-    pub refusals: Vec<String>,
+    /// What charter does not take from its settings as they stand, each with its key under
+    /// `settings` (#1292).
+    pub refusals: Vec<Refusal>,
     /// Whether it is a JSON object, which is what a form can change.
     pub parsed: bool,
     /// Every value in its settings and the path to it, as `settings::fields` gives a TOML
@@ -281,7 +300,7 @@ pub fn read_file(root: &Path, workspace: &str) -> Result<Read, String> {
     Ok(Read {
         file: named(workspace),
         refusals: if exists {
-            refusals(&text, workspace)
+            standing(&text, workspace)
         } else {
             Vec::new()
         },

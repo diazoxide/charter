@@ -565,7 +565,21 @@ impl Workspace {
     /// writer going on would write to the old path — re-creating `workspaces/<old>` with a
     /// manifest of its own. Where the lock could be taken, the folder at the path must be the
     /// very directory locked; where it could not, the folder must at least be there.
+    ///
+    /// **A folder that is a link is refused up front** (#1292), in words of its own: the lock
+    /// never follows a link, so it could not hold one, and writing through it would put the
+    /// manifest in a folder outside `workspaces/`. Never followed, and never accepted.
     pub fn manifest_lock(&self) -> io::Result<crate::rewrite::Lock> {
+        if std::fs::symlink_metadata(&self.dir).is_ok_and(|now| now.file_type().is_symlink()) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "workspace '{}' is a link to another folder, and purlis writes its \
+                     workspace.json only in a real folder",
+                    self.name
+                ),
+            ));
+        }
         let held = crate::rewrite::Lock::on(&self.dir);
         if self.is_the_folder_locked(&held) {
             return Ok(held);
@@ -1198,6 +1212,32 @@ mod manifest_lock_tests {
         );
         assert!(!root.join("workspaces/demo").exists());
         assert!(!root.join("workspaces/renamed/workspace.json").exists());
+    }
+
+    /// #1292: a workspace folder that is a link to another folder is refused up front, in a
+    /// sentence of its own, and nothing is written through the link.
+    #[cfg(unix)]
+    #[test]
+    fn a_workspace_folder_that_is_a_link_is_refused_in_its_own_words() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        let elsewhere = root.join("elsewhere");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        std::fs::create_dir_all(root.join("workspaces")).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, root.join("workspaces/demo")).unwrap();
+        let ws = Plane::open(&root).workspace("demo").unwrap();
+        let why = ws
+            .manifest_lock()
+            .err()
+            .expect("a linked folder is refused");
+        assert_eq!(
+            why.to_string(),
+            "workspace 'demo' is a link to another folder, and purlis writes its \
+             workspace.json only in a real folder"
+        );
+        let scaffolded = ws.scaffold_manifest(chrono::Utc::now(), "t");
+        assert!(scaffolded.is_err());
+        assert!(!elsewhere.join("workspace.json").exists());
     }
 
     /// #1292: a folder made again at the path while the writer waited is not the one it

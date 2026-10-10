@@ -182,8 +182,9 @@ fn each_reader_says_it_left_the_local_file_out_in_the_local_sections_words() {
         let said = local
             .refusals
             .iter()
-            .find(|one| one.contains("purlis reads nothing in it"))
+            .find(|one| one.why.contains("purlis reads nothing in it"))
             .unwrap_or_else(|| panic!("{how:?}: {:?}", local.refusals))
+            .why
             .as_str();
 
         assert_eq!(
@@ -270,11 +271,9 @@ fn the_project_settings_tab_says_why_the_local_file_is_not_read_and_the_fix() {
     let read = settings::read(dir.path(), Which::Local).unwrap();
 
     assert!(
-        read.refusals.contains(
-            &"git would commit charter.local.toml, so purlis reads nothing in it until it \
-              is ignored — purlis doctor --fix local-ignore adds /charter.local.toml to .gitignore."
-                .to_owned()
-        ),
+        read.refusals.iter().any(|one| one.why
+            == "git would commit charter.local.toml, so purlis reads nothing in it until it \
+              is ignored — purlis doctor --fix local-ignore adds /charter.local.toml to .gitignore."),
         "{:?}",
         read.refusals
     );
@@ -288,12 +287,10 @@ fn a_tracked_local_file_is_said_with_its_own_fix() {
     let read = settings::read(dir.path(), Which::Local).unwrap();
 
     assert!(
-        read.refusals.contains(
-            &"git tracks charter.local.toml, so what it says would reach every clone of this \
+        read.refusals.iter().any(|one| one.why
+            == "git tracks charter.local.toml, so what it says would reach every clone of this \
               plane — purlis reads nothing in it until it is untracked: git rm --cached \
-              charter.local.toml, commit that removal, then purlis reinit."
-                .to_owned()
-        ),
+              charter.local.toml, commit that removal, then purlis reinit."),
         "{:?}",
         read.refusals
     );

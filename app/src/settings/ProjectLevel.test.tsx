@@ -356,7 +356,10 @@ describe("the Project level", () => {
 
   it("keeps what the files refuse on screen under a filter that matches nothing (SE-21)", async () => {
     const { files } = core();
-    files.shared = { ...files.shared, refusals: ["[plane] mode is not one charter knows"] };
+    files.shared = {
+      ...files.shared,
+      refusals: [{ why: "[plane] mode is not one charter knows", key: null }],
+    };
     await atProject();
 
     await userEvent.type(

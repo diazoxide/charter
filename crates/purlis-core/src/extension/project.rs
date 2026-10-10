@@ -40,6 +40,7 @@ use std::path::{Path, PathBuf};
 
 use super::{Setting, SettingValue};
 use crate::profiles::{COMMITTED_FILE, LOCAL_FILE};
+use crate::settings::Refusal;
 
 pub mod theme;
 
@@ -532,8 +533,13 @@ pub fn key_ok(key: &str) -> bool {
 /// sentence each. Empty when there is nothing to refuse, and when the text is not TOML at all —
 /// that is the file's own reader's refusal, not this one's.
 pub fn refusals(text: &str, file: &str) -> Vec<String> {
+    keyed(text, file).into_iter().map(|one| one.why).collect()
+}
+
+/// [`refusals`], each with the key it is about (#1292).
+pub fn keyed(text: &str, file: &str) -> Vec<Refusal> {
     text.parse::<toml::Table>()
-        .map(|top| refusals_in(&top, file, ""))
+        .map(|top| keyed_in(&top, file, ""))
         .unwrap_or_default()
 }
 
@@ -541,63 +547,92 @@ pub fn refusals(text: &str, file: &str) -> Vec<String> {
 /// as one (`crate::settings::workspace`). `at` is where the table sits in the file, as a path
 /// names it: empty for a TOML file, `settings.` for a workspace's `workspace.json`.
 pub fn refusals_in(top: &toml::Table, file: &str, at: &str) -> Vec<String> {
+    keyed_in(top, file, at)
+        .into_iter()
+        .map(|one| one.why)
+        .collect()
+}
+
+/// [`refusals_in`], each with the key it is about **in `top`** (#1292): `at` is left out, so a
+/// workspace's is the key under its `settings`. An id is one step, dots and all — the one thing
+/// the sentence alone cannot say, since it writes an id that is a valid one unquoted.
+pub fn keyed_in(top: &toml::Table, file: &str, at: &str) -> Vec<Refusal> {
     let Some(table) = top.get(TABLE) else {
         return Vec::new();
     };
     let shape = "each extension is [extensions.<id>], holding enabled and \
                  [extensions.<id>.settings]";
     let Some(table) = table.as_table() else {
-        return vec![format!("{at}{TABLE} in {file} is not a table — {shape}")];
+        return vec![Refusal::at(
+            format!("{at}{TABLE} in {file} is not a table — {shape}"),
+            &[TABLE],
+        )];
     };
     let mut out = Vec::new();
     for (id, one) in table {
         if !id_ok(id) {
-            out.push(format!(
-                "[{at}{TABLE}.{}] in {file} is not an extension id — an id is letters, digits, '-', \
-                 '_' and '.', starting with a letter or a digit",
-                toml_key(id)
+            out.push(Refusal::at(
+                format!(
+                    "[{at}{TABLE}.{}] in {file} is not an extension id — an id is letters, \
+                     digits, '-', '_' and '.', starting with a letter or a digit",
+                    toml_key(id)
+                ),
+                &[TABLE, id.as_str()],
             ));
             continue;
         }
         let Some(one) = one.as_table() else {
-            out.push(format!(
-                "{at}{TABLE}.{id} in {file} is not a table — {shape}"
+            out.push(Refusal::at(
+                format!("{at}{TABLE}.{id} in {file} is not a table — {shape}"),
+                &[TABLE, id.as_str()],
             ));
             continue;
         };
         for (key, value) in one {
             match key.as_str() {
                 ENABLED if !value.is_bool() => {
-                    out.push(format!(
-                        "{at}{TABLE}.{id}.{ENABLED} in {file} is not true or false"
+                    out.push(Refusal::at(
+                        format!("{at}{TABLE}.{id}.{ENABLED} in {file} is not true or false"),
+                        &[TABLE, id.as_str(), ENABLED],
                     ));
                 }
                 ENABLED => {}
                 SETTINGS => match value.as_table() {
-                    None => out.push(format!(
-                        "{at}{TABLE}.{id}.{SETTINGS} in {file} is not a table of settings"
+                    None => out.push(Refusal::at(
+                        format!("{at}{TABLE}.{id}.{SETTINGS} in {file} is not a table of settings"),
+                        &[TABLE, id.as_str(), SETTINGS],
                     )),
                     Some(settings) => {
                         for (name, value) in settings {
                             if !key_ok(name) {
-                                out.push(format!(
-                                    "{at}{TABLE}.{id}.{SETTINGS}.{} in {file} is not a setting's key \
-                                     — a key is letters, digits, '-' and '_'",
-                                    toml_key(name)
+                                out.push(Refusal::at(
+                                    format!(
+                                        "{at}{TABLE}.{id}.{SETTINGS}.{} in {file} is not a \
+                                         setting's key — a key is letters, digits, '-' and '_'",
+                                        toml_key(name)
+                                    ),
+                                    &[TABLE, id.as_str(), SETTINGS, name.as_str()],
                                 ));
                             } else if !(value.is_bool() || value.is_str()) {
-                                out.push(format!(
-                                    "{at}{TABLE}.{id}.{SETTINGS}.{name} in {file} is not a value a \
-                                     setting can hold — a setting is true, false or text"
+                                out.push(Refusal::at(
+                                    format!(
+                                        "{at}{TABLE}.{id}.{SETTINGS}.{name} in {file} is not a \
+                                         value a setting can hold — a setting is true, false or \
+                                         text"
+                                    ),
+                                    &[TABLE, id.as_str(), SETTINGS, name.as_str()],
                                 ));
                             }
                         }
                     }
                 },
-                other => out.push(format!(
-                    "{at}{TABLE}.{id}.{} in {file} is not read — [{TABLE}.<id>] holds {ENABLED} and \
-                     {SETTINGS} and nothing else",
-                    toml_key(other)
+                other => out.push(Refusal::at(
+                    format!(
+                        "{at}{TABLE}.{id}.{} in {file} is not read — [{TABLE}.<id>] holds \
+                         {ENABLED} and {SETTINGS} and nothing else",
+                        toml_key(other)
+                    ),
+                    &[TABLE, id.as_str(), other],
                 )),
             }
         }

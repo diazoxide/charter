@@ -5,7 +5,13 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { SettingsTab } from "./SettingsTab";
 import { forgetThisLaunch } from "../regions";
 import { GLOBAL } from "../windowprefs";
-import type { SettingsEdit, SettingsField, SettingsFile, SettingsWhich } from "../bindings";
+import type {
+  SettingsEdit,
+  SettingsField,
+  SettingsFile,
+  SettingsRefusal,
+  SettingsWhich,
+} from "../bindings";
 
 /**
  * **The default persona, workspace and harness are pickers with "New…"** (ST-1, #1225; the
@@ -25,7 +31,7 @@ const field = (keys: string[], value: SettingsField["value"]): SettingsField => 
 
 const text = (value: string) => ({ kind: "text" as const, value });
 
-function file(which: SettingsWhich, fields: SettingsField[], refusals: string[] = []) {
+function file(which: SettingsWhich, fields: SettingsField[], refusals: SettingsRefusal[] = []) {
   return {
     which,
     file: which === "shared" ? "charter.toml" : "charter.local.toml",
@@ -227,7 +233,11 @@ describe("the default persona, workspace and harness", () => {
 
   it("show a value that names nothing as such, with the core's sentence, until it is replaced", async () => {
     const { sent } = core({
-      shared: file("shared", [field(["persona", "default"], text("ghost"))], [GHOST]),
+      shared: file(
+        "shared",
+        [field(["persona", "default"], text("ghost"))],
+        [{ why: GHOST, key: ["persona", "default"] }],
+      ),
     });
     await atProject();
     await waitFor(() => expect(offered("Default persona")).toContain("steward"));
