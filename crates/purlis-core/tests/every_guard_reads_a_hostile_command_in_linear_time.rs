@@ -245,6 +245,11 @@ fn the_whole_verdict_at_the_largest_and_deepest_command_stays_well_inside_the_bu
     };
     // Just under the size cap, so every shape is read rather than refused for its size.
     let size = guardcaps::MAX_COMMAND_BYTES - 4 * 1024;
+    let bound = if cfg!(debug_assertions) {
+        WHOLE_VERDICT * DEBUG_SLOWDOWN
+    } else {
+        WHOLE_VERDICT
+    };
     let mut slowest = (Duration::ZERO, String::new());
     for deep in [MAX_NESTING, MAX_NESTING + 1] {
         for (shape, line) in shapes(deep) {
@@ -262,15 +267,20 @@ fn the_whole_verdict_at_the_largest_and_deepest_command_stays_well_inside_the_bu
                     },
                 };
                 // The faster of two runs, as the family test takes, so a moment of load on the
-                // machine is not the measure.
-                let took = (0..2)
-                    .map(|_| {
-                        let began = Instant::now();
-                        let _ = toolgate::verdict(&call, Some(&plane));
-                        began.elapsed()
-                    })
-                    .min()
-                    .unwrap_or_default();
+                // machine is not the measure. The faster is inside the bound exactly when the
+                // first is or the second is, so the second runs only when the first is not: the
+                // same verdict for half of this test's minutes.
+                let run = || {
+                    let began = Instant::now();
+                    let _ = toolgate::verdict(&call, Some(&plane));
+                    began.elapsed()
+                };
+                let first = run();
+                let took = if first < bound {
+                    first
+                } else {
+                    first.min(run())
+                };
                 if took > slowest.0 {
                     slowest = (took, format!("{shape}, {deep} deep, {mode}"));
                 }
@@ -278,11 +288,6 @@ fn the_whole_verdict_at_the_largest_and_deepest_command_stays_well_inside_the_bu
         }
     }
     let (took, which) = slowest;
-    let bound = if cfg!(debug_assertions) {
-        WHOLE_VERDICT * DEBUG_SLOWDOWN
-    } else {
-        WHOLE_VERDICT
-    };
     assert!(
         took < bound,
         "the slowest whole verdict, on {which}, took {took:?}"
