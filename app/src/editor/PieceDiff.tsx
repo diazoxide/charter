@@ -10,7 +10,9 @@
  *
  * **It reads again when the branch moves** (#1189): the window's `branch-changed` for this
  * branch asks once more, one read at a time, and the comparison drawn stays until the new one
- * comes. The tab never asks the core to watch a branch (`branch_watch` sets the window's whole
+ * comes, marked busy with *Comparing … again…* said as a status; its *Open at line N* buttons
+ * stay usable meanwhile (they land in the file tab, which reads the file as it is now). The tab
+ * never asks the core to watch a branch (`branch_watch` sets the window's whole
  * watched set, which is the explorer's): it hears a branch the explorer watches, and a branch
  * nobody watches is compared again with *Compare again*.
  *
@@ -26,12 +28,12 @@
 import { useEffect, useRef, useState } from "react";
 import { FileDiff as FileDiffMark, LoaderCircle } from "lucide-react";
 import { EmptyState } from "../EmptyState";
-import { commands, type BranchChanged, type PlaneId, type WhatChanged } from "../bindings";
-import { listen } from "../here";
+import { commands, type PlaneId, type WhatChanged } from "../bindings";
 import type { Place } from "../pieceViews";
 import { MergeViewer } from "./LightEditor";
 import { sized, ToYourEditor } from "./PieceFiles";
 import { jumpTo } from "../fileJump";
+import { useBranchMoved } from "./branchMoved";
 
 /** The comparison, as the tab draws it: being read, refused with the core's sentence, or read. */
 type Read =
@@ -45,7 +47,8 @@ export function PieceDiffTab({ plane, cut, path }: { plane: PlaneId; cut: Place;
   const [asked, setAsked] = useState(0);
   /** How often the branch moved and was read again for it. */
   const [moved, setMoved] = useState(0);
-  const [read, setRead] = useState<{ asked: number; read: Read }>();
+  /** The last comparison told, with the asks and the moves it was read for. */
+  const [read, setRead] = useState<{ asked: number; moved: number; read: Read }>();
   /** The read in flight, and whether the branch moved during it. */
   const flight = useRef<{ again: boolean }>(undefined);
   useEffect(() => {
@@ -55,7 +58,7 @@ export function PieceDiffTab({ plane, cut, path }: { plane: PlaneId; cut: Place;
     const told = (got: Read) => {
       if (gone) return;
       flight.current = undefined;
-      setRead({ asked, read: got });
+      setRead({ asked, moved, read: got });
       if (now.again) setMoved((n) => n + 1);
     };
     void commands
@@ -77,8 +80,10 @@ export function PieceDiffTab({ plane, cut, path }: { plane: PlaneId; cut: Place;
     else setMoved((n) => n + 1);
   });
   const now: Read = read?.asked === asked ? read.read : { kind: "reading" };
+  // The branch moved since the comparison drawn was read, and it is being read again behind it.
+  const again = read?.asked === asked && read.moved !== moved;
   return (
-    <div className="piece-file">
+    <div className="piece-file" aria-busy={again}>
       <header className="piece-files-head">
         <code>{path}</code>
         {now.kind === "read" && <span>{against(now.shown)}</span>}
@@ -89,46 +94,15 @@ export function PieceDiffTab({ plane, cut, path }: { plane: PlaneId; cut: Place;
           </button>
         </span>
       </header>
+      {again && (
+        <p className="piece-files-trouble" role="status">
+          {`Comparing ${path} again…`}
+        </p>
+      )}
       <ChangedLines plane={plane} cut={cut} path={path} read={now} />
       <Compared path={path} read={now} />
     </div>
   );
-}
-
-/** Calls `heard` each time the window hears that `cut`'s branch moved. */
-function useBranchMoved(plane: PlaneId, cut: Place, heard: () => void) {
-  const latest = useRef(heard);
-  useEffect(() => {
-    latest.current = heard;
-  });
-  const { workspace, repo, piece } = cut;
-  useEffect(() => {
-    let gone = false;
-    let stop: (() => void) | undefined;
-    void (async () => {
-      try {
-        const unlisten = await listen<BranchChanged>("branch-changed", (event) => {
-          if (gone) return;
-          const mine = event.payload.branches.some(
-            (one) =>
-              one.plane === plane &&
-              one.workspace === workspace &&
-              one.repo === repo &&
-              one.piece === piece,
-          );
-          if (mine) latest.current();
-        });
-        if (gone) unlisten();
-        else stop = unlisten;
-      } catch {
-        // No window to listen in: a unit test.
-      }
-    })();
-    return () => {
-      gone = true;
-      stop?.();
-    };
-  }, [plane, workspace, repo, piece]);
 }
 
 /** How many changes are offered a line of their own: past it, the rest are counted. */
