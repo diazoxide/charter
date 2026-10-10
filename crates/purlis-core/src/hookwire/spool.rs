@@ -31,7 +31,7 @@
 //! from there, so a line it already handed on is `repeated` if it is put back, a line that was
 //! still being written while it ran is handed on by the next, and a hook that outlives it
 //! numbers its next line after the last one drained. `repeated` is therefore said of more than
-//! a line put back ([`why::REPEATED`] lists what else). A chat ends when it is closed
+//! a line put back ([`Why::Repeated`] lists what else). A chat ends when it is closed
 //! ([`end_chat`]) or when a project is opened without it ([`forget_all_but`]); its keys are
 //! dropped then, after its spool is drained, and a key is at rest no longer than that.
 //!
@@ -1042,7 +1042,7 @@ pub enum Drained {
     Rejected {
         chat: u32,
         seq: Option<u64>,
-        why: &'static str,
+        why: Why,
     },
     /// One of chat `chat`'s sequences, drained: what this drain went through of it ran from
     /// `from` to `to`. `from` is the number after the highest a drain before had handed on, or
@@ -1062,18 +1062,21 @@ impl Drained {
     }
 }
 
-/// Why a line was rejected, in the words an event says it in.
-pub mod why {
+/// Why a line was rejected: one word each, the one the drain hands on and the event log
+/// writes as `why` on `hook.spool.rejected` ([`Why::word`]). Audit readers match on the words,
+/// so a word never changes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Why {
     /// The line is not a spool line.
-    pub const UNREADABLE: &str = "unreadable";
+    Unreadable,
     /// No key the host issued has the line's key id.
-    pub const NO_KEY: &str = "no-key";
+    NoKey,
     /// The key was issued to another chat than the one whose spool the line is in.
-    pub const ANOTHER_CHATS_KEY: &str = "another-chats-key";
+    AnotherChatsKey,
     /// The MAC is not the line's.
-    pub const MAC: &str = "mac";
+    Mac,
     /// The line checks, and names another chat, or is not a line a spool holds.
-    pub const NOT_THIS_CHATS: &str = "not-this-chats";
+    NotThisChats,
     /// A number a drain already handed on under the key, or has twice in one spool, or a line
     /// another of the chat's stores already gave.
     ///
@@ -1089,10 +1092,25 @@ pub mod why {
     ///   64 runs it keeps per key: its content is not recorded;
     /// - a line a drain had recorded when the host stopped, after it wrote what it drained and
     ///   before it removed the file: its content was recorded, once.
-    pub const REPEATED: &str = "repeated";
+    Repeated,
     /// A number a hook took and has no line under: it is still writing it, or died before it
     /// had.
-    pub const UNFINISHED: &str = "unfinished";
+    Unfinished,
+}
+
+impl Why {
+    /// The word an event says it in.
+    pub const fn word(self) -> &'static str {
+        match self {
+            Self::Unreadable => "unreadable",
+            Self::NoKey => "no-key",
+            Self::AnotherChatsKey => "another-chats-key",
+            Self::Mac => "mac",
+            Self::NotThisChats => "not-this-chats",
+            Self::Repeated => "repeated",
+            Self::Unfinished => "unfinished",
+        }
+    }
 }
 
 /// Drains every spool in `dir`: each line checked and handed to `each` in its chat's order,
@@ -1392,7 +1410,7 @@ impl<'a> Checked<'a> {
         }
     }
 
-    fn reject(&mut self, seq: Option<u64>, why: &'static str) {
+    fn reject(&mut self, seq: Option<u64>, why: Why) {
         self.rejected.push(Drained::Rejected {
             chat: self.chat,
             seq,
@@ -1410,32 +1428,32 @@ impl<'a> Checked<'a> {
             .map_err(drop)
             .and_then(|raw| serde_json::from_str::<OnDisk>(raw).map_err(drop))
         else {
-            return self.reject(None, why::UNREADABLE);
+            return self.reject(None, Why::Unreadable);
         };
         if named.is_some_and(|(key, seq)| key != disk.key || seq != disk.seq) {
-            return self.reject(None, why::UNREADABLE);
+            return self.reject(None, Why::Unreadable);
         }
         let Some(held) = self.taken.get(&disk.key) else {
-            return self.reject(Some(disk.seq), why::NO_KEY);
+            return self.reject(Some(disk.seq), Why::NoKey);
         };
         if held.chat != chat {
-            return self.reject(Some(disk.seq), why::ANOTHER_CHATS_KEY);
+            return self.reject(Some(disk.seq), Why::AnotherChatsKey);
         }
         let Some(key) = key_of(&held.key) else {
-            return self.reject(Some(disk.seq), why::NO_KEY);
+            return self.reject(Some(disk.seq), Why::NoKey);
         };
         if !key.checks(chat, disk.seq, &disk.key, &disk.line, &disk.mac) {
-            return self.reject(Some(disk.seq), why::MAC);
+            return self.reject(Some(disk.seq), Why::Mac);
         }
         let this = (disk.key.clone(), disk.seq, disk.mac.clone());
         if self.already.contains(&this) {
-            return self.reject(Some(disk.seq), why::REPEATED);
+            return self.reject(Some(disk.seq), Why::Repeated);
         }
         let line = match super::read_line(&disk.line) {
             Some((Line::Report(report), _)) if report.chat == chat => Spooled::Report(report),
             Some((Line::Tool(call), _)) if call.chat == chat => Spooled::Tool(call),
             Some((Line::Refused(refused), _)) if refused.chat == chat => Spooled::Refused(refused),
-            _ => return self.reject(Some(disk.seq), why::NOT_THIS_CHATS),
+            _ => return self.reject(Some(disk.seq), Why::NotThisChats),
         };
         // A number the sequence has, here or at a drain before this one (V99i), or a line in
         // a store its key's hooks never write.
@@ -1444,7 +1462,7 @@ impl<'a> Checked<'a> {
             || disk.seq == 0
             || held.not_to_be_taken(self.store, disk.seq)
         {
-            return self.reject(Some(disk.seq), why::REPEATED);
+            return self.reject(Some(disk.seq), Why::Repeated);
         }
         if !self.order.contains(&disk.key) {
             self.order.push(disk.key.clone());
@@ -1459,7 +1477,7 @@ impl<'a> Checked<'a> {
         let mut lines = lines_of(bytes);
         match (lines.next(), lines.next()) {
             (Some(raw), None) => self.line(raw, Some((key, seq))),
-            _ => self.reject(None, why::UNREADABLE),
+            _ => self.reject(None, Why::Unreadable),
         }
     }
 
@@ -1556,7 +1574,7 @@ fn drain_folder(
             each(Drained::Rejected {
                 chat,
                 seq: None,
-                why: why::UNREADABLE,
+                why: Why::Unreadable,
             })?;
             return Ok(true);
         }
@@ -1586,7 +1604,7 @@ fn drain_folder(
                     .binary_search_by(|other| other.to_bytes().cmp(line.as_bytes()))
                     .is_ok();
                 if !landed {
-                    checked.reject(Some(seq), why::UNFINISHED);
+                    checked.reject(Some(seq), Why::Unfinished);
                 }
                 if folder.is_a_dead_hooks(name) {
                     unread.push(name);
@@ -1603,13 +1621,13 @@ fn drain_folder(
                 }
                 Err(why) if why.kind() == io::ErrorKind::NotFound => {}
                 Err(_) => {
-                    checked.reject(None, why::UNREADABLE);
+                    checked.reject(None, Why::Unreadable);
                     unread.push(name);
                 }
             },
             // Not a name a hook gives: nothing of it is read.
             None => {
-                checked.reject(None, why::UNREADABLE);
+                checked.reject(None, Why::Unreadable);
                 unread.push(name);
             }
         }
@@ -1659,7 +1677,7 @@ fn drain_file(
             each(Drained::Rejected {
                 chat,
                 seq: None,
-                why: why::UNREADABLE,
+                why: Why::Unreadable,
             })?;
             return Ok(Some(Given::new()));
         }
@@ -1675,7 +1693,7 @@ fn drain_file(
         each(Drained::Rejected {
             chat,
             seq: None,
-            why: why::UNREADABLE,
+            why: Why::Unreadable,
         })?;
         return Ok(Some(Given::new()));
     }

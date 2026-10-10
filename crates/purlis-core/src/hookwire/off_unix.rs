@@ -9,7 +9,7 @@ use std::io;
 
 use super::{
     Answer, Answerer, Ask, ChatToken, ChatTokens, CommitRefused, Hearing, Noticed, Report, Saved,
-    SessionSaved, StartedByHand,
+    SessionSaved, SpoolLine, StartedByHand,
 };
 
 /// [`Asking`]'s counterpart where there is no unix socket: it refuses, so a handoff there
@@ -62,21 +62,30 @@ pub fn tell_saved(
 
 /// [`send`]'s refusal, for every line a hook delivers: nothing is spooled either, since the
 /// spool sits beside a socket there is none of here.
-pub fn deliver_report(
+pub fn deliver<L: SpoolLine>(
     _path: &std::path::Path,
     _token: Option<&ChatToken>,
-    _report: &Report,
+    _line: &L,
 ) -> io::Result<super::Delivered> {
     Err(no_channel())
 }
 
-/// [`deliver_report`]'s refusal, for a refused commit.
-pub fn deliver_refused(
-    _path: &std::path::Path,
-    _token: Option<&ChatToken>,
-    _refused: &CommitRefused,
+/// [`deliver`]'s refusal, for a report.
+pub fn deliver_report(
+    path: &std::path::Path,
+    token: Option<&ChatToken>,
+    report: &Report,
 ) -> io::Result<super::Delivered> {
-    Err(no_channel())
+    deliver(path, token, report)
+}
+
+/// [`deliver`]'s refusal, for a refused commit.
+pub fn deliver_refused(
+    path: &std::path::Path,
+    token: Option<&ChatToken>,
+    refused: &CommitRefused,
+) -> io::Result<super::Delivered> {
+    deliver(path, token, refused)
 }
 
 /// The one refusal both halves give, so the two cannot drift into two different stories.
