@@ -166,6 +166,7 @@ function core(
     if (cmd === "chats_that_would_not_start") return [];
     if (cmd === "running_sessions") return [];
     if (cmd === "alerts_everywhere") return alerts;
+    if (cmd === "asks_waiting") return { plane: PLANE, asks: waitingAsks };
     return null;
   });
   return { asked };
@@ -219,6 +220,23 @@ let alerts: unknown = [];
 /** What git says of alpha's clones. A test sets it before `core()`. */
 let repos: unknown[] = [];
 
+/** What the asks registry derives for the project (#1690). A test sets it before `core()`. */
+let waitingAsks: unknown[] = [];
+
+/** A permission prompt chat `session` holds on its hook, as the registry lists it. */
+const asking = (session: number, says: string) => ({
+  session,
+  ask: `ask-${session}`,
+  says,
+  options: [
+    { id: "allow", label: "Allow", allows: true },
+    { id: "deny", label: "Deny", allows: false },
+  ],
+  source: "permission",
+  chain: [`steward ${session}`],
+  answer: { via: "hook" },
+});
+
 /** One clone's git answer, clean unless the test says otherwise. */
 function repoState(name: string, on: Record<string, unknown> = {}) {
   return {
@@ -250,6 +268,7 @@ beforeEach(() => {
   forgetThisLaunch();
   alerts = [{ plane: PLANE, alerts: [], stopped: null }];
   repos = [];
+  waitingAsks = [];
 });
 afterEach(() => {
   cleanup();
@@ -868,7 +887,7 @@ describe("the right side's activity bar", () => {
       within(bar())
         .getAllByRole("tab")
         .map((one) => one.getAttribute("aria-label")),
-    ).toEqual(["Todos", "Memory", "Personas", "Sessions", "Vaults"]);
+    ).toEqual(["Inbox", "Todos", "Memory", "Personas", "Sessions", "Vaults"]);
 
     await userEvent.click(tab("Todos"));
 
@@ -915,6 +934,53 @@ describe("the right side's activity bar", () => {
 
     expect(screen.queryByRole("tabpanel", { name: "Memory" })).toBeNull();
     expect(tab("Todos")).toHaveAccessibleDescription("2 open todos");
+  });
+
+  it("puts the Inbox first, counting the asks in the needs-you tone, while the side is away too", async () => {
+    waitingAsks = [asking(3, "Run cargo test"), asking(4, "Run npm test")];
+    core();
+    render(<App />);
+    await screen.findByRole("tabpanel", { name: "Memory" });
+    await waitFor(() => expect(tab("Inbox")).toHaveAccessibleDescription("2 things wait on you"));
+    expect(tab("Inbox").querySelector(".activity-count")).toHaveAttribute("data-tone", "needs-you");
+
+    await userEvent.click(tab("Memory"));
+
+    expect(screen.queryByRole("tabpanel", { name: "Memory" })).toBeNull();
+    expect(tab("Inbox")).toHaveAccessibleDescription("2 things wait on you");
+  });
+
+  it("opens the Inbox on ⌘⇧I, with the keyboard on its first ask and not on a button", async () => {
+    waitingAsks = [asking(3, "Run cargo test")];
+    core();
+    render(<App />);
+    await screen.findByRole("tabpanel", { name: "Memory" });
+    await waitFor(() => expect(tab("Inbox")).toHaveAccessibleDescription("1 thing waits on you"));
+
+    fireEvent.keyDown(document.body, {
+      key: "I",
+      shiftKey: true,
+      ...(onAMac() ? { metaKey: true } : { ctrlKey: true }),
+    });
+
+    const inbox = await screen.findByRole("tabpanel", { name: "Inbox" });
+    const first = within(inbox).getByRole("listitem");
+    await waitFor(() => expect(first).toHaveFocus());
+    expect(within(first).getByText("Run cargo test")).toBeInTheDocument();
+  });
+
+  it("opens the Inbox from the title bar's hand", async () => {
+    waitingAsks = [asking(3, "Run cargo test")];
+    core();
+    render(<App />);
+    await screen.findByRole("tabpanel", { name: "Memory" });
+    const hand = await screen.findByRole("button", { name: "1 thing waits on you" });
+
+    await userEvent.click(hand);
+
+    const inbox = await screen.findByRole("tabpanel", { name: "Inbox" });
+    expect(within(inbox).getByRole("region", { name: "steward 3" })).toBeInTheDocument();
+    expect(screen.queryByRole("menu")).toBeNull();
   });
 
   it("draws no count when nothing is left to do", async () => {

@@ -817,10 +817,17 @@ describe("the open view of the right side (#1678)", () => {
     return found;
   };
 
-  it("is Memory until the person picks another, though Todos is first on the bar", () => {
+  it("is Memory until the person picks another, though the Inbox is first on the bar", () => {
     const { result } = renderHook(() => useArrangement("/one"));
 
-    expect(CATALOGUE.aside.views).toEqual(["todos", "memory", "personas", "sessions", "vaults"]);
+    expect(CATALOGUE.aside.views).toEqual([
+      "inbox",
+      "todos",
+      "memory",
+      "personas",
+      "sessions",
+      "vaults",
+    ]);
     expect(openView(aside(result.current.arrangement))).toBe("memory");
   });
 

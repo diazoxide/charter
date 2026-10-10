@@ -8,6 +8,7 @@ import {
 } from "./bindings";
 import { Notice, type NoticeAction } from "./Notice";
 import { sandboxCommandReturned } from "./sandboxAsked";
+import { asksMoved } from "./asks";
 import { hostsOf, type HeldBlock } from "./sandboxBlocks";
 import { SETTLE_MS } from "./TaskBlocksNotice";
 
@@ -257,6 +258,8 @@ function AllowNotice({
       // Allowed for every chat, the other chats keep the sandbox they started with: the
       // Notice for chats left behind asks again (#1428).
       sandboxCommandReturned();
+      // The Inbox lists the same hosts (#1692): answered here, they go there too.
+      asksMoved(block.plane);
     });
   };
   const withoutSandbox = () => {

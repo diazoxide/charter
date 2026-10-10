@@ -178,6 +178,12 @@ const NOT_NOTICES: Record<string, { count: number; why: string }> = {
     count: 1,
     why: ACTION,
   },
+  "Inbox.tsx": {
+    count: 2,
+    why:
+      ACTION +
+      ". An ask's answer, or a reply, the source refused: said in that ask's own row, which stays (#1692)",
+  },
   "KillSwitch.tsx": {
     count: 1,
     why: "the kill switch's refusal, on the title bar control it belongs to",

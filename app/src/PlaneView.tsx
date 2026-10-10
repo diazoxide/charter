@@ -174,10 +174,11 @@ import { PersonaMarks, ReloadPersonaMarks, usePersonaMarks } from "./PersonaMark
 import { DispatchGrantNotice } from "./DispatchGrantNotice";
 import { TasksSharingNotice } from "./TasksSharingNotice";
 import { taskChangesTitle, taskChangesView } from "./taskChanges";
-import { noticeKey, useSandboxBlocks, type Blocks } from "./sandboxBlocks";
+import { heldFor as blockHeldFor, noticeKey, useSandboxBlocks, type Blocks } from "./sandboxBlocks";
 import { taskBlockGroups, whoseOf, withoutGrouped, type TaskBlockGroup } from "./taskAsks";
 import { TaskBlocksAnswered, TaskBlocksNotice } from "./TaskBlocksNotice";
 import { TaskPromptNotice } from "./TaskPromptNotice";
+import { Inbox } from "./Inbox";
 import { usePermissionAsks } from "./permissionAsks";
 import { useDismissals } from "./dismissals";
 import {
@@ -350,6 +351,7 @@ import { ProjectDispatchNotice } from "./ProjectDispatchNotice";
 import type {
   ExtensionCommand,
   ExtensionView,
+  Offered,
   PanelView,
   RowAction,
   SavedRecord,
@@ -391,6 +393,7 @@ import { HarnessChip } from "./HarnessCard";
 import { DoingsHere, useDoings, type DoingsOf } from "./chatDoing";
 import {
   ChatsHere,
+  backSaid,
   isShell,
   movedAt,
   quietOnes,
@@ -515,6 +518,8 @@ export const PlaneView = memo(function PlaneView({
   fileAsked,
   awayRefused,
   onShowNeedsYou,
+  waiting,
+  inboxAsked,
 }: {
   plane: PlaneId;
   /** Whether this is the project the operator is looking at. */
@@ -565,6 +570,12 @@ export const PlaneView = memo(function PlaneView({
   awayRefused?: readonly AwayRefusal[];
   /** Opens the title bar's needs-you list, where those are answered. */
   onShowNeedsYou?: () => void;
+  /** This project's asks, as the window's registry derived them last (#1690): what the Inbox
+   *  lists and its tab counts (#1692). Nothing before the first read. */
+  waiting?: readonly Shown[];
+  /** A count that goes up each time the window asks for THIS project's Inbox: the title bar's
+   *  ✋ (#1692, I-2). */
+  inboxAsked?: number;
   /** The first chat a repository opened into this project asks for (FR-4): started in that
    *  repository's clone, on the workspace named after it. `at` counts the asks, so each is
    *  answered once. */
@@ -3380,6 +3391,14 @@ export const PlaneView = memo(function PlaneView({
     showView(settingsView("project"), SETTINGS_TAB_TITLE);
   }, [settingsAsked, showView]);
 
+  /** The title bar's ✋ asked for this project's Inbox (#1692): shown, and given the keyboard. */
+  const inboxHandled = useRef(inboxAsked);
+  useEffect(() => {
+    if (inboxAsked === undefined || inboxHandled.current === inboxAsked) return;
+    inboxHandled.current = inboxAsked;
+    showSideView("inbox");
+  }, [inboxAsked, showSideView]);
+
   /** A file ⌘P found here (FM-7), opened in its file tab the way the explorer opens one. */
   const fileHandled = useRef(fileAsked?.at);
   useEffect(() => {
@@ -3639,6 +3658,22 @@ export const PlaneView = memo(function PlaneView({
   const frontSession = frontShown.some((one) => one.pane === frontTab?.focused && !one.live)
     ? undefined
     : focusedChat(tabs);
+  /** Escape in the Inbox (#1692, I-11): the keyboard goes back to the chat in front. */
+  const leaveInbox = useCallback(() => {
+    if (frontSession !== undefined) giveKeyboardTo(plane, frontSession);
+    // No chat in front to go back to: the keyboard leaves the list all the same.
+    else if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+  }, [frontSession, plane]);
+  /** Why a queued chat waits, where it is not that it asked (#1448, SI-8f), as the hand's list
+   *  says it: the Inbox says it in place of a reply box (#1692). */
+  const inboxWhy = useCallback(
+    (session: number) =>
+      needs[session]?.at(-1) ??
+      backSaid(reports[session] ?? [], stoppedBelow[session] ?? []) ??
+      stopped[session] ??
+      refusals[session]?.at(-1),
+    [needs, refusals, reports, stopped, stoppedBelow],
+  );
   // Where that chat is working. The sidebar's chats carry it, and so does the record the
   // core put back at this launch; a chat the operator just opened is in the first.
   const frontCwd =
@@ -4678,6 +4713,21 @@ export const PlaneView = memo(function PlaneView({
     (session: number) =>
       setOwedRestarts((owed) => (owed.includes(session) ? owed : [...owed, session])),
     [],
+  );
+  /**
+   * **An ask answered in the Inbox** (#1692): what its source's Notice does after the same
+   * answer. A sandbox host answered there is put away on the chat's pane, only while the pane
+   * still holds that very host, and an Allow owes the chat its restart, as the block Notice's
+   * does. A permission and a dispatch need nothing here: their Notices read the same source.
+   */
+  const inboxAnswered = useCallback(
+    (ask: Shown, option: Offered) => {
+      if (ask.answer.via !== "sandbox-block") return;
+      const block = blockHeldFor(sandboxBlocks, ask.session, ask.answer.shown);
+      if (block !== undefined) blockAnswered(ask.session, block);
+      if (option.allows) oweRestart(ask.session);
+    },
+    [blockAnswered, oweRestart, sandboxBlocks],
   );
   /** Restarts chat `session`, which is owed it, now: the driver's step. */
   const restartOwed = useCallback(
@@ -7777,10 +7827,40 @@ export const PlaneView = memo(function PlaneView({
               cloning={cloning}
             />
           ),
+          // **The Inbox** (#1692): what waits on the person here, answered in place.
+          inbox: (
+            <Inbox
+              plane={plane}
+              asks={waiting}
+              onGo={(session) => {
+                // A chat in the queue goes as the hand's Go did: the catalogue's own row, which
+                // knows a failed task's row and a report with nowhere to go (#1448, #1491).
+                const go = by(showId(session));
+                if (go?.available) press(go);
+                else showChat(session);
+              }}
+              onShowList={
+                (awayRefused?.length ?? 0) + Object.keys(stopped).length > 0
+                  ? onShowNeedsYou
+                  : undefined
+              }
+              onLeave={leaveInbox}
+              whyOf={inboxWhy}
+              onAnswered={inboxAnswered}
+              onIgnore={(session) => {
+                // The queue's own row, as the palette and the hand's list press it.
+                const ignore = by(ignoreId(session));
+                if (ignore?.available) press(ignore);
+              }}
+            />
+          ),
           // **The attention region's views** (#1678): the "for you" side (ADR 0038 as amended
           // 2026-10-10), one panel per view, and each approved extension's panel a view too.
           ...Object.fromEntries(
-            [...ATTENTION_VIEWS, ...sidePanels.map((one) => one.view)].map((view) => [
+            [
+              ...ATTENTION_VIEWS.filter((view) => view !== "inbox"),
+              ...sidePanels.map((one) => one.view),
+            ].map((view) => [
               view,
               <Panels
                 key={view}
@@ -7821,6 +7901,19 @@ export const PlaneView = memo(function PlaneView({
                 />
               )}
             </QueueRead>
+          ),
+          // The asks waiting here (#1692, I-2): the ✋'s count for this project, in its tone, on
+          // the bar, so it is there while the side is put away.
+          inbox: (
+            <ActivityCount
+              count={waiting?.length ?? 0}
+              said={
+                waiting?.length === 1
+                  ? "1 thing waits on you"
+                  : `${waiting?.length ?? 0} things wait on you`
+              }
+              tone="needs-you"
+            />
           ),
           // The focused workspace's open todos (B-8), the status line's own count: plain, since
           // a todo is yours to do and not a chat asking for you.

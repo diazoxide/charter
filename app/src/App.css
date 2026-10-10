@@ -2612,6 +2612,110 @@ button.show-more:focus-visible {
   min-height: 0;
 }
 
+/* **The Inbox** (#1692): what waits on the person, a group per chat under its chain, each ask a
+   box with its answers under its words. It scrolls inside its view, as a panel does, and a
+   dispatch's own Notice drawn in it is as wide as the view, never wider. */
+.region-view > .inbox {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: auto;
+  padding: 0.5rem;
+  font-size: 0.85rem;
+}
+.inbox ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.inbox-chat + .inbox-chat,
+.inbox-recent {
+  margin-top: 0.75rem;
+}
+.inbox-chain {
+  margin: 0 0 0.35rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+.inbox-ask {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--state-waiting);
+  border-radius: 4px;
+  background: var(--surface-raised);
+}
+.inbox-ask + .inbox-ask {
+  margin-top: 0.35rem;
+}
+.inbox-says {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.inbox-source {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+.inbox-answers,
+.inbox-reply {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+.inbox-reply input {
+  flex: 1 1 8rem;
+  min-width: 0;
+  font: inherit;
+}
+.inbox-ask button {
+  padding: 0.1rem 0.5rem;
+  font: inherit;
+  color: var(--text-primary);
+  background: var(--control-base);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.inbox-ask button:hover:not(:disabled) {
+  border-color: var(--accent-base);
+}
+.inbox-ask button.inbox-go {
+  align-self: flex-start;
+  color: var(--text-secondary);
+  background: none;
+}
+.inbox-notice .notice-pane-box {
+  max-width: 100%;
+}
+.inbox-refused {
+  margin: 0;
+  color: var(--text-secondary);
+}
+.inbox-none {
+  margin: 0.25rem 0;
+  color: var(--text-secondary);
+}
+.inbox-list-link {
+  padding: 0;
+  font: inherit;
+  color: var(--accent-base);
+  background: none;
+  border: none;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.inbox-recent li {
+  padding: 0.1rem 0;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
 /* `react-resizable-panels` draws a panel as a box with the class on an inner div, and that
    inner div is what has to fill the box. */
 .region-centre,

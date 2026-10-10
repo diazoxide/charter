@@ -295,6 +295,22 @@ export function singleQuoted(text: string): string {
  * typed (`--wait-for-input`), so a test can see `running` without racing the turn's end —
  * and fires `stop` once the output is done.
  */
+/**
+ * **While this file is in the run's tree, the reporting harness asks a permission** (#1692):
+ * after its output and before its `stop`, it runs Codex's `PermissionRequest` hook through the
+ * real binary, for one plain command, and waits for the window's answer as a harness waits.
+ * Answered Allow, it says {@link INBOX_ALLOWED} in its pane and carries on to its `stop`. A
+ * spec that wants that ask writes the file before it starts its chat and removes it after, so
+ * every other chat of the run asks nothing.
+ */
+export const ASKS_A_PERMISSION = join(THE_RUNS_TREE, "asks-a-permission");
+
+/** What the reporting harness says once the window allowed its permission ask. */
+export const INBOX_ALLOWED = "carried on: the window allowed it";
+
+/** The one command the reporting harness asks permission to run. */
+export const ASKED_COMMAND = "echo asked-in-the-inbox";
+
 export function writeReportingShell(fakeHarness: string, charter: string): string {
   const where = join(THE_RUNS_TREE, "shells");
   mkdirSync(where, { recursive: true });
@@ -319,6 +335,9 @@ export function writeReportingShell(fakeHarness: string, charter: string): strin
       "  --synthetic 4096 \\",
       "  --wait-for-input \\",
       `  --sentinel ${JSON.stringify(READY)} \\`,
+      // The permission ask, only while a spec asks for it (`ASKS_A_PERMISSION`): Codex's hook
+      // payload, the decision the hook prints, and the line that says the chat went on.
+      `  --hook ${singleQuoted(permissionHook(charter))} \\`,
       `  --hook ${JSON.stringify(`${charter} hook stop </dev/null`)} \\`,
       "  --interactive",
       "",
@@ -326,6 +345,22 @@ export function writeReportingShell(fakeHarness: string, charter: string): strin
   );
   chmodSync(shell, 0o755);
   return shell;
+}
+
+/** The reporting harness's permission hook: nothing unless `ASKS_A_PERMISSION` is there. */
+function permissionHook(charter: string): string {
+  const payload = JSON.stringify({
+    session_id: "scenario",
+    hook_event_name: "PermissionRequest",
+    tool_name: "Bash",
+    tool_input: { command: ASKED_COMMAND },
+  });
+  return [
+    `if [ -f ${singleQuoted(ASKS_A_PERMISSION)} ]; then`,
+    `  decided=$(printf '%s' ${singleQuoted(payload)} | ${singleQuoted(charter)} hook permissionrequest)`,
+    `  case "$decided" in *'"allow"'*) echo ${singleQuoted(INBOX_ALLOWED)} ;; esac`,
+    "fi",
+  ].join("\n");
 }
 
 /** Where the built binaries are, which CI and a person both pass in. */

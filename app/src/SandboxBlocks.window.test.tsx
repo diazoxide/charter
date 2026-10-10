@@ -16,6 +16,7 @@ import App from "./App";
 import type { BlockReport, ChatBlocked, Moved } from "./bindings";
 import { AT_MOST_HOSTS, AT_MOST_PER_CHAT, blocked, hostsOf, putAway } from "./sandboxBlocks";
 import { SETTLE_MS } from "./TaskBlocksNotice";
+import { onAMac } from "./tabKeys";
 
 /**
  * **A sandbox block becomes a Notice on the chat's tab** (#1338), against the whole window: the
@@ -103,7 +104,11 @@ const DRAFT: BlockReport = {
   digest: "0123456789ab",
 };
 
-function core(restart: { error?: string } = {}) {
+function core(
+  restart: { error?: string } = {},
+  /** What the asks registry derives for the project, read each time it is asked (#1690). */
+  asksWaiting: () => unknown[] = () => [],
+) {
   const asked: { cmd: string; args: Record<string, unknown> }[] = [];
   mockIPC(
     (cmd, args) => {
@@ -133,6 +138,7 @@ function core(restart: { error?: string } = {}) {
       }
       if (cmd === "restart_chat_without_sandbox") return { ...CHAT, session: 11, resumed: "c1" };
       if (cmd === "owed_restarts") return [];
+      if (cmd === "asks_waiting") return { plane: PLANE, asks: asksWaiting() };
       return null;
     },
     { shouldMockEvents: true },
@@ -142,8 +148,8 @@ function core(restart: { error?: string } = {}) {
   };
 }
 
-async function aChat(restart: { error?: string } = {}) {
-  const said = core(restart);
+async function aChat(restart: { error?: string } = {}, asksWaiting?: () => unknown[]) {
+  const said = core(restart, asksWaiting);
   render(<App />);
   // The chat is on screen: its pane is drawn.
   await screen.findByTestId("pane");
@@ -699,5 +705,89 @@ describe("the blocks a window holds", () => {
     const more = blocked(shown, on("b.example.com"));
     expect(putAway(more, 4, shown[4][0], true)[4]?.map(hostsOf)).toEqual([["b.example.com"]]);
     expect(putAway(more, 4, more[4][0])).toEqual({});
+  });
+});
+
+describe("a refused host answered in the Inbox (#1692)", () => {
+  const HOST: ChatBlocked = {
+    ...THEIRS,
+    operation: "connect",
+    kind: "host",
+    said: "a connection to an internet host this project does not allow",
+    offer: "host",
+    target: "api.example.com:443",
+    levels: ["chat", "you", "project"],
+  };
+  /** The same block, as the asks registry lists it while the core holds it. */
+  const ASKED = {
+    session: 4,
+    ask: "block:4:connect:host:api.example.com:443",
+    says: "The sandbox refused api.example.com:443",
+    options: [
+      { id: "chat", label: "Allow for this chat", allows: true },
+      { id: "keep", label: "Keep blocked", allows: false },
+    ],
+    source: "sandbox-host",
+    chain: ["claude 4"],
+    answer: {
+      via: "sandbox-block",
+      shown: { operation: "connect", kind: "host", what: "host", target: "api.example.com:443" },
+    },
+  };
+
+  it("clears the block's Notice on the pane, and restarts the chat to take the grant", async () => {
+    let held = false;
+    const { asked } = await aChat({}, () => (held ? [ASKED] : []));
+    // Mid-turn, so the restart waits for the turn's end and the pane is still this chat's.
+    await act(() => emit("chat-moved", RUNNING));
+    held = true;
+    await act(() => emit("chat-sandbox-blocked", HOST));
+    await screen.findByRole("status", { name: "Sandbox block" });
+
+    fireEvent.keyDown(document.body, {
+      key: "I",
+      shiftKey: true,
+      ...(onAMac() ? { metaKey: true } : { ctrlKey: true }),
+    });
+    const inbox = await screen.findByRole("tabpanel", { name: "Inbox" });
+    const allow = await within(inbox).findByRole("button", { name: "Allow for this chat" });
+    held = false;
+    await userEvent.click(allow);
+
+    await waitFor(() => expect(asked("allow_sandbox_block")).toHaveLength(1));
+    // One answer, both places: the pane's copy is put away, and the Inbox's ask is gone.
+    await waitFor(() => expect(screen.queryByRole("status", { name: "Sandbox block" })).toBeNull());
+    await waitFor(() =>
+      expect(within(inbox).queryByRole("button", { name: "Allow for this chat" })).toBeNull(),
+    );
+    // As the Notice's own Allow does: the chat is owed a restart, taken once its turn ends.
+    expect(asked("restart_chat")).toEqual([]);
+    await act(() => emit("chat-moved", WAITING));
+    await waitFor(() =>
+      expect(asked("restart_chat")).toEqual([{ plane: PLANE, session: 4, columns: 80, rows: 24 }]),
+    );
+  });
+
+  it("drops the Inbox's ask when the pane's Notice keeps it blocked", async () => {
+    let held = false;
+    await aChat({}, () => (held ? [ASKED] : []));
+    await act(() => emit("chat-moved", WAITING));
+    held = true;
+    await act(() => emit("chat-sandbox-blocked", HOST));
+    const notice = await screen.findByRole("status", { name: "Sandbox block" });
+    fireEvent.keyDown(document.body, {
+      key: "I",
+      shiftKey: true,
+      ...(onAMac() ? { metaKey: true } : { ctrlKey: true }),
+    });
+    const inbox = await screen.findByRole("tabpanel", { name: "Inbox" });
+    await within(inbox).findByRole("button", { name: "Keep blocked" });
+
+    held = false;
+    await userEvent.click(within(notice).getByRole("button", { name: "Keep blocked" }));
+
+    await waitFor(() =>
+      expect(within(inbox).getByText("Nothing is waiting on you")).toBeInTheDocument(),
+    );
   });
 });

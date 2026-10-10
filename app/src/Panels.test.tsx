@@ -188,7 +188,8 @@ function draw(
     const st = on.state ?? state();
     const contributed = on.contributed ?? [];
     const every: ViewId[] = [
-      ...(CATALOGUE.aside.views ?? []),
+      // The Inbox is a view of its own and no panel (#1692): `Inbox.window.test.tsx` draws it.
+      ...(CATALOGUE.aside.views ?? []).filter((view) => view !== "inbox"),
       ...attentionPanels(st, contributed).map((one) => one.view),
     ];
     return (

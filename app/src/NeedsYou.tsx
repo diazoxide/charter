@@ -282,6 +282,10 @@ function quietSaid(quiet: readonly Quiet[]): string {
  * one workspace's; a chat asking in a project behind the one on screen was a red number on
  * that project's tab and nothing more. The title bar is the window's, so it can hold them all.
  *
+ * **Where the window has a project in front, a press opens the Inbox instead** (#1692, I-2,
+ * ADR 0038 as amended 2026-10-11): the hand is the Inbox's count and its way in, and this list
+ * opens only where something asks it open (`openAsked`), until #1693 and #1695 retire it.
+ *
  * **A Radix menu** (ADR 0037), with the show-more menu's two decisions (`docs/ui-primitives.md`):
  * not modal, and a click outside closes it. So the keyboard is the primitive's — Enter opens it
  * on its first chat, the arrows move, Escape closes it and puts the keyboard back on the button.
@@ -316,6 +320,7 @@ export function NeedsYouMenu({
   asked,
   others = [],
   onOpenOther,
+  onInbox,
 }: {
   items: readonly Needing[];
   /** The chats that can be waiting without saying so, across every project. */
@@ -353,6 +358,13 @@ export function NeedsYouMenu({
   others?: readonly OtherAsk[];
   /** Puts the chat an other ask came from in front, where its Notice asks it whole. */
   onOpenOther?: (ask: OtherAsk) => void;
+  /**
+   * **Opens the Inbox** (#1692, I-2): where there is one, a press of the hand, or Enter on it,
+   * opens the Inbox and not this list. The list is still opened where something asks for it
+   * (`openAsked`): the away summary's dispatches refused while nobody was there, until they
+   * move into the Inbox too (#1693, #1695).
+   */
+  onInbox?: () => void;
 }) {
   /**
    * Whether the list is up — held here rather than left to Radix, for the show-more menu's
@@ -483,7 +495,11 @@ export function NeedsYouMenu({
       }}
     >
       {!none && (
-        <Menu.Root modal={false} open={open} onOpenChange={show}>
+        <Menu.Root
+          modal={false}
+          open={open}
+          onOpenChange={(up) => (up && onInbox !== undefined ? onInbox() : show(up))}
+        >
           <Menu.Trigger asChild>
             {/* `tabIndex={0}`: WebKit leaves a `<button>` out of the tab sequence unless its
             `tabindex` is written down (`docs/ui-primitives.md`, charter-app#186), and Tauri's
@@ -496,11 +512,13 @@ export function NeedsYouMenu({
               tabIndex={0}
               aria-label={said}
               title={said}
+              // Opening the Inbox, it pops nothing up, so it does not say it does.
+              aria-haspopup={onInbox === undefined ? "menu" : undefined}
               onPointerDown={(event) => event.preventDefault()}
               // Read before the list is drawn, so what it opens on is as things stand.
               onPointerEnter={() => onLook?.()}
               onFocus={() => onLook?.()}
-              onClick={() => show(!open)}
+              onClick={() => (onInbox !== undefined && !open ? onInbox() : show(!open))}
             >
               <Hand aria-hidden="true" />
               {asking && count > 0 && <span className="needs-you-number">{count}</span>}

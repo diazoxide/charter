@@ -183,6 +183,7 @@ export async function showView(
     | "Explorer"
     | "Search"
     | "Changes"
+    | "Inbox"
     | "Todos"
     | "Memory"
     | "Personas"
