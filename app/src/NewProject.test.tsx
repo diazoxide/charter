@@ -191,7 +191,12 @@ describe("making a project", () => {
     core();
     render(<App />);
     const dialog = await askForOne();
-    for (const name of ["Repo", "Folder", "Repository to adopt", "Make this repo itself the project"])
+    for (const name of [
+      "Repo",
+      "Folder",
+      "Repository to adopt",
+      "Make this repo itself the project",
+    ])
       expect(within(dialog).getByLabelText(name).closest(".ui-setting-row")).not.toBeNull();
 
     expect(within(dialog).getByLabelText("Folder")).toHaveAccessibleDescription(

@@ -7,7 +7,7 @@
  * So each pair of tokens that ends up as text on a background is held to a contrast ratio.
  *
  * **WCAG 2.1 AA is 4.5:1 for body text and 3:1 for large text and for a control's own
- * outline.** charter's window is 13px, so body text is held to 4.5. The chat-state marks are
+ * outline.** The window's text is 14px, so body text is held to 4.5. The chat-state marks are
  * dots and chips rather than prose and are held to 3, which is the ratio the standard gives
  * for a non-text thing that has to be distinguishable.
  *

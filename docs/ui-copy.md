@@ -135,14 +135,26 @@ TypeScript's parser) and fails on:
   `NAMES` is the fix;
 - **a capital "purlis"** in text the window shows, anywhere but the About dialog's title.
 
+A rule of its own, `retiredTerms` in `copy.ts`, refuses **the retired terms** in text the window
+shows (FR-3, ADR 0072): *plane* (say project), *worktree* and *piece* (say branch, or its
+folder), and *sync* anywhere but `purlis sync` and the *Sync repos* row. *A piece of* is
+English and passes. A code span, a path, an id and an assignment (`NAME=value`) are not read
+as words, but a hyphenated word is: *plane-wide* is refused. The code and the plane format
+still say plane until the rename lands, so only shown text is read. Both guards run it, each
+with a debt list of its own (`RETIRED_TERM_DEBT`), exact and with a reason per entry, so paying
+one off or adding one is a visible change.
+
 "Text the window shows" is:
 
 - JSX text, and a JSX child in braces;
 - the value of an attribute a person reads or hears: `aria-label`, `title`, `placeholder`,
-  `alt`, `label`, and `EmptyState`'s `headline` and `body`;
-- a `label:` property;
+  `alt`, `label`, `EmptyState`'s `headline` and `body`, and a setting row's `help` and `hint`;
+- a `label:` property, and the others like it (`SHOWN_PROPERTIES` in `uiStrings.ts`): a
+  settings group's `title` and `note`, a field's `help` and `hint`, a provider's `says`, the
+  sandbox table's `what` and `why`, an empty state's `headline` and `body`;
 - the catalogue's titles and reasons: the second argument of `can` and `cannot` in
-  `actions.ts`, and the third of `cannot`.
+  `actions.ts`, and the third of `cannot`; and the labels, hints and unset values of the
+  settings' control builders (`textAt`, `listAt`, `pickAt`, `onOffAt`).
 
 Through an expression, both branches of a conditional and the right-hand side of `&&`, `||` and
 `??` count as shown; the condition does not.

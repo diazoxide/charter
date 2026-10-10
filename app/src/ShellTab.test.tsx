@@ -254,7 +254,7 @@ describe("a plain shell tab", () => {
     await waitFor(() => expect(opens()).toEqual([expect.objectContaining({ cwd: PLANE })]));
     await waitFor(() => expect(focusedWorkspace()).toEqual(["Plane root"]));
 
-    await fromThePalette("New shell at the plane root");
+    await fromThePalette("New shell at the project root");
     await waitFor(() =>
       expect(opens()).toEqual([
         expect.objectContaining({ cwd: PLANE }),

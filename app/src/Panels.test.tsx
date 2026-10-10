@@ -259,7 +259,7 @@ describe("the right-hand region", () => {
     // An unanswered ask and an empty answer are the two states this must never merge.
     draw({ state: state({ panels: undefined }) });
 
-    expect(screen.getByText(/Reading the plane/)).toBeInTheDocument();
+    expect(screen.getByText(/Reading the project/)).toBeInTheDocument();
     expect(screen.queryByText("Nothing to do")).toBeNull();
   });
 });

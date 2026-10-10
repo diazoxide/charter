@@ -917,7 +917,7 @@ export function Explorer({
         </div>
 
         {panels === undefined ? (
-          <Pending>Reading the plane…</Pending>
+          <Pending>Reading the project…</Pending>
         ) : (
           clones.length === 0 && <p className="none">No repos in this workspace</p>
         )}

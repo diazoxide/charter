@@ -88,8 +88,8 @@ describe("what a menu lists", () => {
 
     expect(shown.above).toEqual([
       "Focus the plane root",
-      "New chat at the plane root",
-      "New shell at the plane root",
+      "New chat at the project root",
+      "New shell at the project root",
       "New workspace…",
     ]);
     expect(shown.below).toEqual([]);

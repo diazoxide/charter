@@ -109,7 +109,7 @@ function offer(id: string, title: string, available = true): Offer {
     id,
     title,
     available,
-    reason: available ? "" : "purlis found no plane, so it cannot reach a branch.",
+    reason: available ? "" : "purlis found no project, so it cannot reach a branch.",
     does: { verb: "openProject" },
   };
 }
@@ -215,7 +215,7 @@ describe("the branch cockpit", () => {
     expect(onPress).toHaveBeenCalledWith(merge);
     // A row the catalogue cannot run is drawn, disabled, with why.
     expect(doneButton).toHaveProperty("disabled", true);
-    expect(doneButton.getAttribute("title")).toContain("no plane");
+    expect(doneButton.getAttribute("title")).toContain("no project");
   });
 
   it("brings a chat of the branch forward", async () => {

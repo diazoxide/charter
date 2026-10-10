@@ -429,8 +429,8 @@ describe("the one list of actions", () => {
 
     const chat = by(offers, "root.chat");
     const shell = by(offers, `shell.new:${OUTSIDE}`);
-    expect(chat?.title).toBe("New chat at the plane root");
-    expect(shell?.title).toBe("New shell at the plane root");
+    expect(chat?.title).toBe("New chat at the project root");
+    expect(shell?.title).toBe("New shell at the project root");
     if (chat === undefined || shell === undefined) throw new Error("no root rows");
     await perform(chat, done);
     await perform(shell, done);
@@ -1051,7 +1051,7 @@ describe("the one list of actions", () => {
     );
 
     expect(by(offers, "worktree.remove:svc/fix-it")?.reason).toBe(
-      "purlis found no plane, so it cannot reach a branch.",
+      "purlis found no project, so it cannot reach a branch.",
     );
   });
 
