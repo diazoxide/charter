@@ -665,12 +665,13 @@ fn real(path: &std::path::Path) -> std::path::PathBuf {
 
 /// The chats above chat `asker` along who asked for whom, nearest first, as far as the open
 /// tasks reach: the chat that asked for it where it is an open task, then that chat's asker,
-/// and so on.
-fn above(asker: u32, tasks: &[OpenTask]) -> Vec<u32> {
+/// and so on. The walk stops at an asker that is no longer `open`: a task outlives the chat
+/// that asked for it, and a closed chat's tab draws nothing, so it says nothing in its place.
+fn above(asker: u32, tasks: &[OpenTask], open: &[u32]) -> Vec<u32> {
     let mut chain = Vec::new();
     let mut at = asker;
     while let Some(task) = tasks.iter().find(|task| task.session == at) {
-        if task.asker == asker || chain.contains(&task.asker) {
+        if task.asker == asker || chain.contains(&task.asker) || !open.contains(&task.asker) {
             break;
         }
         chain.push(task.asker);
@@ -683,9 +684,10 @@ fn above(asker: u32, tasks: &[OpenTask]) -> Vec<u32> {
 /// `asker` works beside another open task, of that chat or of any other (#1534), unless a
 /// chat above `asker` ([`above`]) also asked for a task working there. A pane draws the
 /// Notices of every chat in its tab, a session and its tasks together, so a folder a lineage
-/// shares is said once, by the topmost chat of it that asked for a task there.
-fn said_by(asker: u32, tasks: &[OpenTask]) -> Vec<core::Shared> {
-    let up = above(asker, tasks);
+/// shares is said once, by the topmost chat of it that asked for a task there and is still
+/// `open`.
+fn said_by(asker: u32, tasks: &[OpenTask], open: &[u32]) -> Vec<core::Shared> {
+    let up = above(asker, tasks, open);
     let askers_in = |folder: &std::path::Path| -> Vec<u32> {
         let folder = real(folder);
         tasks
@@ -744,7 +746,13 @@ pub(crate) struct SharedFolder {
 /// or of any other (#1534), and no chat above `asker`, along who asked for whom, also asked
 /// for a task there: such a folder is said once, by the topmost of them (#1645, [`said_by`]).
 pub(crate) fn shared_by(held: &Held, asker: u32) -> Vec<SharedFolder> {
-    said_by(asker, &open_tasks(held, None))
+    let open: Vec<u32> = held
+        .chats()
+        .open_now()
+        .into_iter()
+        .map(|chat| chat.session)
+        .collect();
+    said_by(asker, &open_tasks(held, None), &open)
         .into_iter()
         .map(|shared| {
             let folder = crate::dispatches::folder(held.root(), &shared.folder);
@@ -851,9 +859,19 @@ mod tests {
         }
     }
 
-    /// The folders chat `asker`'s tab says, each with its tasks' names.
+    /// The folders chat `asker`'s tab says, each with its tasks' names, while every chat named
+    /// in `tasks` is open.
     fn said(asker: u32, tasks: &[OpenTask]) -> Vec<(String, Vec<String>)> {
-        said_by(asker, tasks)
+        let open: Vec<u32> = tasks
+            .iter()
+            .flat_map(|task| [task.session, task.asker])
+            .collect();
+        said_while(asker, tasks, &open)
+    }
+
+    /// The folders chat `asker`'s tab says while only the chats in `open` are open.
+    fn said_while(asker: u32, tasks: &[OpenTask], open: &[u32]) -> Vec<(String, Vec<String>)> {
+        said_by(asker, tasks, open)
             .into_iter()
             .map(|shared| (shared.folder.display().to_string(), shared.tasks))
             .collect()
@@ -923,6 +941,20 @@ mod tests {
             )]
         );
         assert_eq!(said(12, &tasks), [], "its one task works alone");
+    }
+
+    #[test]
+    fn a_task_whose_asker_has_closed_says_it_in_its_place() {
+        // 'steward 12' was closed and its tasks kept running (EndingChat): no tab draws 12's
+        // Notices, so #3046's own tab says the folder its "log watch" shares with #2962.
+        let tasks = [
+            task(20, 12, "#2962", "/nowhere/ws/ai"),
+            task(21, 12, "#3046", "/nowhere/ws/ai"),
+            task(22, 21, "log watch", "/nowhere/ws/ai"),
+        ];
+
+        assert_eq!(said_while(21, &tasks, &[20, 21, 22]).len(), 1);
+        assert_eq!(said_while(21, &tasks, &[12, 20, 21, 22]), []);
     }
 
     #[test]
