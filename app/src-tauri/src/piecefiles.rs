@@ -605,8 +605,15 @@ pub async fn reveal_branch_path(
         .map_err(|e| format!("the system did not show '{path}': {e}"))
 }
 
+/// The file or folder `path` names, or with `""` the branch's own folder (#1143), placed by the
+/// core: the branch's row and its *Files* row copy and reveal the folder itself.
 fn placed_of(plane: &Path, branch: Branch<'_>, path: &str) -> Result<files::Placed, String> {
-    files::place(plane, branch, path).map_err(|refused| refused.to_string())
+    if path.is_empty() {
+        files::place_branch_folder(plane, branch)
+    } else {
+        files::place(plane, branch, path)
+    }
+    .map_err(|refused| refused.to_string())
 }
 
 /// What Copy path puts on the clipboard: the path in the branch, or the absolute path the core
@@ -626,12 +633,16 @@ fn path_text(
 }
 
 /// The folder of a branch a shell tab starts in (FM-10), resolved as the tree resolves it: inside
-/// the branch, reached through no link, not git's. `""` is the branch's own folder.
+/// the branch, reached through no link, not git's. `""` is the branch's own folder, placed as
+/// Copy path and Reveal place it (#1143): refused when that folder is itself a link.
 pub(crate) fn shell_folder(
     plane: &Path,
     branch: Branch<'_>,
     folder: &str,
 ) -> Result<std::path::PathBuf, String> {
+    if folder.is_empty() {
+        return placed_of(plane, branch, folder).map(|placed| placed.absolute);
+    }
     files::folder(plane, branch, folder).map_err(|refused| refused.to_string())
 }
 
@@ -910,6 +921,27 @@ mod tests {
 
         assert_eq!(relative, Ok("src/lib.rs".to_string()));
         assert_eq!(absolute, Ok(resolved.join("src").display().to_string()));
+    }
+
+    /// #1143: the branch's own folder, named by the empty path, is copied and revealed whole;
+    /// its relative path means nothing, so it is refused as the core refuses it.
+    #[test]
+    fn the_branchs_own_folder_is_copied_and_revealed_by_the_empty_path() {
+        let (_dir, root, piece) = plane();
+        let resolved = std::fs::canonicalize(&piece).unwrap();
+
+        assert_eq!(
+            path_text(&root, PIECE, "", true),
+            Ok(resolved.display().to_string())
+        );
+        assert_eq!(
+            placed_of(&root, PIECE, "").map(|placed| placed.absolute),
+            Ok(resolved)
+        );
+        assert_eq!(
+            path_text(&root, PIECE, "", false),
+            Err("'' is not a path inside the branch's folder".to_string())
+        );
     }
 
     #[cfg(unix)]

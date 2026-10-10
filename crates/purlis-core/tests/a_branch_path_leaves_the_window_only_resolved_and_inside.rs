@@ -249,3 +249,67 @@ fn gits_folder_is_refused_by_its_name_in_any_case_whether_or_not_anything_is_the
         "'.git/HEAD' is not a path inside the branch's folder"
     );
 }
+
+/// #1143: the branch's own folder is placed by name, never by an empty path to [`files::place`]:
+/// what the branch row's Copy absolute path, Reveal and shell tab act on.
+#[test]
+fn the_branchs_own_folder_is_placed_by_name_and_an_empty_path_still_is_not() {
+    purlis_core::unsteered!();
+    let f = support::plane_with_clone("thing");
+    let piece = cut(&f);
+    let clone = std::fs::canonicalize(&f.clone).unwrap();
+
+    let own = files::place_branch_folder(&f.plane, Branch::piece(&f.ws, &f.repo, "piece"));
+    let repo = files::place_branch_folder(&f.plane, Branch::repo(&f.ws, &f.repo));
+
+    assert_eq!(
+        own.unwrap(),
+        Placed {
+            absolute: piece,
+            relative: String::new(),
+            folder: true,
+        }
+    );
+    assert_eq!(repo.unwrap().absolute, clone);
+    assert_eq!(
+        refused(&f, ""),
+        "'' is not a path inside the branch's folder"
+    );
+}
+
+/// #1143: a branch folder that is itself a link is refused, not placed at what it leads to.
+#[cfg(unix)]
+#[test]
+fn a_branch_folder_that_is_a_link_is_refused() {
+    purlis_core::unsteered!();
+    let f = support::plane_with_clone("thing");
+    let piece = cut(&f);
+    // The folder git registered is swapped for a link to a real folder beside it: git still
+    // names the link, and the listing finds the branch by the folder it resolves to.
+    let real = piece.with_file_name("real");
+    std::fs::rename(&piece, &real).unwrap();
+    std::os::unix::fs::symlink(&real, &piece).unwrap();
+
+    let placed = files::place_branch_folder(&f.plane, Branch::piece(&f.ws, &f.repo, "real"));
+
+    assert_eq!(
+        placed.unwrap_err().to_string(),
+        "the folder of 'real' is a link, and purlis places no folder a link leads to"
+    );
+}
+
+#[test]
+fn a_branch_the_workspace_does_not_have_has_no_folder_to_place() {
+    purlis_core::unsteered!();
+    let f = support::plane_with_clone("thing");
+
+    let refused =
+        files::place_branch_folder(&f.plane, Branch::piece(&f.ws, &f.repo, "nope")).unwrap_err();
+
+    assert!(
+        refused
+            .to_string()
+            .contains("no branch folder called 'nope'"),
+        "{refused}"
+    );
+}

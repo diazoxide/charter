@@ -921,6 +921,74 @@ describe("the one list of actions", () => {
     ).toBe("Focus on folder fix-it");
   });
 
+  it("offers each branch's own folder its absolute path, a reveal and a shell tab (#1143)", async () => {
+    const cut = { workspace: "alpha", repo: "svc", piece: "fix-it", branch: "fix/login" };
+    const offers = catalogue(now({ plane: "/plane", pieces: [cut] }));
+    const hands = doing();
+    const own = { workspace: "alpha", repo: "svc", piece: "fix-it", path: "" };
+
+    expect(menuOn({ on: "worktree", repo: "svc", piece: "fix-it" }).above).toEqual([
+      "worktree.focus:svc/fix-it",
+      "worktree.files:svc/fix-it",
+      "worktree.copypath:svc/fix-it",
+      "worktree.reveal:svc/fix-it",
+      "worktree.shell:svc/fix-it",
+      "worktree.merge:svc/fix-it",
+    ]);
+    expect(by(offers, "worktree.copypath:svc/fix-it")?.title).toBe(
+      "Copy the absolute path of branch fix/login",
+    );
+    expect(by(offers, "worktree.reveal:svc/fix-it")?.title).toMatch(
+      /^Reveal branch fix\/login in (Finder|File Explorer|Files)$/,
+    );
+    expect(by(offers, "worktree.shell:svc/fix-it")?.title).toBe(
+      "Open a shell tab in branch fix/login",
+    );
+    expect(by(offers, "worktree.shell:svc/fix-it")?.name).toBe("fix/login");
+    expect(by(offers, "worktree.copypath:svc/fix-it")?.does).toEqual({
+      verb: "copyPath",
+      at: own,
+      absolute: true,
+    });
+    // No Copy relative path: the folder's path relative to itself says nothing (D-1143-1).
+    expect(ids(offers).filter((id) => id.endsWith(":svc/fix-it") && /path/.test(id))).toEqual([
+      "worktree.copypath:svc/fix-it",
+    ]);
+
+    // The sentence names the folder, not an empty path.
+    expect(await run(offers, "worktree.copypath:svc/fix-it", hands)).toMatchObject({
+      ok: true,
+      said: "Copied the absolute path of fix-it.",
+    });
+    await run(offers, "worktree.reveal:svc/fix-it", hands);
+    await run(offers, "worktree.shell:svc/fix-it", hands);
+    expect(hands.calls).toEqual([
+      "copyPath:svc/fix-it:,true",
+      "revealPath:svc/fix-it:",
+      "shellInFolder:svc/fix-it:",
+    ]);
+
+    // A folder git has on no branch is named as a folder; with no plane, nothing is placed.
+    const folder = catalogue(now({ plane: "/plane", pieces: [{ ...cut, branch: null }] }));
+    expect(by(folder, "worktree.shell:svc/fix-it")?.title).toBe(
+      "Open a shell tab in folder fix-it",
+    );
+    const planeless = catalogue(now({ plane: undefined, pieces: [cut] }));
+    for (const id of ["copypath", "reveal", "shell"])
+      expect(by(planeless, `worktree.${id}:svc/fix-it`)?.available).toBe(false);
+  });
+
+  it("offers the branch's own Files row the same three, at the empty path (#1143)", () => {
+    const at = { workspace: "alpha", repo: "svc", piece: "fix-it", path: "" };
+    const rows = fileRows({ on: "file", at, kind: "folder" });
+
+    expect(rows.map((row) => [row.title, row.does])).toEqual([
+      ["Copy absolute path", { verb: "copyPath", at, absolute: true }],
+      [revealSaid(navigator.platform), { verb: "revealPath", at }],
+      ["Open a shell tab here", { verb: "shellInFolder", at }],
+    ]);
+  });
+
   it("names a folder git has on no branch as a folder, never as a branch (#989)", () => {
     const cut = { workspace: "alpha", repo: "svc", piece: "fix-it" };
     const offers = catalogue(now({ plane: "/plane", pieces: [cut] }));
@@ -1565,6 +1633,10 @@ describe("carrying out a row", () => {
         "mergeWorktree:svc/fix-it",
         "declareWorktreeDone:svc/fix-it",
         "focusBranch:svc/fix-it",
+        // The branch's own folder, placed by the core at the empty path (#1143).
+        "copyPath:svc/fix-it:,true",
+        "revealPath:svc/fix-it:",
+        "shellInFolder:svc/fix-it:",
         "openView:charter/persona/steward,steward",
         "openView:charter/piece-files/alpha/svc/fix-it,Files · fix-it",
         "openView:charter/vault/ops,ops",
@@ -2175,8 +2247,10 @@ describe("the palette at fifty chats", () => {
     // 658 since #1137: Search in files, one row.
     // 679 since #1201: a row per Settings group — You's 4, the project's 11 and the focused
     // workspace's 6. A fixed number, however many workspaces there are.
+    // 829 since #1143: each of the 50 branches' own folder copied, revealed and given a shell
+    // tab, three rows a branch as its browse and focus rows are.
     // This window has no todos loaded, so no `todo.` rows.
-    expect(offers).toHaveLength(679);
+    expect(offers).toHaveLength(829);
   });
 
   /**

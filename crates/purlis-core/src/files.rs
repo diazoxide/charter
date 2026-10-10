@@ -194,6 +194,9 @@ pub enum Refused {
     NotChanged(String),
     #[error("'{0}' is not a folder")]
     NotAFolder(String),
+    /// The branch's own folder is a link (#1143): placed, it would be what the link leads to.
+    #[error("the folder of '{0}' is a link, and purlis places no folder a link leads to")]
+    FolderIsALink(String),
     #[error(transparent)]
     Editor(#[from] NotLaunched),
     #[error("purlis could not read '{what}': {why}")]
@@ -1134,6 +1137,48 @@ pub fn place(plane: &Path, branch: Branch<'_>, path: &str) -> Result<Placed, Ref
         absolute,
         relative,
         folder,
+    })
+}
+
+/// **The branch's own folder**, placed on disk as [`place`] places a folder under it (#1143):
+/// what the branch row's Copy absolute path, Reveal and shell tab act on. [`place`] keeps
+/// refusing the empty path, so a caller that names a file never gets the whole folder by
+/// leaving the name out; this is asked for the folder by name.
+///
+/// The folder the workspace or git names must be the folder itself: **refused when it is a
+/// link**, whatever it leads to, and when it resolves to anything of git's (a `.git` on its
+/// path). Answered as the disk spells it, with an empty `relative`: a path relative to the
+/// branch's folder means nothing for the folder itself.
+pub fn place_branch_folder(plane: &Path, branch: Branch<'_>) -> Result<Placed, Refused> {
+    let named = folder_of(plane, branch)?;
+    let said = || branch.called().to_string();
+    match std::fs::symlink_metadata(&named) {
+        Ok(meta) if meta.file_type().is_symlink() => return Err(Refused::FolderIsALink(said())),
+        Ok(meta) if !meta.is_dir() => return Err(Refused::NotAFolder(said())),
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(Refused::NotThere(said()));
+        }
+        Err(e) => {
+            return Err(Refused::Unreadable {
+                what: said(),
+                why: e.to_string(),
+            });
+        }
+    }
+    let absolute = std::fs::canonicalize(&named).map_err(|e| Refused::Unreadable {
+        what: said(),
+        why: e.to_string(),
+    })?;
+    // A worktree's own `.git` is a file beside its files, never its folder: a folder that
+    // resolves into a `.git` is git's, the clone's git directory or inside it.
+    if gits(&absolute) {
+        return Err(Refused::NotInPiece(said()));
+    }
+    Ok(Placed {
+        absolute,
+        relative: String::new(),
+        folder: true,
     })
 }
 
