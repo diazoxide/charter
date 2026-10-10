@@ -160,7 +160,9 @@ pub(crate) fn run_brokered(
         &ask.secret_exec.vault,
         refused,
     );
-    brokered::serve(&asker, ask.secret_exec, reader, writer, blocked);
+    // Each connection the run makes is the chat's, in the network record (#1667).
+    let reached = held.chats().reached_for(ask.chat, asker.persona.clone());
+    brokered::serve_recording(&asker, ask.secret_exec, reader, writer, blocked, reached);
 }
 
 /// Answers `purlis vault list` for chat `chat` of `held` (#1430): every vault the project

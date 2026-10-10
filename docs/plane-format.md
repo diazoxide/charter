@@ -4349,6 +4349,19 @@ set = { PURLIS_HARNESS = "codex" }
   `hooks.state."charter@charter:hooks/hooks.json:<event>:<group>:<hook>".trusted_hash`
   (`charter/wiring.py:634` `_codex_marks`, `charter/wiring.py:92` `CODEX_TRUST_PREFIX`).
 
+### `<chat temp dir>/purlis-ssh/` — a chat's ssh route
+
+- **Format:** `config` (an ssh configuration, `0600`) and `bin/ssh` (a POSIX shell script,
+  `0700`).
+- **Tier:** Machine, device-bound, rebuildable — written again for every confined chat as it starts, and removed with the chat's own temp directory when it ends.
+- **Written by:** `crates/purlis-core/src/sandbox/tunnel.rs` (`SshRoute::write`), for each chat
+  whose network goes through purlis's proxy, and for each brokered `secret exec` (#1667).
+- **What it says:** every ssh connection leaves through the chat's SOCKS port
+  (`ProxyCommand /usr/bin/nc -X 5 -x 127.0.0.1:<port> %h %p`), shares no master connection,
+  and then reads the person's own `~/.ssh/config`. `bin/ssh` runs `/usr/bin/ssh -F` with it;
+  the chat's `PATH` starts with `bin/`, and its `GIT_SSH_COMMAND` names that `ssh`. No key,
+  agent or value is in either file.
+
 ### Claude Code's own files — purlis does NOT write them
 
 **Tier:** None — Claude Code's files. The one exception is purlis's `purlis plugin install`

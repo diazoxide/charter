@@ -57,6 +57,18 @@ purlis persona secret exec --env TOKEN=API_TOKEN -- some-cli       # the active 
   that carries a value from the vault is never named or offered: purlis says only that one was
   withheld. Another host refused within the minute gets its own Notice.
 
+  **A database host, through a tunnel** (#1667). A database client opens its own connection
+  and never asks the proxy, so it would fail at the name lookup. When an `--env` value names
+  one place a client connects to (a database URL such as `postgres://…`, a libpq
+  `host=… port=…` string, or `host:port`) and the chat's hosts list that exact host and port,
+  purlis opens a port on the loopback interface that carries every connection to exactly that
+  host and port, and the command gets the value pointed at it (`127.0.0.1:<port>`), masked as
+  the value is. The run's sandbox lets it connect there. A host listed without a port is not
+  enough: that is HTTPS's, through the proxy. A host it may not reach is refused as the proxy
+  refuses one, with the same Notice. Every tunnelled connection is in the network record. A
+  certificate checked by name against the host (`sslmode=verify-full`) does not match
+  `127.0.0.1`.
+
   **Which vaults a chat may use.** One the vault registry tags for the persona the chat was
   opened as, or one you allowed for that persona on this machine. A vault that is neither is
   refused with a sentence naming the ways forward, and the chat's tab shows a notice with
