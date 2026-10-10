@@ -2030,7 +2030,7 @@ file `memstore.write` could have written in its new store.
   the short hostname the Python charter used: `socket.gethostname().split(".")[0]` with every
   character outside `[A-Za-z0-9_-]` removed, truncated to 32, `"unknown"` when empty
   (`charter/change.py:142`, `charter/pieces.py:71`). Writing a line never mints the id
-  (`purlis_core::dispatch::log_name`). The app mints it at launch, and so does the one CLI
+  (`purlis_core::machine::log_name`). The app mints it at launch, and so does the one CLI
   command that writes the work link log (`purlis ws todo promote`), so a machine that only runs
   the CLI's other commands keeps writing under its hostname until one of those mints the id. A
   file named by a hostname that an earlier version wrote is still read beside the new one,

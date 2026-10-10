@@ -822,7 +822,7 @@ function Answer({
     return (
       <p className="pending" aria-busy="true">
         <LoaderCircle className="node-icon spinning" />
-        {keeps ? "Asking the forge…" : from === null ? "Reading the plane…" : `Asking ${from}…`}
+        {keeps ? "Asking the forge…" : from === null ? "Reading the project…" : `Asking ${from}…`}
       </p>
     );
   }

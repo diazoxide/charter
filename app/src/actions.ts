@@ -1027,7 +1027,7 @@ export function projectRows(
     // `project.open`'s reason: a window holding no project is exactly where one is made.
     create: {
       ...can("project.create", "New project…", { verb: "createProject" }),
-      note: "Makes a plane in a directory of its own. It never writes into a repo you point at.",
+      note: "Makes a project in a directory of its own. It never writes into a repo you point at.",
     },
     // **One row for all of them, beside the one row per project** (FR-27). The rows below find
     // a project by its name from the whole palette; this one is the palette listing nothing but
@@ -1668,17 +1668,17 @@ export function catalogue(now: Now): Offer[] {
       const noRoot = "The plane has not been read yet, so there is no root to start in.";
       offers.push(
         now.plane === undefined
-          ? cannot("root.chat", "New chat at the plane root", noRoot)
+          ? cannot("root.chat", "New chat at the project root", noRoot)
           : {
-              ...can("root.chat", "New chat at the plane root", {
+              ...can("root.chat", "New chat at the project root", {
                 verb: "newChatIn",
                 path: now.plane,
               }),
-              note: "In no workspace: it looks after the plane and names a workspace with -w.",
+              note: "In no workspace: it looks after the project and names a workspace with -w.",
             },
         now.plane === undefined
-          ? cannot(`shell.new:${OUTSIDE}`, "New shell at the plane root", noRoot)
-          : can(`shell.new:${OUTSIDE}`, "New shell at the plane root", {
+          ? cannot(`shell.new:${OUTSIDE}`, "New shell at the project root", noRoot)
+          : can(`shell.new:${OUTSIDE}`, "New shell at the project root", {
               verb: "newShell",
               workspace: OUTSIDE,
             }),
@@ -1764,7 +1764,7 @@ export function catalogue(now: Now): Offer[] {
       ? cannot(
           "workspace.create",
           newWorkspace,
-          "purlis found no plane, so there is nowhere to make a workspace.",
+          "purlis found no project, so there is nowhere to make a workspace.",
         )
       : can("workspace.create", newWorkspace, { verb: "createWorkspace" }),
   );
@@ -1848,7 +1848,7 @@ export function catalogue(now: Now): Offer[] {
   // deleting are `charter persona create` and `remove`, through the core, so the window refuses
   // what a terminal refuses. Editing is the operator's own editor on the persona's `persona.md`:
   // a charter is prose, and charter draws no editor for it.
-  const personaPlane = "purlis found no plane, so there is nowhere to keep a persona.";
+  const personaPlane = "purlis found no project, so there is nowhere to keep a persona.";
   offers.push(
     now.plane === undefined
       ? cannot("persona.create", "New persona…", personaPlane)
@@ -1943,7 +1943,7 @@ export function catalogue(now: Now): Offer[] {
           view: SHARED_MEMORY_VIEW,
           title: SHARED_MEMORY_TITLE,
         }),
-        note: "What every persona on this plane reads, in a tab of its own.",
+        note: "What every persona in this project reads, in a tab of its own.",
       },
     );
     // **The project's dispatches, in a tab of their own** (#1452): every dispatch its chats
@@ -1982,12 +1982,16 @@ export function catalogue(now: Now): Offer[] {
       ),
     );
   }
-  const noVaultPlane = "purlis found no plane, so there are no vaults to reach.";
+  const noVaultPlane = "purlis found no project, so there are no vaults to reach.";
   offers.push(
     now.plane === undefined
       ? cannot("vault.pick", "Open vault…", noVaultPlane)
       : vaults.length === 0
-        ? cannot("vault.pick", "Open vault…", "This plane has no vaults yet. New vault… makes one.")
+        ? cannot(
+            "vault.pick",
+            "Open vault…",
+            "This project has no vaults yet. New vault… makes one.",
+          )
         : can("vault.pick", "Open vault…", { verb: "pickVault" }),
     now.plane === undefined
       ? cannot("vault.create", "New vault…", noVaultPlane)
@@ -2248,7 +2252,7 @@ export function catalogue(now: Now): Offer[] {
   // feature. The merges are here, above the line; the removes are below with the rest.
   const pieces = now.pieces ?? [];
   const noPlane =
-    now.plane === undefined ? "purlis found no plane, so it cannot reach a branch." : undefined;
+    now.plane === undefined ? "purlis found no project, so it cannot reach a branch." : undefined;
   for (const cut of pieces) {
     // The branch's cockpit first (FM-5): the explorer narrowed to it, which changes nothing.
     const focusOn = cut.branch ? `Focus on branch ${cut.branch}` : `Focus on folder ${cut.piece}`;
@@ -3709,7 +3713,7 @@ function nothingSaidSoFar(quiet: readonly string[]): string {
 function frontWorktree(now: Now, inFront: boolean): { cut: Cut } | { why: string } {
   if (!inFront) return { why: "No chat is in front." };
   if (now.plane === undefined)
-    return { why: "purlis found no plane, so it cannot reach a branch." };
+    return { why: "purlis found no project, so it cannot reach a branch." };
   if (now.worktree === undefined)
     return { why: "The chat in front is not working in a branch purlis cut." };
   return { cut: now.worktree };

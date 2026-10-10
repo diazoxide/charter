@@ -138,7 +138,7 @@ export function Panels({
         <>
           <p className="empty">
             {atRoot
-              ? "The plane root is not a workspace: it has no todos or memory of its own. Chats here look after the plane and its workspaces; focus a workspace to see its panels."
+              ? "The project root is not a workspace: it has no todos or memory of its own. Chats here look after the project and its workspaces; focus a workspace to see its panels."
               : "No workspace focused."}
           </p>
           {atRoot &&
@@ -166,7 +166,7 @@ export function Panels({
           {panels === undefined ? (
             <p className="pending">
               <LoaderCircle className="node-icon spinning" />
-              Reading the plane…
+              Reading the project…
             </p>
           ) : (
             all.map((panel) => (

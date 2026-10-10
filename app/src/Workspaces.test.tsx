@@ -672,7 +672,7 @@ describe("the plane root's tab (SI-1)", () => {
 
     const panels = await screen.findByTestId("panels");
     await waitFor(() =>
-      expect(within(panels).getByText(/The plane root is not a workspace/)).toBeTruthy(),
+      expect(within(panels).getByText(/The project root is not a workspace/)).toBeTruthy(),
     );
     expect(within(panels).queryByRole("textbox", { name: /New todo in/ })).toBeNull();
   });

@@ -326,41 +326,14 @@ const SOURCES = Object.keys({
   .map((path) => `src/${path.slice(2)}`)
   .sort();
 
-/** Why a retired term is still in a file: the file is another branch's while it is being built. */
-const CC_DA = "CC and DA (impl/qw72, qw75) hold this file, and EE after them";
-
 /**
  * **The retired terms still in the window, and why** (#602): `file: "the string"`, one entry
  * per string, exactly, so paying one off or adding one is a visible change — the way
- * `Notice.guard.test.ts` keeps its `COPY_ONLY`. Each is in a file another branch holds while
- * this rule landed, so it is fixed by that file's next owner, never by widening the rule. The
- * reason is beside each, to be read at that change.
+ * `Notice.guard.test.ts` keeps its `COPY_ONLY`. Empty since train 29 paid the last one off: a
+ * string added here needs its reason beside it, and is fixed by that file's next owner, never by
+ * widening the rule.
  */
-const RETIRED_TERM_DEBT: readonly (readonly [string, string])[] = [
-  ["src/Explorer.tsx: Reading the plane…", CC_DA],
-  [
-    "src/Panels.tsx: The plane root is not a workspace: it has no todos or memory of its own. Chats here look after the plane and its workspaces; focus a workspace to see its panels.",
-    CC_DA,
-  ],
-  ["src/Panels.tsx: Reading the plane…", CC_DA],
-  ["src/Views.tsx: Reading the plane…", CC_DA],
-  [
-    "src/actions.ts: Makes a plane in a directory of its own. It never writes into a repo you point at.",
-    CC_DA,
-  ],
-  ["src/actions.ts: New chat at the plane root", CC_DA],
-  ["src/actions.ts: New chat at the plane root", CC_DA],
-  [
-    "src/actions.ts: In no workspace: it looks after the plane and names a workspace with -w.",
-    CC_DA,
-  ],
-  ["src/actions.ts: New shell at the plane root", CC_DA],
-  ["src/actions.ts: New shell at the plane root", CC_DA],
-  ["src/actions.ts: purlis found no plane, so there is nowhere to make a workspace.", CC_DA],
-  ["src/actions.ts: What every persona on this plane reads, in a tab of its own.", CC_DA],
-  ["src/actions.ts: This plane has no vaults yet. New vault… makes one.", CC_DA],
-  ["src/actions.ts: purlis found no plane, so it cannot reach a branch.", CC_DA],
-];
+const RETIRED_TERM_DEBT: readonly (readonly [string, string])[] = [];
 
 /** Every fault `rule` finds in `app/src`, with where it is and the string itself. */
 const FAULTS = (rule: typeof copyFaults) =>
