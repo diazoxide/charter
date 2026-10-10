@@ -12,8 +12,9 @@
 #
 # `install` installs PACKAGE... and says in the job summary how long it took and from where.
 #   - With `--cache DIR` holding .deb files (`.github/actions/linux-packages` restores them
-#     there), it installs those files with `--no-download`, so a slow or broken mirror is never
-#     asked. If they do not fit, it says so and goes on to the mirror.
+#     there), it puts them in apt's archives directory and installs them from there with
+#     `--no-download`, so a slow or broken mirror is never asked. If they do not fit, it says so,
+#     quoting apt-get, and goes on to the mirror.
 #   - From the mirror, `apt-get update` and `apt-get install` each run under a limit of their
 #     own (UPDATE_SECONDS, INSTALL_SECONDS), and a failed or stuck attempt is tried once more.
 #     On 2026-10-07 the mirror took 1,285 s for an install that takes under 45 s, and a run
@@ -112,9 +113,19 @@ apt() {
 }
 
 # From the cache: the files themselves, and nothing downloaded.
+#
+# They are copied into apt's archives directory first and named there. apt takes a .deb named on
+# its command line as already downloaded only when it finds the file in that directory; from any
+# other path it queues the file as a download like any other, `--no-download` drops it, and the
+# install fails with "Unable to fetch some archives". Every warm run failed so until 2026-10-10.
 if [ -n "$cache" ] && ls "$cache"/*.deb > /dev/null 2>&1; then
+  $SUDO cp "$cache"/*.deb "$ARCHIVES"/
+  debs=()
+  for deb in "$cache"/*.deb; do
+    debs+=("$ARCHIVES/$(basename "$deb")")
+  done
   offline=0
-  said=$(apt "$OFFLINE_SECONDS" install --no-download "$cache"/*.deb 2>&1) || offline=$?
+  said=$(apt "$OFFLINE_SECONDS" install --no-download "${debs[@]}" 2>&1) || offline=$?
   printf '%s\n' "$said"
   if [ "$offline" -eq 0 ]; then
     say "$count packages installed in $(elapsed) s from the cache, without asking the mirror."

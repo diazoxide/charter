@@ -37,7 +37,16 @@ case "$*" in *update*) kind=update ;; *--no-download*) kind=offline ;; esac
 n=$(cat "${root}/$kind.n" 2>/dev/null || echo 0); n=$((n + 1)); echo $n > "${root}/$kind.n"
 case $kind in
   update) [ $n -le ${failUpdates} ] && exit 124 ;;
-  offline) [ ${failOffline ? 1 : 0} = 1 ] && exit 100 ;;
+  offline) [ ${failOffline ? 1 : 0} = 1 ] && { echo "E: Unable to correct problems, you have held broken packages." >&2; exit 100; }
+    # As apt does: a .deb named on the command line counts as downloaded only when it lies in
+    # the archives directory. Anywhere else apt queues it as a download, which --no-download
+    # drops, and the install fails (#1477: every warm run on 2026-10-10 failed this way).
+    for a in "$@"; do
+      case "$a" in *.deb)
+        [ "$(dirname "$a")" = "${archives}" ] && [ -e "$a" ] || {
+          echo "E: Unable to fetch some archives, maybe run apt-get update or try with --fix-missing?" >&2; exit 100; } ;;
+      esac
+    done ;;
   install) [ $n -le ${failInstalls} ] && exit 124
     touch "${archives}/libfoo_1.0-1_amd64.deb" "${archives}/libbar_1%3a2.0_amd64.deb" "${archives}/stale_0.1_amd64.deb" ;;
 esac
@@ -134,7 +143,7 @@ test("the files are kept when the image lists thousands of installed packages", 
 });
 
 test("with the cache restored, the install never asks the mirror", () => {
-  const { root, run } = machine();
+  const { root, archives, run } = machine();
   const cache = join(root, "cache");
   mkdirSync(cache);
   writeFileSync(join(cache, "libfoo_1.0-1_amd64.deb"), "");
@@ -143,7 +152,8 @@ test("with the cache restored, the install never asks the mirror", () => {
   const apt = r.apt.filter((l) => l.startsWith("apt-get"));
   assert.equal(apt.length, 1, apt.join("\n"));
   assert.match(apt[0], /--no-download/);
-  assert.match(apt[0], /libfoo_1\.0-1_amd64\.deb/);
+  assert.ok(apt[0].includes(join(archives, "libfoo_1.0-1_amd64.deb")), apt[0]);
+  assert.doesNotMatch(r.stdout + r.stderr, /::warning/);
   assert.doesNotMatch(r.output, /^save=true$/m);
   assert.match(r.summary, /from the cache/);
 });
@@ -156,7 +166,7 @@ test("a cache the image no longer fits falls back to the mirror", () => {
   const r = run("install", "--cache", cache, "socat");
   assert.equal(r.status, 0, r.stderr);
   assert.ok(r.apt.some((l) => l.includes("update")));
-  assert.match(r.stdout + r.stderr, /::warning/);
+  assert.match(r.stdout + r.stderr, /::warning[^\n]*apt-get said: E: Unable to correct problems/);
   assert.match(r.summary, /from the mirror/);
 });
 
