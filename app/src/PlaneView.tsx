@@ -17,7 +17,6 @@ import clsx from "clsx";
 import { listen } from "./here";
 import { QueueRead } from "./QueueRead";
 import { machineChanged } from "./settings/thisMachine";
-import { withQueue } from "./queueRows";
 import { MAIN, thisWindow } from "./windows";
 import { Group, Panel, Separator } from "react-resizable-panels";
 import * as Menu from "@radix-ui/react-dropdown-menu";
@@ -84,6 +83,7 @@ import {
   stopAllId,
   taskStopId,
   workItemSaid,
+  withQueue,
   PASS_THROUGH_BYTES,
   PASS_THROUGH_KEY,
   RENAMES_ON_F2,
