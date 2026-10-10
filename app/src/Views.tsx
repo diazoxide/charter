@@ -541,10 +541,12 @@ export function ViewPane({
           />
         ) : isDispatches(view) ? (
           /* The project's dispatches (#1452), read from the app's own records. A row opens its
-             chat through the catalogue's verb, or its session record as any record opens. */
+             chat through the catalogue's verb, or its session record as any record opens. It
+             starts narrowed to the workspace whose strip it is on (#1510). */
           <DispatchesTab
-            key={plane}
+            key={`${plane}\u0000${workspace ?? ""}`}
             plane={plane}
+            workspace={workspace}
             changed={changed + onDisk}
             onShowChat={(session) =>
               onPress?.({

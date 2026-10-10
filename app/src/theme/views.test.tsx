@@ -972,6 +972,11 @@ const STATES: State[] = [
     view: { from: null, view: "dispatches", key: "" },
     drawn: /Tidied\./,
     then: async () => {
+      // It opens narrowed to the strip's workspace (#1510); the rows are elsewhere.
+      await userEvent.selectOptions(
+        await screen.findByRole("combobox", { name: "Filter by workspace" }),
+        "Every workspace",
+      );
       await userEvent.click(
         await screen.findByRole("button", {
           name: "Show the brief and report of tidy the notes",

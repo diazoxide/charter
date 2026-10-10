@@ -20,13 +20,38 @@ export function isDispatches(view: ViewRef): boolean {
   return view.from === null && view.view === DISPATCHES_VIEW.view;
 }
 
-/** What the list is narrowed to: a persona, an asking chat, both or neither (`""`). The asking
- *  chat is named by its key (`DispatchRow.asker_key`), never by the name it was called: two
- *  chats called the same are two chats. */
-export type DispatchFilter = { persona: string; asker: string };
+/** What the list is narrowed to: a persona, an asking chat, a workspace, when it started, any
+ *  of them or none (`""`). The asking chat is named by its key (`DispatchRow.asker_key`), never
+ *  by the name it was called: two chats called the same are two chats. */
+export type DispatchFilter = {
+  persona: string;
+  asker: string;
+  /** A workspace's name, or {@link NO_WORKSPACE} for the project root. */
+  workspace: string;
+  when: DispatchWhen;
+};
 
-/** Everything, which is how the tab opens. */
-export const EVERY_DISPATCH: DispatchFilter = { persona: "", asker: "" };
+/** When a dispatch started, as the list is narrowed by it (#1510): today (since this
+ *  machine's midnight), in the past 7 days, or before that. The store keeps a record for 30
+ *  days after its dispatch ended, so these three cover all it holds. */
+export type DispatchWhen = "" | "today" | "week" | "earlier";
+
+/** What the date filter offers, in its order. */
+export const DISPATCH_WHENS: readonly { when: DispatchWhen; said: string }[] = [
+  { when: "", said: "Any date" },
+  { when: "today", said: "Today" },
+  { when: "week", said: "Past 7 days" },
+  { when: "earlier", said: "Earlier" },
+];
+
+/** Everything, which is how the tab opens outside a workspace. */
+export const EVERY_DISPATCH: DispatchFilter = { persona: "", asker: "", workspace: "", when: "" };
+
+/** How the tab opens from `workspace`'s strip: narrowed to the dispatches that worked there
+ *  (#1510), and to nothing where it is opened outside every workspace. */
+export function dispatchesIn(workspace: string | undefined): DispatchFilter {
+  return workspace === undefined ? EVERY_DISPATCH : { ...EVERY_DISPATCH, workspace };
+}
 
 /** How a filter names the dispatches that went to no persona. */
 export const NO_PERSONA = "\u0000none";
@@ -34,15 +59,74 @@ export const NO_PERSONA = "\u0000none";
 /** What the window says of a dispatch that went to no persona, wherever it says it. */
 export const NO_PERSONA_SAID = "No persona";
 
-/** The rows `filter` keeps, in the order they came: newest first. */
+/** How a filter names the dispatches that worked at the project root, in no workspace. */
+export const NO_WORKSPACE = "\u0000root";
+
+/** What the workspace filter says of the project root. */
+export const NO_WORKSPACE_SAID = "Project root";
+
+/** The core's word for a dispatch's place outside every workspace (`DispatchRow.place`). */
+const ROOT_PLACE = "project root";
+
+/** What the core puts between a place and its branch (`DispatchRow.place`). */
+const BRANCH_AFTER = " · ";
+
+/**
+ * **The workspace a dispatch worked in, read from where it worked** (`DispatchRow.place`:
+ * `<workspace>` or `project root`, then ` · <branch>` where it had a branch of its own), or
+ * {@link NO_WORKSPACE} at the project root.
+ *
+ * The read cannot be fooled by a name: a workspace's name is `[A-Za-z0-9][A-Za-z0-9._-]*`
+ * (core `contain::workspace_name_ok`), so it never holds a space, the separator or the root's
+ * two words, and the first separator is the one after the place.
+ */
+export function workspaceOf(row: DispatchRow): string {
+  const at = row.place.indexOf(BRANCH_AFTER);
+  const place = at === -1 ? row.place : row.place.slice(0, at);
+  return place === ROOT_PLACE ? NO_WORKSPACE : place;
+}
+
+/** The workspaces the rows worked in, by name, and `also` (the one the tab was opened from)
+ *  though none did; then {@link NO_WORKSPACE} where a row worked at the project root. */
+export function workspacesOf(rows: readonly DispatchRow[], also = ""): string[] {
+  const places = new Set(rows.map(workspaceOf));
+  if (also !== "") places.add(also);
+  const named = [...places].filter((one) => one !== NO_WORKSPACE);
+  named.sort((a, b) => a.localeCompare(b));
+  return places.has(NO_WORKSPACE) ? [...named, NO_WORKSPACE] : named;
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** Whether `row` started `when`, seen at `now`. A start that does not read as a time is in no
+ *  span but Any date. */
+function startedWhen(row: DispatchRow, when: DispatchWhen, now: Date): boolean {
+  if (when === "") return true;
+  const started = Date.parse(row.started);
+  if (Number.isNaN(started)) return false;
+  const week = now.getTime() - 7 * DAY_MS;
+  switch (when) {
+    case "today":
+      return started >= new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    case "week":
+      return started >= week;
+    default:
+      return started < week;
+  }
+}
+
+/** The rows `filter` keeps, seen at `now`, in the order they came: newest first. */
 export function shownDispatches(
   rows: readonly DispatchRow[],
   filter: DispatchFilter,
+  now: Date = new Date(),
 ): DispatchRow[] {
   return rows.filter(
     (row) =>
       (filter.persona === "" || (row.persona ?? NO_PERSONA) === filter.persona) &&
-      (filter.asker === "" || row.asker_key === filter.asker),
+      (filter.asker === "" || row.asker_key === filter.asker) &&
+      (filter.workspace === "" || workspaceOf(row) === filter.workspace) &&
+      startedWhen(row, filter.when, now),
   );
 }
 

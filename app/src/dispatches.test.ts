@@ -5,6 +5,7 @@ import {
   branchSaid,
   counted,
   discardSays,
+  dispatchesIn,
   EVERY_DISPATCH,
   isDispatches,
   losesNothing,
@@ -12,10 +13,13 @@ import {
   nestedSaid,
   notStartedSaid,
   NO_PERSONA,
+  NO_WORKSPACE,
   personasOf,
   saidAt,
   shownDispatches,
   waitsOnMemory,
+  workspaceOf,
+  workspacesOf,
   worktreeSaid,
 } from "./dispatches";
 
@@ -68,15 +72,26 @@ describe("the Dispatches tab's filters", () => {
   });
 
   it("narrows to one persona, to one asking chat, and to both at once", () => {
-    expect(ids(shownDispatches(ROWS, { persona: "devops", asker: "" }))).toEqual(["c", "a"]);
+    expect(ids(shownDispatches(ROWS, { ...EVERY_DISPATCH, persona: "devops", asker: "" }))).toEqual(
+      ["c", "a"],
+    );
     const planner = "id of planner 2";
-    expect(ids(shownDispatches(ROWS, { persona: "", asker: planner }))).toEqual(["a", "z"]);
-    expect(ids(shownDispatches(ROWS, { persona: "devops", asker: planner }))).toEqual(["a"]);
-    expect(ids(shownDispatches(ROWS, { persona: "qa", asker: planner }))).toEqual([]);
+    expect(ids(shownDispatches(ROWS, { ...EVERY_DISPATCH, persona: "", asker: planner }))).toEqual([
+      "a",
+      "z",
+    ]);
+    expect(
+      ids(shownDispatches(ROWS, { ...EVERY_DISPATCH, persona: "devops", asker: planner })),
+    ).toEqual(["a"]);
+    expect(
+      ids(shownDispatches(ROWS, { ...EVERY_DISPATCH, persona: "qa", asker: planner })),
+    ).toEqual([]);
   });
 
   it("finds the dispatches that went to no persona, which no persona's name could mean", () => {
-    expect(ids(shownDispatches(ROWS, { persona: NO_PERSONA, asker: "" }))).toEqual(["z"]);
+    expect(
+      ids(shownDispatches(ROWS, { ...EVERY_DISPATCH, persona: NO_PERSONA, asker: "" })),
+    ).toEqual(["z"]);
   });
 
   it("offers each persona and each asking chat once, by name", () => {
@@ -97,9 +112,75 @@ describe("the Dispatches tab's filters", () => {
       { key: "01NEW", name: "steward 3" },
       { key: "01OLD", name: "steward 3" },
     ]);
-    expect(ids(shownDispatches(rows, { persona: "", asker: "01OLD" }))).toEqual(["old"]);
+    expect(ids(shownDispatches(rows, { ...EVERY_DISPATCH, persona: "", asker: "01OLD" }))).toEqual([
+      "old",
+    ]);
     // A name is not a key: nothing is found by it.
-    expect(ids(shownDispatches(rows, { persona: "", asker: "steward 3" }))).toEqual([]);
+    expect(
+      ids(shownDispatches(rows, { ...EVERY_DISPATCH, persona: "", asker: "steward 3" })),
+    ).toEqual([]);
+  });
+
+  it("reads the workspace a dispatch worked in from where it worked, its branch or none", () => {
+    const at = (place: string) => workspaceOf({ ...row("x", null, "steward 3"), place });
+    expect(at("alpha")).toBe("alpha");
+    expect(at("alpha · fix-the-queue-b5rc0def")).toBe("alpha");
+    expect(at("project root")).toBe(NO_WORKSPACE);
+    expect(at("project root · fix-the-queue-b5rc0def")).toBe(NO_WORKSPACE);
+    // A workspace's name is `[A-Za-z0-9][A-Za-z0-9._-]*`: it never holds the separator or a
+    // space, so a name that only looks like the root's word is still a workspace's.
+    expect(at("project-root")).toBe("project-root");
+  });
+
+  it("narrows to one workspace, to the project root, and offers each place once", () => {
+    const rows = [
+      { ...row("w1", "devops", "steward 3"), place: "beta · fix-b5rc0def" },
+      { ...row("w2", "qa", "steward 3"), place: "alpha" },
+      { ...row("w3", "qa", "steward 3"), place: "project root" },
+      { ...row("w4", "devops", "steward 3"), place: "beta" },
+    ];
+    expect(ids(shownDispatches(rows, { ...EVERY_DISPATCH, workspace: "beta" }))).toEqual([
+      "w1",
+      "w4",
+    ]);
+    expect(ids(shownDispatches(rows, { ...EVERY_DISPATCH, workspace: NO_WORKSPACE }))).toEqual([
+      "w3",
+    ]);
+    expect(
+      ids(shownDispatches(rows, { ...EVERY_DISPATCH, workspace: "beta", persona: "qa" })),
+    ).toEqual([]);
+    expect(workspacesOf(rows)).toEqual(["alpha", "beta", NO_WORKSPACE]);
+    // The workspace the tab was opened from is offered though nothing was dispatched there yet.
+    expect(workspacesOf(rows.slice(1, 2), "gamma")).toEqual(["alpha", "gamma"]);
+    expect(workspacesOf(rows.slice(1, 2), "")).toEqual(["alpha"]);
+  });
+
+  it("starts narrowed to the workspace it was opened from, and to nothing outside one", () => {
+    expect(dispatchesIn("alpha")).toEqual({ ...EVERY_DISPATCH, workspace: "alpha" });
+    expect(dispatchesIn(undefined)).toEqual(EVERY_DISPATCH);
+  });
+
+  it("narrows by when a dispatch started: today, the past 7 days, or earlier", () => {
+    // 2026-10-10 15:00 where the test runs: today begins at that place's midnight.
+    const now = new Date(2026, 9, 10, 15, 0);
+    const started = (id: string, at: Date) => ({
+      ...row(id, "devops", "steward 3"),
+      started: at.toISOString(),
+    });
+    const rows = [
+      started("this-morning", new Date(2026, 9, 10, 0, 5)),
+      started("last-night", new Date(2026, 9, 9, 23, 55)),
+      started("six-days", new Date(2026, 9, 4, 16, 0)),
+      started("eight-days", new Date(2026, 9, 2, 15, 0)),
+      { ...row("unread", "devops", "steward 3"), started: "not a time" },
+    ];
+    const when = (when: "today" | "week" | "earlier") =>
+      ids(shownDispatches(rows, { ...EVERY_DISPATCH, when }, now));
+    expect(when("today")).toEqual(["this-morning"]);
+    expect(when("week")).toEqual(["this-morning", "last-night", "six-days"]);
+    expect(when("earlier")).toEqual(["eight-days"]);
+    // Any date keeps every row, one whose time does not read as a time too.
+    expect(ids(shownDispatches(rows, EVERY_DISPATCH, now))).toHaveLength(5);
   });
 
   it("says a record's time to the minute, and leaves alone what is not one", () => {
