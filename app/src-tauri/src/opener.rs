@@ -291,7 +291,7 @@ pub async fn recent_planes(planes: tauri::State<'_, Planes>) -> Result<Recents, 
     let loaded = planes.remembered();
     tauri::async_runtime::spawn_blocking(move || offer(loaded))
         .await
-        .map_err(|err| format!("reading the planes this machine remembers did not finish: {err}"))
+        .map_err(|err| format!("reading the projects this machine remembers did not finish: {err}"))
 }
 
 /// [`recent_planes`] with the store already read, so the disk questions can be tested without

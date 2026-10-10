@@ -21,7 +21,7 @@ import { Choice, Field, SettingActions, SettingRow } from "./settings/components
  * is the top of a git repository is refused, in the core's own four-line sentence, which names
  * the plane-beside-it shape and the flag that asks for the old one.
  *
- * **"Make this repo itself the plane" is that flag, as a box.** charter's own plane is a
+ * **"Make this repo itself the project" is that flag, as a box.** charter's own plane is a
  * repository, which is why the option is here at all — and it is never the default, and never
  * ticked for the operator.
  *
@@ -284,7 +284,7 @@ export function NewProject({
                 it is the one answer on this dialog that writes into a repository the operator
                 already has. */}
               <SettingRow
-                label="Make this repo itself the plane"
+                label="Make this repo itself the project"
                 help={
                   <>
                     Only for a folder that is the top of a git repository, and only when you mean

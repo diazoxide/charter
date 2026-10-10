@@ -140,7 +140,7 @@ export function SavingView({
       {saving === undefined ? (
         <p className="pending" aria-busy="true">
           <LoaderCircle className="node-icon spinning" aria-hidden="true" />
-          Reading the plane
+          Reading the project
         </p>
       ) : (
         <>

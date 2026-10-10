@@ -98,7 +98,7 @@ export function counted(n: number): string {
 
 /** What a list of vaults says when the plane has none. */
 const NO_VAULTS = {
-  headline: "No vaults on this plane",
+  headline: "No vaults in this project",
   body: "Make one with the + above, or New vault… in the palette.",
   offer: null,
 };

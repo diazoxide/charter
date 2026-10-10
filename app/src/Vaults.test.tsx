@@ -91,7 +91,7 @@ describe("the Vaults section", () => {
     core([]);
     draw();
     const empty = await screen.findByTestId("list-vaults-empty");
-    expect(empty).toHaveTextContent("No vaults on this plane");
+    expect(empty).toHaveTextContent("No vaults in this project");
     expect(empty).toHaveTextContent("New vault…");
   });
 

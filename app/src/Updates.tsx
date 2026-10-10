@@ -476,7 +476,7 @@ export function PinItem({ pin, again }: { pin?: PinReport; again: () => void }) 
       <Dialog.Portal>
         <Dialog.Overlay className="asking" />
         <Dialog.Content className="warning update" aria-describedby="pin-said">
-          <Dialog.Title>The plane&apos;s pin</Dialog.Title>
+          <Dialog.Title>The project&apos;s pin</Dialog.Title>
           <div id="pin-said">
             {pin.said.map((line) => (
               <p key={line} className="honest">

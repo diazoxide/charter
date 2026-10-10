@@ -126,8 +126,14 @@ const RETIRED: readonly { term: RegExp; fault: string }[] = [
   { term: /\bsync(s|ed|ing)?\b/i, fault: "a retired term: sync is purlis sync's alone" },
 ];
 
-/** The two ways the window may say sync: the command, and its row's label. */
-const SYNC_ITSELF = /\b(purlis|charter) sync\b|\bSync repos\b/gi;
+/** The two ways the window may say sync: the command, and its row's label, each as written. */
+const SYNC_ITSELF = /\b(purlis|charter) sync\b|\bSync repos\b/g;
+
+/**
+ * An id or a path, for the retired terms: `ID` without the hyphen. A hyphenated word is still
+ * words a person reads ("a plane-wide setting", "re-sync"), so a retired term in one is said.
+ */
+const ID_NOT_HYPHENATED = /\S*[A-Za-z0-9][./:_=][A-Za-z0-9]\S*/g;
 
 /**
  * **The retired terms `text` uses in the window's words** (FR-3, #602): empty for a string the
@@ -138,7 +144,11 @@ const SYNC_ITSELF = /\b(purlis|charter) sync\b|\bSync repos\b/gi;
  */
 export function retiredTerms(text: string, seen: Seen = "source"): string[] {
   if (seen !== "shown") return [];
-  const said = words(text.trim()).replace(SYNC_ITSELF, " ");
+  const said = text
+    .trim()
+    .replace(CODE_SPAN, " ")
+    .replace(ID_NOT_HYPHENATED, " ")
+    .replace(SYNC_ITSELF, " ");
   return RETIRED.filter(({ term }) => term.test(said)).map(({ fault }) => fault);
 }
 

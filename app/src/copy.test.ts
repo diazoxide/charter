@@ -178,10 +178,26 @@ describe("no retired term on what the window shows (FR-3, ADR 0072, #602)", () =
     // What a person types, and what the code or the format calls a thing.
     expect(retiredTerms("Run `purlis worktree list` to see them.", "shown")).toEqual([]);
     expect(retiredTerms("Set `[plane] worktrees` in the file.", "shown")).toEqual([]);
-    expect(retiredTerms("plane-updated fresh-mark", "shown")).toEqual([]);
     expect(retiredTerms("workspaces/alpha/.worktrees/svc", "shown")).toEqual([]);
+    expect(retiredTerms("Set PLANE=one first.", "shown")).toEqual([]);
     // Outside the window, plane is still the code's word until the rename lands.
     expect(retiredTerms("purlis found no plane")).toEqual([]);
+  });
+
+  it("reads a hyphenated word as words, and sync only as written", () => {
+    // A hyphen joins words a person reads; only a path, an id or an assignment is exempt.
+    expect(retiredTerms("A plane-wide setting", "shown")).toEqual([
+      "a retired term: say project, not plane",
+    ]);
+    expect(retiredTerms("Re-sync the branch", "shown")).toEqual([
+      "a retired term: sync is purlis sync's alone",
+    ]);
+    // "Sync repos" is the row's label as it reads, not any sentence that says it.
+    expect(retiredTerms("It will sync repos nightly", "shown")).toEqual([
+      "a retired term: sync is purlis sync's alone",
+    ]);
+    expect(retiredTerms("Sync repos", "shown")).toEqual([]);
+    expect(retiredTerms("Run purlis sync to catch up.", "shown")).toEqual([]);
   });
 
   it("is a rule of its own, so the other rules' guards carry no debt for it", () => {
@@ -311,7 +327,6 @@ const SOURCES = Object.keys({
   .sort();
 
 /** Why a retired term is still in a file: the file is another branch's while it is being built. */
-const TRAIN_27 = "train 27 (impl/qw76-qw79) is rebuilding this dialog";
 const CC_DA = "CC and DA (impl/qw72, qw75) hold this file, and EE after them";
 
 /**
@@ -322,27 +337,12 @@ const CC_DA = "CC and DA (impl/qw72, qw75) hold this file, and EE after them";
  * reason is beside each, to be read at that change.
  */
 const RETIRED_TERM_DEBT: readonly (readonly [string, string])[] = [
-  [
-    "src/DeleteWorkspace.tsx: and everything in it: every repo cloned there, every worktree cut in it, its memory and its todos. There is no undo.",
-    TRAIN_27,
-  ],
   ["src/Explorer.tsx: Reading the plane…", CC_DA],
-  [
-    "src/NewProject.tsx: Make this repo itself the plane",
-    "the label is free, but Modals.keyboard.test.tsx (train 27) finds the box by it",
-  ],
   [
     "src/Panels.tsx: The plane root is not a workspace: it has no todos or memory of its own. Chats here look after the plane and its workspaces; focus a workspace to see its panels.",
     CC_DA,
   ],
   ["src/Panels.tsx: Reading the plane…", CC_DA],
-  ["src/SavingView.tsx: Reading the plane", TRAIN_27],
-  [
-    "src/StartChat.tsx: This plane declares no profiles of its own, so these are purlis&apos;s built-ins. Declare your own in",
-    TRAIN_27,
-  ],
-  ["src/Updates.tsx: The plane&apos;s pin", TRAIN_27],
-  ["src/Vaults.tsx: No vaults on this plane", TRAIN_27],
   ["src/Views.tsx: Reading the plane…", CC_DA],
   [
     "src/actions.ts: Makes a plane in a directory of its own. It never writes into a repo you point at.",
