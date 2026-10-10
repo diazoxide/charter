@@ -549,7 +549,7 @@ let arrowedTo: string | undefined;
  * the group. A choice that writes something with no Undo, or starts something, still holds
  * the pick and acts on a button (DS-3b, DS-3d).
  */
-function useArrowPick() {
+export function useArrowPick() {
   const arrowing = useRef(false);
   const listen = {
     onKeyDownCapture: (event: KeyboardEvent) => {

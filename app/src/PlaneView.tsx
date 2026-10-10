@@ -5423,6 +5423,14 @@ export const PlaneView = memo(function PlaneView({
   }, [nameOfListed, pretended, sidebar, tabs]);
   /** The chats of each tab, as its chip counts them and its menu lists them (#1487). */
   const chatsByTab = useMemo(() => chatsOfTabs(tabs, listedChats), [listedChats, tabs]);
+  /** The tab in front and its chats: what the Chats view's This tab lists (#1679). */
+  const tabInFront = useMemo(
+    () =>
+      tabs.inFront === undefined
+        ? undefined
+        : { id: tabs.inFront, chats: chatsByTab.get(tabs.inFront) ?? [] },
+    [chatsByTab, tabs.inFront],
+  );
   /** Each tab menu's footer: how many of its session's tasks run against its limit (#1498). */
   const runningOfTab = useMemo(() => runningByTab(chatsByTab), [chatsByTab]);
   useEffect(() => {
@@ -7642,6 +7650,8 @@ export const PlaneView = memo(function PlaneView({
                 rows={listRows}
                 // The trees that started in the focused workspace, or at the root (#1655).
                 here={focused === OUTSIDE ? ROOT_WORD : focused}
+                // The tab in front's chats, for This tab (#1679).
+                tab={tabInFront}
                 // The chat that has the keyboard: a task, while its pane shows it (#1486).
                 front={focusedChat(tabs)}
                 onOpen={showChat}

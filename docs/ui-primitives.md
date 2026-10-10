@@ -476,7 +476,8 @@ arrow in the capture phase on the group, picks the option the focus then lands o
 the arrow when the key comes up or the focus leaves the group. The repair is one hook,
 `useArrowPick`, in the same file: every radio drawn with `Choice` has it, and so has
 `SettingsLayout`'s level switcher (#626, D-626-4), whose level follows the arrow as a `Choice`
-radio's pick does; a hand-built `RadioGroup` elsewhere does not. Because `SettingsTab` draws each
+radio's pick does, and so has the Chats view's scope switch (`ChatsSection.tsx`, #1679), which
+imports it; a hand-built `RadioGroup` without it does not. Because `SettingsTab` draws each
 level with a layout of its own, the switcher an arrow left is unmounted, and the layout drawn at
 the level arrowed to takes the focus back (D-626-5). The guards are `components.test.tsx`'s
 "picks the next option on a single arrow, once" and its level switcher's tests, and

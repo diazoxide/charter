@@ -3404,6 +3404,57 @@ h2.sidebar-title .node-icon {
   background: var(--surface-base);
 }
 
+/* **The title and the scope switch share a line** (#1679), the switch at its end, as a view's
+   own controls sit in its title bar; where the sidebar is too narrow for both, the switch goes
+   under the title and is never cut. */
+.chats-top {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.5rem;
+  align-items: center;
+  justify-content: space-between;
+}
+
+/* The scope switch: a radio group drawn as one row of small segments, as Settings' level
+   switcher is (`.ui-levels`). The one picked has the accent's ground and the primary text, and
+   is said as checked: never by colour alone. */
+.chats-scope {
+  display: inline-flex;
+  flex: none;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  overflow: hidden;
+  font-size: 0.8em;
+}
+
+.chats-scope-item {
+  padding: 0.05rem 0.45rem;
+  border: 0;
+  color: var(--text-secondary);
+  background: var(--control-base);
+  font: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.chats-scope-item + .chats-scope-item {
+  border-inline-start: 1px solid var(--border-subtle);
+}
+
+.chats-scope-item:hover {
+  background: var(--control-hover);
+}
+
+.chats-scope-item[data-state="checked"] {
+  color: var(--text-primary);
+  background: var(--accent-surface);
+}
+
+.chats-scope-item:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
 .chats-section ul {
   margin: 0.25rem 0 0;
   padding: 0;

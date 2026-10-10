@@ -320,7 +320,10 @@ describe("the window's tab order", () => {
       "button New tab",
       // The left side's activity bar (#1673): ONE stop, the open view's tab.
       "tab Chats",
-      // The left region, top to bottom. The Chats list's filter (#1499): its box, then its
+      // The left region, top to bottom. The Chats view's scope switch beside its title
+      // (#1679): ONE stop, the arrows between This tab, Workspace and All.
+      "radiogroup Show the chats of",
+      // The Chats list's filter (#1499): its box, then its
       // chips, needs you and working, which are ONE stop with the arrows between them.
       "input Filter chats by name, persona, workspace or state",
       "input",
