@@ -2727,16 +2727,14 @@ fn dispatch_noting(
                 Ok(Undone::BranchKept) => {
                     left_behind = Some(still_there(cut));
                     format!(
-                        "{refused} Its worktree's folder was taken back, and git kept the \
-                         branch {} in {}.",
+                        "{refused} Its folder was taken back, and git kept the branch {} in {}.",
                         cut.branch, cut.repo
                     )
                 }
                 Err(kept) => {
                     left_behind = Some(still_there(cut));
                     format!(
-                        "{refused} The worktree cut for it, on the branch {} in {}, could not \
-                         be taken back: {kept}",
+                        "{refused} The branch {} cut for it in {} could not be taken back: {kept}",
                         cut.branch, cut.repo
                     )
                 }
