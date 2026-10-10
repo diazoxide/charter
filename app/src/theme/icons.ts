@@ -19,6 +19,14 @@
  *   it cannot read is said in a complaint, and the built-in's `file` and `folder` stand in for
  *   a theme that has none.
  *
+ * - **Kinds of file, never states of a row** (D-1145-2, #1145). A theme says what a file *is*
+ *   (TypeScript, a lockfile, a `src` folder). A row that could not be read, or a link, says what
+ *   it is *not*, and the tree draws that with the window's own Lucide marks (`FileX`,
+ *   `FileSymlink` in `Explorer.tsx`) in place of the theme's symbol, as it draws every other
+ *   state of a row (ignored, changed, being worked on). A state drawn by the icon theme would be
+ *   one a contributed theme could make look like an ordinary file, and VS Code's icon themes,
+ *   which this format follows, carry no such state either.
+ *
  * charter's own, `charter-icons`, is a small subset of Material Icon Theme's file-type icons
  * (MIT), vendored under `app/icons/material-icon-theme/` and converted to this format —
  * `icons.vendor.test.ts` holds the conversion to those files.
