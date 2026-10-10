@@ -85,6 +85,14 @@ impl Root {
         &self.refs
     }
 
+    /// The same branch, resolved again by `reader`: after a checkout in its folder, [`refs`]
+    /// names the branch checked out now (#1152).
+    ///
+    /// [`refs`]: Root::refs
+    pub fn again(&self, reader: &Reader) -> Result<Root, Refused> {
+        root(reader, &self.plane, self.branch())
+    }
+
     /// The branch it was found by, named as the window names it.
     pub(super) fn branch(&self) -> Branch<'_> {
         Branch {
