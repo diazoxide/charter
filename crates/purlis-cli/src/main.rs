@@ -1558,21 +1558,23 @@ fn tell_the_host_about_the_tool_call(
 /// Each sandbox block a block word found in the call's result, to the host, when one is
 /// listening (#1338): an operation and a kind, and whether it was purlis's own — never the path,
 /// the command or what it printed. Sent once each and never spooled
-/// ([`hookwire::tell_blocked`]); a block the app did not take is said only on stderr.
+/// ([`hookwire::tell_blocked`]); a block the app did not take is said only on stderr. Answers
+/// the blocks the app took, which the chat is then told of ([`hooks::told_of_blocks`]).
 #[cfg(unix)]
-fn tell_the_host_about_blocks(word: &str, payload: &str) {
+fn tell_the_host_about_blocks(word: &str, payload: &str) -> Vec<purlis_core::sandboxblock::Block> {
     use std::io::Write as _;
+    let mut taken = Vec::new();
     // The word first: every other tool hook passes through here, and none of them is read.
     if !hooks::is_a_block_word(word) {
-        return;
+        return taken;
     }
     let Some(socket) = purlis_core::envvar::var_os(SOCKET_ENV) else {
-        return;
+        return taken;
     };
     let Some(chat) =
         purlis_core::envvar::var(hookwire::CHAT_ENV).and_then(|chat| chat.parse().ok())
     else {
-        return;
+        return taken;
     };
     let data: serde_json::Value = serde_json::from_str(payload).unwrap_or_default();
     let token = hookwire::ChatToken::from_env();
@@ -1584,16 +1586,23 @@ fn tell_the_host_about_blocks(word: &str, payload: &str) {
             harness: harness.clone(),
             target,
         };
-        if let Err(why) =
-            hookwire::tell_blocked(std::path::Path::new(&socket), token.as_ref(), &blocked)
-        {
-            let _ = writeln!(std::io::stderr(), "{} {word} ({why})", hookwire::NOT_TAKEN);
+        match hookwire::tell_blocked(std::path::Path::new(&socket), token.as_ref(), &blocked) {
+            Ok(()) => taken.push(block),
+            Err(why) => {
+                let _ = writeln!(std::io::stderr(), "{} {word} ({why})", hookwire::NOT_TAKEN);
+            }
         }
     }
+    taken
 }
 
 #[cfg(not(unix))]
-fn tell_the_host_about_blocks(_word: &str, _payload: &str) {}
+fn tell_the_host_about_blocks(
+    _word: &str,
+    _payload: &str,
+) -> Vec<purlis_core::sandboxblock::Block> {
+    Vec::new()
+}
 
 /// What a crashed `PreToolUse` guard, or one that did not answer in time, tells the host from its
 /// panic hook: the call was refused, and why. The payload is not read again in a process that is going down.
@@ -1693,7 +1702,11 @@ fn hook(name: &str, now: Option<&str>) -> ExitCode {
             (text, answered)
         };
         tell_the_host_about_the_tool_call(name, &text, &answered, began.elapsed());
-        tell_the_host_about_blocks(name, &text);
+        let taken = tell_the_host_about_blocks(name, &text);
+        // A block word answers nothing of its own, so this is the one line it prints (#1631).
+        if let Some(line) = hooks::told_of_blocks(name, &taken) {
+            hooks::say(&line);
+        }
         return answered.print();
     }
     if purlis_core::hookreg::NO_OPS.contains(&name) {

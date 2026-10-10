@@ -1,7 +1,8 @@
 //! A sandbox block in what a Bash command came back with reaches the app as an operation and a
 //! kind, and nothing more (#1338): never the path, the command or what it printed — not on the
 //! block's line, not on the tool call's, and not on the hook's stderr, which goes to the
-//! harness's log. The harness is told nothing.
+//! harness's log. The chat is told, in fixed words, that the person has a Notice and it should
+//! say what was blocked and wait (#1631).
 //!
 //! Fed recorded violation lines, as Claude Code hands them to `PostToolUse` and
 //! `PostToolUseFailure`.
@@ -94,6 +95,16 @@ fn hook_in(word: &str, payload: &serde_json::Value, sandboxed: bool) -> Heard {
     }
 }
 
+/// What a block word told the chat, from the one line it printed for `event`.
+fn context_of(said: &str, event: &str) -> String {
+    let line: serde_json::Value = serde_json::from_str(said.trim()).expect("one JSON line");
+    assert_eq!(line["hookSpecificOutput"]["hookEventName"], event, "{said}");
+    line["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .expect("a context")
+        .to_owned()
+}
+
 fn holds_nothing_of_the_call(heard: &Heard) {
     let mut lines: Vec<String> = heard
         .blocked
@@ -141,7 +152,17 @@ fn a_violation_of_the_purlis_process_is_purlis_own_and_one_of_gh_is_not() {
             "cwd": "/Users/dev/plane/workspaces/a/repo",
         }),
     );
-    assert_eq!(heard.said, "", "the harness is told nothing");
+    let told = context_of(&heard.said, "PostToolUseFailure");
+    assert!(
+        told.contains("Report"),
+        "purlis's own is a bug to report: {told}"
+    );
+    for leak in [CANARY, "/Users/dev", "secret-title", "sessions"] {
+        assert!(
+            !told.contains(leak),
+            "{leak} is in what the chat is told: {told}"
+        );
+    }
     let tool = heard.tool.as_ref().expect("the host heard the tool call");
     assert_eq!(tool.tool_hook, "posttoolusefailure-blocked");
     assert_eq!(
@@ -224,6 +245,7 @@ fn what_a_command_printed_on_standard_output_sends_no_block() {
     );
     assert!(heard.blocked.is_empty(), "{:?}", heard.blocked);
     assert!(heard.tool.is_some(), "the call itself is still heard");
+    assert_eq!(heard.said, "", "no block, so the chat is told nothing");
 }
 
 #[test]
@@ -243,4 +265,56 @@ fn a_chat_the_app_did_not_start_sandboxed_sends_no_block() {
     );
     assert!(heard.blocked.is_empty(), "{:?}", heard.blocked);
     assert!(heard.tool.is_some(), "the call itself is still heard");
+    assert_eq!(heard.said, "", "no block, so the chat is told nothing");
+}
+
+/// #1631, replayed: a command that reached three hosts came back with exit status 0, and Claude
+/// Code's proxy said on its standard error that it refused each. No Notice was raised and the
+/// chat, told nothing, went around the block.
+#[test]
+fn each_host_claude_codes_proxy_refused_reaches_the_app_and_the_chat_is_told_to_wait() {
+    let heard = hook(
+        "posttooluse-blocked",
+        &serde_json::json!({
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Bash",
+            "tool_input": {"command": format!("curl -s -o /dev/null https://api.example.com/{CANARY}")},
+            "tool_response": {
+                "stdout": format!("https://api.example.com/{CANARY} 000\nhttps://console.example.com/ready 000\n"),
+                "stderr": "\nShell cwd was reset to /Users/dev/plane/workspaces/a/repo\n\
+                    <sandbox_violations>\n\
+                    deny network-outbound api.example.com:443 (host is not on the allow list)\n\
+                    deny network-outbound console.example.com:443 (host is not on the allow list)\n\
+                    </sandbox_violations>",
+                "interrupted": false,
+            },
+            "cwd": "/Users/dev/plane/workspaces/a/repo",
+        }),
+    );
+    let host = Block {
+        operation: Operation::Connect,
+        kind: Kind::Host,
+        ours: false,
+    };
+    assert_eq!(
+        heard
+            .blocked
+            .iter()
+            .map(|one| (one.sandbox_blocked, one.target.as_deref()))
+            .collect::<Vec<_>>(),
+        vec![
+            (host, Some("api.example.com:443")),
+            (host, Some("console.example.com:443")),
+        ]
+    );
+    let told = context_of(&heard.said, "PostToolUse");
+    for words in [
+        "a connection to an internet host",
+        "Notice",
+        "wait for their answer",
+    ] {
+        assert!(told.contains(words), "{words}: {told}");
+    }
+    assert!(!told.contains(CANARY), "{told}");
+    holds_nothing_of_the_call(&heard);
 }

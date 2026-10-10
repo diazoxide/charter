@@ -11,11 +11,17 @@
 //!
 //! - **Claude Code's `<sandbox_violations>` block**, the primary signal: one Seatbelt line per
 //!   refusal, `cargo(123) deny(1) file-write-create /path`. Only the last block, and only when it
-//!   ends the text, which is where Claude Code appends it.
+//!   ends the text, which is where Claude Code appends it. A connection Claude Code's proxy
+//!   refused is said there in the proxy's own shape, with no process: `deny network-outbound
+//!   host:443 (reason)` (#1631). It names the host to allow, and each host refused is its own
+//!   block.
 //! - **An egress proxy's refusal**: purlis's own ("purlis's sandbox does not allow host:443"),
 //!   Claude Code's ("blocked by network allowlist"), or a client's word for the `403` a proxy
 //!   answered a tunnel with; and Go's certificate check failing on the system service the
-//!   sandbox keeps from it (`x509: OSStatus -26276`).
+//!   sandbox keeps from it (`x509: OSStatus -26276`). A lookup the sandbox refused a program
+//!   that resolves a host itself, past the proxy (macOS's "nodename nor servname provided",
+//!   curl's "Could not resolve host"), and a local socket Docker's client or Go's dial was
+//!   refused (#1631): neither comes with a violation line.
 //! - **A program's own "Operation not permitted"** that names its path, where no violation block
 //!   said more, and only for a path outside what the chat may write (its folder and the temporary
 //!   folders): inside them, the sandbox did not refuse it.
@@ -285,6 +291,39 @@ impl Block {
     }
 }
 
+/// **What the chat is told, in the turn it was blocked**, of the blocks the app took (#1631):
+/// what was blocked, in this module's fixed words, that the person has a Notice about it on
+/// the chat's tab, and to say what was blocked and wait rather than go around it. None when
+/// the app took none, since then no Notice is up to point at. The briefing says how blocks
+/// work once, at the start (`briefing::SANDBOXED_NOTE`); this is said where it happens, so a
+/// chat many turns in does not route around a block without a word.
+pub fn told_the_chat(taken: &[Block]) -> Option<String> {
+    if taken.is_empty() {
+        return None;
+    }
+    let mut said: Vec<String> = Vec::new();
+    for block in taken {
+        let one = block.said();
+        if !said.contains(&one) {
+            said.push(one);
+        }
+    }
+    let ours = if taken.iter().any(|block| block.ours) {
+        " Where it was purlis's own operation, it is a purlis bug, and the Notice offers a \
+         Report rather than an Allow."
+    } else {
+        ""
+    };
+    Some(format!(
+        "⬢ purlis's sandbox blocked {}. The person has a Notice about it on this chat's tab, \
+         with what they can do about it.{ours} Say in a line what was blocked and what you \
+         need it for, then wait for their answer: do not work around the block (another host, \
+         another tool, another way in) and do not retry before they answer. If they allow it, \
+         this chat is started again on this conversation and told to retry.",
+        said.join("; ")
+    ))
+}
+
 /// The folder the app started the chat in, in its environment (the app's `chats::open_it`):
 /// what a block is sorted against as the chat's own folder. Not the payload's `cwd`, which moves
 /// with the chat. Claude Code's own `CLAUDE_PROJECT_DIR` says the same where this is not set.
@@ -360,11 +399,32 @@ pub fn detect_with_targets(
     }
     let mut blocks: Vec<(Block, Option<String>)> = Vec::new();
     for (block, target) in found {
-        if !blocks.iter().any(|(one, _)| *one == block) && blocks.len() < AT_MOST_PER_RESULT {
+        if !blocks
+            .iter()
+            .any(|seen| is_the_same(seen, &(block, target.clone())))
+            && blocks.len() < AT_MOST_PER_RESULT
+        {
             blocks.push((block, target));
         }
     }
     blocks
+}
+
+/// Whether two blocks of one result are one: the same block, and for a refused host the same
+/// host (#1631), as [`Throttle::lets_on`] hears them, so each host a command was refused gets
+/// its own Allow. A refusal that names no host (a client's `403`) is the one a line beside it
+/// named. Every other block is one pattern whatever it names: a command refused a thousand
+/// files is one block.
+fn is_the_same(
+    (one, on): &(Block, Option<String>),
+    (other, other_on): &(Block, Option<String>),
+) -> bool {
+    one == other
+        && (one.kind != Kind::Host
+            || match (on, other_on) {
+                (Some(a), Some(b)) => a.eq_ignore_ascii_case(b),
+                _ => true,
+            })
 }
 
 /// The target a grant could name for `block`, refused on `named` (a host, or a path read
@@ -471,6 +531,9 @@ fn violations(text: &str, place: &Place<'_>) -> Vec<(Block, Option<String>)> {
 /// One Seatbelt line, `cargo(123) deny(1) file-write-create /opt/x`, sorted, and purlis's own
 /// only when the process it names is purlis.
 fn violation(line: &str, place: &Place<'_>) -> Option<(Block, Option<String>)> {
+    if let Some(refused) = proxy_violation(line, place) {
+        return Some(refused);
+    }
     let at = line.find("deny(")?;
     let ours = process_of(&line[..at]).is_some_and(crate::cliname::is_recognised);
     let after = &line[at..];
@@ -494,6 +557,34 @@ fn violation(line: &str, place: &Place<'_>) -> Option<(Block, Option<String>)> {
     };
     // purlis's own operation is a purlis bug, never something to grant.
     let target = (!ours).then(|| target_of(&block, target, place)).flatten();
+    Some((block, target))
+}
+
+/// **Claude Code's proxy's line** for a connection it refused (#1631):
+/// `deny network-outbound api.example.com:443 (host is not on the allow list)`. Not Seatbelt's
+/// shape: no process and no `deny(`, and its reason after the host, which is never read. No
+/// process is named, so it is never purlis's own: a connection purlis makes goes through its
+/// own route, not the chat's proxy.
+fn proxy_violation(line: &str, place: &Place<'_>) -> Option<(Block, Option<String>)> {
+    let rest = line.trim().strip_prefix("deny ")?;
+    let (word, after) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
+    if !word.starts_with("network") {
+        return None;
+    }
+    let named = after.split_whitespace().next().unwrap_or("");
+    let kind = if named.starts_with('/') {
+        Kind::LocalSocket
+    } else {
+        Kind::Host
+    };
+    let block = Block {
+        operation: Operation::Connect,
+        kind,
+        ours: false,
+    };
+    let target = (!named.starts_with('('))
+        .then(|| target_of(&block, named, place))
+        .flatten();
     Some((block, target))
 }
 
@@ -711,11 +802,24 @@ fn network_refusal(line: &str) -> Option<(Operation, Kind, Option<String>)> {
             .map(str::to_owned);
         return Some((Operation::Connect, Kind::Host, host));
     }
-    (line.contains("x509") && line.contains("-26276")).then_some((
-        Operation::Lookup,
-        Kind::CertificateCheck,
-        None,
-    ))
+    if line.contains("x509") && line.contains("-26276") {
+        return Some((Operation::Lookup, Kind::CertificateCheck, None));
+    }
+    let lower = line.to_ascii_lowercase();
+    // A program that looks a host up itself, not through the proxy: the sandbox refuses the
+    // lookup, and macOS's resolver says only that the name is not known (`EAI_NONAME`), in its
+    // words or curl's (#1631). Allowing the host would not let such a program through, so
+    // nothing is named to grant.
+    if lower.contains("nodename nor servname provided, or not known")
+        || lower.contains("could not resolve host: ")
+    {
+        return Some((Operation::Lookup, Kind::Host, None));
+    }
+    // A local socket: Docker's client in its own words, or Go's dial refused by the sandbox
+    // (`EPERM`; a socket's own file mode says "permission denied" alone).
+    (lower.contains("permission denied while trying to connect to the docker")
+        || (lower.contains("dial unix ") && lower.contains("connect: operation not permitted")))
+    .then_some((Operation::Connect, Kind::LocalSocket, None))
 }
 
 /// The kind of `path`, read against `place` and never kept.

@@ -553,6 +553,8 @@ fn held(
 /// - A refused write: Allow on the folder it was in, shown whole, where that folder is on the
 ///   allowlist ([`purlis_core::sandbox::grant::write`], D-1342-10); a denial class gets the way
 ///   that works; anything else gets "Start without the sandbox".
+/// - A refused lookup of a host, by a program that does not use the proxy: "Start without the
+///   sandbox", saying why a host grant would not help (#1631).
 /// - purlis's state, a protected file and any read (reads are denied only for the classes no
 ///   person grants): the brokered route. A local socket: "Start without the sandbox".
 fn offered(
@@ -580,6 +582,18 @@ fn offered(
                 .map(|host| host.to_string())
                 .filter(|host| !host.starts_with("*.")),
             None,
+        ),
+        // A program that looks its host up itself, not through the proxy (#1631): a host grant
+        // would not let it through, so none is offered, and the Notice says why.
+        (Operation::Lookup, Kind::Host) => (
+            BlockOffer::Unsandboxed,
+            None,
+            Some(
+                "This program looks its host up itself instead of going through the sandbox's \
+                 proxy, so allowing the host would not let it through. A client that uses the \
+                 proxy, such as curl, gh or kubectl, reaches a host this project allows."
+                    .to_owned(),
+            ),
         ),
         (Operation::Connect, Kind::LocalSocket) => (
             BlockOffer::Unsandboxed,
@@ -2501,6 +2515,12 @@ mod tests {
         // A local socket: the same.
         assert_eq!(
             told(Operation::Connect, Kind::LocalSocket, false, None),
+            (BlockOffer::Unsandboxed, None, true)
+        );
+        // A lookup a program made itself, past the proxy (#1631): no host grant would reach
+        // it, so none is offered, and the Notice says why rather than nothing.
+        assert_eq!(
+            told(Operation::Lookup, Kind::Host, false, None),
             (BlockOffer::Unsandboxed, None, true)
         );
         // Never granted: the way that works instead.

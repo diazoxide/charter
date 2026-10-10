@@ -137,7 +137,8 @@ pub fn handler(name: &str) -> Option<Handler> {
         "posttooluse" => toolhooks::posttooluse,
         "posttooluse-skill" => toolhooks::posttooluse_skill,
         "posttooluse-dispatch" => toolhooks::posttooluse_dispatch,
-        // The harness is told nothing: what these hooks find goes to the app ([`blocks`]).
+        // What these hooks find goes to the app ([`blocks`]); the chat is told of what the app
+        // took once it has ([`told_of_blocks`]), never from here.
         BLOCKED | BLOCKED_ON_FAILURE => says_nothing,
         _ => return None,
     })
@@ -151,6 +152,25 @@ fn says_nothing(_: &Hook) -> Answer {
 /// call that came back, and of one that failed.
 pub const BLOCKED: &str = "posttooluse-blocked";
 pub const BLOCKED_ON_FAILURE: &str = "posttoolusefailure-blocked";
+
+/// The line block word `word` prints for the blocks the app took, `taken` (#1631): the chat is
+/// told, in the turn it was blocked, that the person has a Notice and it should say what was
+/// blocked and wait ([`purlis_core::sandboxblock::told_the_chat`]). None for another word, and
+/// when the app took no block.
+pub fn told_of_blocks(word: &str, taken: &[purlis_core::sandboxblock::Block]) -> Option<String> {
+    let event = match word {
+        BLOCKED => "PostToolUse",
+        BLOCKED_ON_FAILURE => "PostToolUseFailure",
+        _ => return None,
+    };
+    let told = purlis_core::sandboxblock::told_the_chat(taken)?;
+    Some(
+        serde_json::json!({
+            "hookSpecificOutput": {"hookEventName": event, "additionalContext": told}
+        })
+        .to_string(),
+    )
+}
 
 /// Whether `word` is one of the block words.
 pub fn is_a_block_word(word: &str) -> bool {
