@@ -103,8 +103,9 @@ import {
 } from "./PlaneView";
 import type { Alerts } from "./StatusLine";
 import { TitleBar, useTitleBarRoom } from "./TitleBar";
-import type { Needing, PermissionAsk, Quiet } from "./NeedsYou";
+import type { Needing, OtherAsk, PermissionAsk, Quiet } from "./NeedsYou";
 import { answerAsk, usePermissionAsks } from "./permissionAsks";
+import { answerThrough, useAsks } from "./asks";
 import { useAwayRefusals } from "./dispatchAway";
 import type { AwayItem } from "./AwayRefusals";
 import { useUpdates } from "./Updates";
@@ -1651,11 +1652,44 @@ function App() {
       ),
     [planes, heldAsks, reports],
   );
-  const answer = useCallback((ask: PermissionAsk, option: string) => {
-    void answerAsk(ask.plane, ask.session, ask.ask, option).then((refused) => {
-      if (refused !== undefined) setReport({ from: "needs.answer", refused: true, words: refused });
-    });
-  }, []);
+  /**
+   * **Every ask the registry derives, in every project** (#1690): what the hand's number
+   * counts, and the asks besides permission prompts that its list names.
+   */
+  const registry = useAsks(planes);
+  const { reread } = registry;
+  const answer = useCallback(
+    (ask: PermissionAsk, option: string) => {
+      // Through the path the registry names for it, where the registry lists it.
+      const listed = registry.held[ask.plane]?.find((one) => one.ask === ask.ask);
+      const answering =
+        listed === undefined
+          ? answerAsk(ask.plane, ask.session, ask.ask, option)
+          : answerThrough(ask.plane, listed, option);
+      void answering.then((refused) => {
+        if (refused !== undefined)
+          setReport({ from: "needs.answer", refused: true, words: refused });
+        reread(ask.plane);
+      });
+    },
+    [reread, registry.held],
+  );
+  const otherAsks = useMemo<OtherAsk[]>(
+    () =>
+      planes.flatMap((plane) =>
+        (registry.held[plane] ?? [])
+          .filter((one) => one.source === "dispatch" || one.source === "sandbox-host")
+          .map((one) => ({
+            plane,
+            project: calledOn(plane),
+            session: one.session,
+            chain: one.chain,
+            ask: one.ask,
+            says: one.says,
+          })),
+      ),
+    [planes, registry.held],
+  );
 
   /**
    * **Every project's dispatches refused while nobody was there** (#1507): items of the same
@@ -1709,6 +1743,23 @@ function App() {
     [needing, others.needing, planes],
   );
   const everyQuiet = useMemo(() => [...quiet, ...others.quiet], [quiet, others.quiet]);
+  /**
+   * **The hand's number: the asks, one per thing that waits** (#1690). A project the core has
+   * not said its asks for yet counts its rows, as the hand always did, and so does a project in
+   * another window, whose asks that window reads.
+   */
+  const askedCount = useMemo(() => {
+    if (!planes.some((plane) => plane in registry.held)) return undefined;
+    const here = planes.reduce(
+      (sum, plane) =>
+        sum +
+        (registry.held[plane]?.length ??
+          needing.filter((one) => one.plane === plane).length +
+            asks.filter((one) => one.plane === plane).length),
+      0,
+    );
+    return here + others.needing.filter((one) => !planes.includes(one.plane)).length;
+  }, [planes, registry.held, needing, asks, others.needing]);
   /** What a quit would end in every window: the main window is the one asked (`lifecycle.rs`),
    *  and a warning that left out a split window's chats would end them unannounced. */
   const everyEnding = useMemo(() => [...ending, ...others.ending], [ending, others.ending]);
@@ -1947,6 +1998,19 @@ function App() {
           onNeverAway: (item: AwayItem) => answerAway(item, "never"),
           onLook: awayRefusals.read,
           openAsked: needsYouAsked,
+          asked: askedCount,
+          others: otherAsks,
+          onOpenOther: (ask: OtherAsk) => {
+            const name = ask.chain.at(-1) ?? `chat ${ask.session}`;
+            pressNeeding(ask.plane, {
+              id: `needs.show:${ask.session}`,
+              title: `Show ${name}, which waits on you`,
+              available: true,
+              reason: "",
+              does: { verb: "showChat", session: ask.session },
+              name,
+            });
+          },
           onOpen: (ask: PermissionAsk) =>
             pressNeeding(ask.plane, {
               id: `needs.show:${ask.session}`,

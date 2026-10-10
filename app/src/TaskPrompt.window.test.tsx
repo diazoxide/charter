@@ -320,6 +320,9 @@ function prompt(session: number, line: string, ask = `ask-${session}`): Shown {
       { id: "allow", label: "Allow", allows: true },
       { id: "deny", label: "Deny", allows: false },
     ],
+    source: "permission",
+    chain: [],
+    answer: { via: "hook" },
   };
 }
 

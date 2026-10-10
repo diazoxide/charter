@@ -877,6 +877,12 @@ impl Store {
             .collect()
     }
 
+    /// Every dispatch waiting on the person, oldest first: what the asks registry lists
+    /// (#1690).
+    pub fn every_waiting(&self) -> Vec<Pending> {
+        lock(&self.pending).clone()
+    }
+
     /// Takes the held dispatch `id` out, if it is still held.
     fn take(&self, id: u32) -> Option<Pending> {
         let mut pending = lock(&self.pending);

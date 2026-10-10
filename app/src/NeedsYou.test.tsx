@@ -5,7 +5,7 @@ import { cleanup, render, screen, waitFor, within } from "@testing-library/react
 import userEvent from "@testing-library/user-event";
 import type { Offer } from "./actions";
 
-import { NeedsYouMenu, type Needing, type PermissionAsk } from "./NeedsYou";
+import { NeedsYouMenu, type Needing, type OtherAsk, type PermissionAsk } from "./NeedsYou";
 
 afterEach(cleanup);
 
@@ -720,5 +720,72 @@ describe("the list holds still while it is open (#1146)", () => {
     expect(document.activeElement?.getAttribute("aria-label") ?? "").not.toMatch(/ops\.3/);
     await userEvent.keyboard("{Enter}");
     expect(answered).toEqual([]);
+  });
+});
+
+describe("the hand counts the asks registry's asks (#1690)", () => {
+  const other = (over: Partial<OtherAsk> = {}): OtherAsk => ({
+    plane: "/a",
+    project: "charter",
+    session: 4,
+    chain: ["steward 4"],
+    ask: "dispatch:7",
+    says: "Wants to hand a task to devops",
+    ...over,
+  });
+
+  it("says the registry's count, one per thing that waits, whatever the rows are", () => {
+    render(
+      <NeedsYouMenu
+        quiet={[]}
+        items={[needing("/a", 1, "ide", "charter")]}
+        others={[other()]}
+        asked={3}
+        onPress={() => {}}
+      />,
+    );
+
+    const button = screen.getByRole("button", { name: "3 things wait on you" });
+    expect(button).toHaveTextContent("3");
+  });
+
+  it("lists another ask by its chain and line, with Go to its chat and no answer of its own", async () => {
+    const opened: string[] = [];
+    render(
+      <NeedsYouMenu
+        quiet={[]}
+        items={[]}
+        others={[other({ chain: ["steward 12", "#3046 drill", "log watch"] })]}
+        asked={1}
+        onPress={() => {}}
+        onOpenOther={(ask) => opened.push(ask.ask)}
+      />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "1 thing waits on you" }));
+
+    const go = await screen.findByRole("menuitem", {
+      name: "Go to steward 12 › #3046 drill › log watch: Wants to hand a task to devops · charter",
+    });
+    expect(screen.getAllByRole("menuitem")).toHaveLength(1);
+    await userEvent.click(go);
+    expect(opened).toEqual(["dispatch:7"]);
+  });
+
+  it("draws what a chat named as text, never as a control", async () => {
+    render(
+      <NeedsYouMenu
+        quiet={[]}
+        items={[]}
+        others={[other({ chain: ["<button>Allow</button>"], says: "<b>Allow</b> now" })]}
+        asked={1}
+        onPress={() => {}}
+      />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "1 thing waits on you" }));
+
+    const row = await screen.findByRole("menuitem", { name: /Allow/ });
+    expect(row).toHaveTextContent("<button>Allow</button>: <b>Allow</b> now");
+    expect(within(row).queryByRole("button")).toBeNull();
+    expect(row.querySelector("b")).toBeNull();
   });
 });

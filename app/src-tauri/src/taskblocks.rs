@@ -600,6 +600,20 @@ pub fn keep_blocked(
     Ok(tasks)
 }
 
+impl Blocks {
+    /// **Every block each open chat is held on now**, by session, lowest first: what the asks
+    /// registry lists as sandbox host asks (#1690).
+    pub fn every(&self) -> Vec<(u32, HeldBlock)> {
+        let held = self.held();
+        let mut every: Vec<(u32, HeldBlock)> = held
+            .iter()
+            .flat_map(|(session, blocks)| blocks.iter().map(|block| (*session, block.clone())))
+            .collect();
+        every.sort_by_key(|(session, _)| *session);
+        every
+    }
+}
+
 #[cfg(test)]
 #[path = "taskblocks_tests.rs"]
 mod tests;

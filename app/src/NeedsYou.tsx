@@ -211,6 +211,23 @@ export type PermissionAsk = {
   options: readonly { id: string; label: string; allows: boolean }[];
 };
 
+/**
+ * **Another ask from the registry** (#1690): a dispatch held for a grant, or a host a chat's
+ * sandbox refused. Listed here so the number and the list agree; answered in its chat's Notice,
+ * where what it asks is shown whole, until the Inbox answers it in place (#1692).
+ */
+export type OtherAsk = {
+  plane: string;
+  project: string;
+  session: number;
+  /** Who is asking, the session first: names chats chose, drawn as text. */
+  chain: readonly string[];
+  /** The registry's key for it. */
+  ask: string;
+  /** What it asks, in one line: data, never markup. */
+  says: string;
+};
+
 /** A chat that can be waiting on the operator without being able to say so (charter-app#52):
  *  a shell, or a harness without charter's hooks. */
 export type Quiet = {
@@ -296,6 +313,9 @@ export function NeedsYouMenu({
   onNeverAway,
   onLook,
   openAsked,
+  asked,
+  others = [],
+  onOpenOther,
 }: {
   items: readonly Needing[];
   /** The chats that can be waiting without saying so, across every project. */
@@ -324,6 +344,15 @@ export function NeedsYouMenu({
   /** A count that goes up each time the list is asked open from elsewhere: the away
    *  summary's part for the dispatches refused while nobody was there (#1551). */
   openAsked?: number;
+  /**
+   * **The registry's count of asks** (#1690): what the hand's number says, across every
+   * project. Where the core has said none yet, the number counts the rows, as it always did.
+   */
+  asked?: number;
+  /** The registry's other asks, each with Go to its chat. */
+  others?: readonly OtherAsk[];
+  /** Puts the chat an other ask came from in front, where its Notice asks it whole. */
+  onOpenOther?: (ask: OtherAsk) => void;
 }) {
   /**
    * Whether the list is up — held here rather than left to Radix, for the show-more menu's
@@ -346,34 +375,40 @@ export function NeedsYouMenu({
   const anchor = useRef<HTMLSpanElement>(null);
   const held = useRef(false);
   const trigger = useRef<HTMLButtonElement>(null);
-  const chats = items.length + asks.length;
-  const count = chats + away.length;
-  const asked = count > 0;
-  const none = !asked && quiet.length === 0;
+  const chats = items.length + asks.length + others.length;
+  const rows = chats + away.length;
+  // The registry's count where it has one; a refusal kept while nobody was there is no ask.
+  const count = asked ?? rows;
+  const asking = rows > 0 || count > 0;
+  const none = !asking && quiet.length === 0;
   // The button appearing because a chat has just asked, as opposed to having been there when
   // the bar was drawn: only the first is a change worth drawing (`useArrived`).
-  const arrived = useArrived(asked);
+  const arrived = useArrived(asking);
   // A list that emptied is a list that closed: the next chat to ask brings the button back,
   // not a menu the operator did not open. Adjusted while rendering, React's own way to reset
   // state on a change of props.
   if (none && open) setOpen(false);
   useLayoutEffect(() => {
-    if (asked || !held.current) return;
+    if (asking || !held.current) return;
     held.current = false;
     const lost = document.activeElement === null || document.activeElement === document.body;
     if (!lost) return;
     if (trigger.current) trigger.current.focus();
     else if (anchor.current) moveAlong(anchor.current, false);
-  }, [asked]);
+  }, [asking]);
   // A refusal kept while nobody was there is no chat needing you: the chat was told no and
   // went on. Alone, the hand says what they are; beside chats, it counts things.
-  const said = !asked
+  const said = !asking
     ? quietSaid(quiet)
-    : away.length === 0
-      ? `${count} ${count === 1 ? "chat needs" : "chats need"} you`
-      : chats === 0
-        ? `${count} ${count === 1 ? "dispatch was" : "dispatches were"} refused while you were away`
-        : `${count} things need you`;
+    : asked !== undefined
+      ? count === 0
+        ? `${away.length} ${away.length === 1 ? "dispatch was" : "dispatches were"} refused while you were away`
+        : `${count} ${count === 1 ? "thing waits" : "things wait"} on you`
+      : away.length === 0
+        ? `${count} ${count === 1 ? "chat needs" : "chats need"} you`
+        : chats === 0
+          ? `${count} ${count === 1 ? "dispatch was" : "dispatches were"} refused while you were away`
+          : `${count} things need you`;
   /**
    * **The rows as they were when the list was opened** (#1507, #1146). A chat can ask, or a
    * refused chat ask again, at any moment, and the core then says the list anew; drawn at once,
@@ -414,10 +449,10 @@ export function NeedsYouMenu({
   // goes back to the hand as it did before anything was held.
   // Let go for good, not for as long as nothing is asked: a chat that asks while the list is
   // still open (the faint hand keeps it up) would otherwise bring the dimmed rows back.
-  if (open && !asked && frozen !== null && frozen.items.length + frozen.asks.length > 0) {
+  if (open && !asking && frozen !== null && frozen.items.length + frozen.asks.length > 0) {
     setFrozen({ ...frozen, items: [], asks: [] });
   }
-  const heldChats = asked ? heldRows : null;
+  const heldChats = asking ? heldRows : null;
   const drawnItems = inPlace(heldChats?.items ?? items, items, itemKey).filter(
     ({ row, gone }) => !(gone && heldChats?.ignored.includes(itemKey(row))),
   );
@@ -454,7 +489,7 @@ export function NeedsYouMenu({
             <button
               ref={trigger}
               type="button"
-              className={`needs-you-button${asked ? "" : " muted"}${arrived && asked ? " arrived" : ""}`}
+              className={`needs-you-button${asking ? "" : " muted"}${arrived && asking ? " arrived" : ""}`}
               data-testid="needs-you-button"
               tabIndex={0}
               aria-label={said}
@@ -466,7 +501,7 @@ export function NeedsYouMenu({
               onClick={() => show(!open)}
             >
               <Hand aria-hidden="true" />
-              {asked && <span className="needs-you-number">{count}</span>}
+              {asking && count > 0 && <span className="needs-you-number">{count}</span>}
             </button>
           </Menu.Trigger>
           <Menu.Portal>
@@ -571,6 +606,31 @@ export function NeedsYouMenu({
                   </Menu.Item>
                 </Menu.Group>
               ))}
+              {others.map((ask) => {
+                // **Every name and line is text** (#1690): a chain a chat named, or what it
+                // asked, is drawn as words and is never a control of the list's.
+                const who = ask.chain.join(" › ");
+                return (
+                  <Menu.Group
+                    key={`${ask.plane}#${ask.ask}`}
+                    className="needs-you-row needs-you-other"
+                    aria-label={`${who}: ${ask.says} · ${ask.project}`}
+                  >
+                    <Menu.Item
+                      className="more-tab needs-you-go"
+                      aria-label={`Go to ${who}: ${ask.says} · ${ask.project}`}
+                      onSelect={() => {
+                        went.current = true;
+                        onOpenOther?.(ask);
+                      }}
+                    >
+                      <span className="needs-you-name">{`${who}: ${ask.says}`}</span>
+                      <span className="needs-you-where">{ask.project}</span>
+                      <span className="needs-you-word">Go</span>
+                    </Menu.Item>
+                  </Menu.Group>
+                );
+              })}
               <AwayRows
                 items={drawnAway}
                 gone={(item) => !listedNow.has(awayKey(item))}

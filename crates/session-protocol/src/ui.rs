@@ -206,6 +206,7 @@ pub const WINDOW_ONLY: &[&str] = &[
     "answer_task_question",
     // What stands and what waits: the person's and every chat's, so never a link's to read.
     "dispatch_grants_needed",
+    "asks_waiting",
     "dispatch_standing",
     "dispatch_grants",
     // The person's answers on a dispatch's Notice: every one of them, the no included.
@@ -213,6 +214,8 @@ pub const WINDOW_ONLY: &[&str] = &[
     "allow_dispatch_anywhere",
     "keep_dispatch_blocked",
     "never_dispatch",
+    // Keep blocked on a sandbox host ask (#1690): the person's no, told to the app.
+    "forget_sandbox_block",
     // Settings' table: every change of what stands.
     "lift_dispatch_never",
     "allow_dispatch_to_any",

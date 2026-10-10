@@ -705,7 +705,10 @@ export const commands = {
 	 *  the task's row and record all stay.
 	 */
 	taskFailureSeen: (plane: PlaneId, session: number, id: string) => typedError<null, string>(__TAURI_INVOKE("task_failure_seen", { plane, session, id })),
-	/**  The asks a project holds open now: what the window lists before any [`EVENT`] arrives. */
+	/**
+	 *  The permission asks a project holds open now: what the window lists before any [`EVENT`]
+	 *  arrives.
+	 */
 	pendingAsks: (plane: PlaneId) => typedError<Asking, string>(__TAURI_INVOKE("pending_asks", { plane })),
 	/**
 	 *  Answers chat `session`'s ask `ask` with its option `option`, as the operator in this window.
@@ -715,6 +718,22 @@ export const commands = {
 	 *  comes too late, twice, or for another chat's ask is refused with a sentence saying why.
 	 */
 	answerAsk: (plane: PlaneId, session: number, ask: string, option: string) => typedError<null, string>(__TAURI_INVOKE("answer_ask", { plane, session, ask, option })),
+	/**
+	 *  **Every ask a project has waiting now** (#1690), from every source ([`every_ask`]): what
+	 *  the window lists and the title bar counts. Read again whenever a source may have moved:
+	 *  [`EVENT`], a chat moving, a dispatch held, a block heard, an answer.
+	 * 
+	 *  The window's alone: what waits on the person, dispatches and refused hosts included, is
+	 *  never a link's to read, as `dispatch_grants_needed` is not.
+	 */
+	asksWaiting: (plane: PlaneId) => typedError<Asking, string>(__TAURI_INVOKE("asks_waiting", { plane })),
+	/**
+	 *  **Keep blocked on a sandbox host ask** (#1690): chat `session` is no longer held on the
+	 *  block shown, so the registry stops listing it. It grants nothing and changes no sandbox; it
+	 *  is the Notice's Keep blocked, told to the app, which before kept the block until the chat
+	 *  ended. Answers whether the block was still held.
+	 */
+	forgetSandboxBlock: (plane: PlaneId, session: number, shown: BlockShown) => typedError<boolean, string>(__TAURI_INVOKE("forget_sandbox_block", { plane, session, shown })),
 	/**
 	 *  Sends what a pane typed to the session's program. Anything but the terminal's own answer
 	 *  drops a curation prompt still waiting to be typed into it (`Held::operator_input`).
@@ -2684,6 +2703,27 @@ export type Allowed = {
 };
 
 /**
+ *  **The existing, checked path an ask is answered by** (#1690): the command the window
+ *  already answers that source with, and what that command is sent. The registry adds no route.
+ */
+export type AnswerPath = 
+/**  `answer_ask`, back on the chat's own permission hook, by [`Shown::ask`]. */
+{ via: "hook" } | 
+/**
+ *  The dispatch Notice's own commands, for held dispatch `id`: `allow_dispatch` at the
+ *  level an option names, with `shown`, the digest the question was told; then
+ *  `keep_dispatch_blocked` and `never_dispatch`.
+ */
+{ via: "dispatch"; id: number; shown: string } | 
+/**
+ *  The block Notice's own `allow_sandbox_block` at the level an option names, bound to the
+ *  block shown; and [`forget_sandbox_block`] for Keep blocked.
+ */
+{ via: "sandbox-block"; shown: BlockShown } | 
+/**  Nothing the window can send: the person answers in the chat. */
+{ via: "in-its-pane" };
+
+/**
  *  One memory in a store's `archive/`, as the window's archive tab lists it and reads it
  *  (KN-4): read-only, so it carries no text to check a save against.
  */
@@ -2763,6 +2803,19 @@ export type AskOffer = {
 	 */
 	locked_for: AskLocked[],
 };
+
+/**  Which source an ask waits on. */
+export type AskSource = 
+/**  A permission prompt a chat or a task holds on its hook (HP-6). */
+"permission" | 
+/**  A dispatch to another persona that no grant covers (#1437). */
+"dispatch" | 
+/**  A host a chat's sandbox refused, which an Allow can name (#1342). */
+"sandbox-host" | 
+/**  A prompt shown in the harness's own terminal that purlis holds nothing for. */
+"terminal" | 
+/**  A chat whose turn ended with the next move the person's. */
+"question";
 
 /**
  *  Every ask a project holds open, as the window lists them: the whole list each time, so the
@@ -7192,16 +7245,29 @@ export type SharedFolder = {
 	says: string,
 };
 
-/**  One ask, as its row in the needs-you list draws it. */
+/**  One ask, as the registry lists it and its row draws it. */
 export type Shown = {
 	/**  The chat that asked. */
 	session: number,
-	/**  The ask's id, which its answer names. */
+	/**  The ask's key, unique in its project: for a permission its id, which its answer names. */
 	ask: string,
-	/**  What it asks, in one line, every credential shape masked. */
+	/**  What it asks, in one line, every credential shape masked. Data, never markup. */
 	says: string,
-	/**  The answers it offers, in the harness's order and words. */
+	/**
+	 *  The answers it offers, in the source's order and words. Empty where it is answered
+	 *  only in its chat ([`AnswerPath::InItsPane`]).
+	 */
 	options: Offered[],
+	/**  Which source is waiting. */
+	source: AskSource,
+	/**
+	 *  Who is asking, by name, the session first and the chat that asked last: `steward 12`,
+	 *  `#3046 drill`, `log watch` (I-9). From the app's own record of who asked whom, never
+	 *  from what a chat says of itself; the names are the chats' and are data.
+	 */
+	chain: string[],
+	/**  The existing path that answers it. */
+	answer: AnswerPath,
 };
 
 /**
