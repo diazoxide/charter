@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791628783811,
+  "lastUpdate": 1791631457453,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -5838,6 +5838,48 @@ window.BENCHMARK_DATA = {
             "value": 101.44235800000001,
             "unit": "ms",
             "extra": "median of 5 runs: 99.928, 101.425, 101.442, 101.483, 101.826 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "eyehollow@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "dbrownsimple"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "f6f679930813763040447ff5cd25a34828595ed1",
+          "message": "Refuse the workspace read in the said-link window test\n\nFollowing the clone's link opens Settings at the workspace's Repos, which\nreads the workspace. The test's core answered that read with nothing, and\non CI the read landed before the test ended and threw while drawing it.\nThe core now refuses the read, so the level says so.\n\nRefs #1201\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nAssisted-by: claude-code:claude-opus-5-5\nPurlis-Chat: 01M4AREQXXRGBAEWM0SZ0N0WBN\nPurlis-Persona: steward",
+          "timestamp": "2026-10-10T15:20:53+04:00",
+          "tree_id": "6128d8957d2c07becc625ebc8f2dc800ca436dc0",
+          "url": "https://github.com/purlis/purlis/commit/f6f679930813763040447ff5cd25a34828595ed1"
+        },
+        "date": 1791631456764,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.513359,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.498, 0.508, 0.513, 0.514, 0.521 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 17.055292,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.946, 16.966, 17.055, 17.279, 17.298 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 104.025062,
+            "unit": "ms",
+            "extra": "median of 5 runs: 102.630, 103.877, 104.025, 104.151, 106.011 ms"
           }
         ]
       }
