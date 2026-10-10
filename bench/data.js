@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791655730502,
+  "lastUpdate": 1791658069605,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -6258,6 +6258,48 @@ window.BENCHMARK_DATA = {
             "value": 101.2083925,
             "unit": "ms",
             "extra": "median of 5 runs: 101.070, 101.136, 101.208, 101.459, 102.431 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "eyehollow@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "dbrownsimple"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "8a6bb2c0a2bbdbacdaa0014f433fb7b0fc6037e2",
+          "message": "Train 38 review: pin the local-address check against every IPv6 spelling\n\nTwo pure tests hold the check against loopback, unspecified, link-local and metadata\naddresses, this machine's own IPv6 address, and the IPv6 forms that carry an IPv4 one:\nby literal, and by what a listed name resolves to.\n\nRefs #1664\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nAssisted-by: claude-code\nPurlis-Chat: 01M4AREQXXRGBAEWM0SZ0N0WBN\nPurlis-Persona: steward",
+          "timestamp": "2026-10-10T22:35:12+04:00",
+          "tree_id": "f53580d59d5a77fdfcd7f18e66702f284beaea7c",
+          "url": "https://github.com/purlis/purlis/commit/8a6bb2c0a2bbdbacdaa0014f433fb7b0fc6037e2"
+        },
+        "date": 1791658068504,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.46569400000000005,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.458, 0.459, 0.466, 0.466, 0.467 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.519492,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.220, 16.330, 16.519, 16.637, 16.936 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 101.761952,
+            "unit": "ms",
+            "extra": "median of 5 runs: 100.295, 100.553, 101.762, 102.641, 103.183 ms"
           }
         ]
       }
