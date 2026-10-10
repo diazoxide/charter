@@ -15,7 +15,7 @@ const script = join(dirname(fileURLToPath(import.meta.url)), "linux-packages.sh"
 
 // A machine to run the script on: a bin/ of stand-ins, an archives/ apt downloads into, a log
 // of every apt-get call, and the files GitHub hands a step for its outputs and its summary.
-function machine({ failUpdates = 0, failInstalls = 0, failOffline = false } = {}) {
+function machine({ failUpdates = 0, failInstalls = 0, failOffline = false, manyInstalled = false } = {}) {
   const root = mkdtempSync(join(tmpdir(), "linux-packages-"));
   const bin = join(root, "bin");
   const archives = join(root, "archives");
@@ -44,7 +44,13 @@ esac
 exit 0`,
   );
   // What is installed: the two the install brought, and not the stale one.
-  write("dpkg-query", `printf 'libfoo_1.0-1_amd64\\nlibbar_1:2.0_amd64\\n'`);
+  // With `manyInstalled`, thousands more after them, as on a runner image: more than a pipe holds.
+  write(
+    "dpkg-query",
+    `printf 'libfoo_1.0-1_amd64\\nlibbar_1:2.0_amd64\\n'${
+      manyInstalled ? `; i=0; while [ $i -lt 4000 ]; do echo "filler-package-$i"_1.2.3-4ubuntu0.1_amd64; i=$((i + 1)); done` : ""
+    }`,
+  );
   const output = join(root, "output");
   const summary = join(root, "summary");
   writeFileSync(output, "");
@@ -117,6 +123,14 @@ test("a first install from the mirror is bounded, keeps what it downloaded, and 
   assert.deepEqual(readdirSync(cache).sort(), ["libbar_1%3a2.0_amd64.deb", "libfoo_1.0-1_amd64.deb"]);
   assert.match(r.summary, /from the mirror/);
   assert.match(r.summary, /\d+ s/);
+});
+
+test("the files are kept when the image lists thousands of installed packages", () => {
+  const { root, run } = machine({ manyInstalled: true });
+  const cache = join(root, "cache");
+  const r = run("install", "--cache", cache, "socat");
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(readdirSync(cache).sort(), ["libbar_1%3a2.0_amd64.deb", "libfoo_1.0-1_amd64.deb"]);
 });
 
 test("with the cache restored, the install never asks the mirror", () => {
