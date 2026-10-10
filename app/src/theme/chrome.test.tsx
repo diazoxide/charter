@@ -228,34 +228,6 @@ async function windowIn(theme: string, colour: string | null = null) {
   await screen.findByRole("tab", { name: /alpha/ });
 }
 
-/**
- * **Known fault, in a file another lane holds this round** (#956): three elements of
- * `PlaneView.tsx` put a workspace's tint on themselves (`tintOf`) without declaring the hue it
- * is a tint of in `data-colour`, as the workspace's tab beside them does. The values are the
- * theme's own tint, but the check cannot tell them from a colour the window wrote, so it says
- * each one. They are held here by name, so a fourth such element still fails, and so does
- * the day they are declared: then this list goes. The fix is `data-colour={colourOf(workspace)
- * ?? undefined}` on each of the three.
- */
-const UNDECLARED_TINT = ["<span.workspace>", "<span.workspace-mark>", "<header.bar>"];
-
-/**
- * The complaints about `UNDECLARED_TINT`'s elements that are exactly the theme's tint in
- * `colour`, set aside; every other complaint is kept.
- */
-function besideUndeclaredTint(said: string[], colour: string) {
-  const tint = tinted(inForce(), colour);
-  const values = new Set(Object.values(tint.values));
-  const undeclared = new Set<string>();
-  const rest = said.filter((one) => {
-    const hit = /^(<[^>]+>) style --[\w-]+: (#[0-9a-f]{6}) is a colour literal$/.exec(one);
-    if (hit === null || !UNDECLARED_TINT.includes(hit[1]) || !values.has(hit[2])) return true;
-    undeclared.add(hit[1]);
-    return false;
-  });
-  return { rest, undeclared: [...undeclared].sort() };
-}
-
 describe.each(Object.keys(BUILT_IN))("the window's chrome in %s", (theme) => {
   beforeEach(() => drawIn(BUILT_IN[theme]));
 
@@ -273,9 +245,7 @@ describe.each(Object.keys(BUILT_IN))("the window's chrome in %s", (theme) => {
       ),
     );
 
-    const { rest, undeclared } = besideUndeclaredTint(complaints(document.body), "teal");
-    expect(rest).toEqual([]);
-    expect(undeclared).toEqual([...UNDECLARED_TINT].sort());
+    expect(complaints(document.body)).toEqual([]);
   });
 
   it("draws the palette with tokens only", async () => {
@@ -283,7 +253,7 @@ describe.each(Object.keys(BUILT_IN))("the window's chrome in %s", (theme) => {
     await userEvent.keyboard("{Meta>}k{/Meta}");
     await screen.findByRole("dialog");
 
-    expect(besideUndeclaredTint(complaints(document.body), "teal").rest).toEqual([]);
+    expect(complaints(document.body)).toEqual([]);
   });
 
   it("draws the alerts drawer with tokens only", async () => {
@@ -291,7 +261,7 @@ describe.each(Object.keys(BUILT_IN))("the window's chrome in %s", (theme) => {
     await userEvent.click(await screen.findByRole("button", { name: /^Alerts/ }));
     await screen.findByRole("dialog", { name: "Alerts" });
 
-    expect(besideUndeclaredTint(complaints(document.body), "teal").rest).toEqual([]);
+    expect(complaints(document.body)).toEqual([]);
   });
 });
 
