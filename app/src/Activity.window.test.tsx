@@ -137,6 +137,8 @@ function core(
     refuses?: string;
     /** What the core says in place of the session a line's chat has now: it could not say. */
     unfound?: string;
+    /** The chats open now, asked at each read: a test closes one by changing what this says. */
+    open?: () => OpenChat[];
   } = {},
 ) {
   const asked: { cmd: string; args: Record<string, unknown> }[] = [];
@@ -149,13 +151,19 @@ function core(
         return {
           root: PLANE,
           workspaces: [
-            { name: "alpha", path: ALPHA, vision: "Ship it", todos: [], chats: [STEWARD, TALK] },
+            {
+              name: "alpha",
+              path: ALPHA,
+              vision: "Ship it",
+              todos: [],
+              chats: on.open?.() ?? [STEWARD, TALK],
+            },
           ],
           personas: ["steward", "devops"],
           persona: "steward",
           unfiled: [],
         };
-      if (cmd === "opened_chats") return [STEWARD, TALK];
+      if (cmd === "opened_chats") return on.open?.() ?? [STEWARD, TALK];
       if (cmd === "reopened_views") return on.reopened ?? [];
       if (cmd === "chat_states") return [];
       if (cmd === "chats_that_would_not_start") return [];
@@ -186,9 +194,10 @@ function core(
       }
       if (cmd === "activity_chat" && on.unfound !== undefined) throw on.unfound;
       if (cmd === "activity_chat") {
+        const open = (on.open?.() ?? [STEWARD, TALK]).map((one) => one.session);
         const now: Record<string, number | null> = {
-          [STEWARD_KEY]: 3,
-          [TALK_KEY]: 7,
+          [STEWARD_KEY]: open.includes(3) ? 3 : null,
+          [TALK_KEY]: open.includes(7) ? 7 : null,
           ...on.now,
         };
         return now[String(given.key)] ?? null;
@@ -203,6 +212,8 @@ function core(
 }
 
 const strip = () => stripNamed("Tabs");
+/** Who said a line to whom, as the line says it. */
+const who = (item: HTMLElement) => item.querySelector(".activity-who")?.textContent ?? "";
 const selected = () => within(strip()).getByRole("tab", { selected: true }).textContent ?? "";
 
 /** Opens the steward chat's Activity from its tab's menu, and answers its list. */
@@ -360,6 +371,53 @@ describe("a session's Activity tab", () => {
 
     expect(within(note).queryByRole("button", { name: /Show chat/ })).toBeNull();
     expect(within(note).getByText("talk")).toHaveAttribute("title", "Its chat is closed");
+    // Said in words, and not only in a tooltip.
+    expect(who(note)).toBe("talk (chat closed) → steward 3");
+  });
+
+  it("takes a line's chat control away when its chat closes while the tab is open, and says so", async () => {
+    let open = [STEWARD, TALK];
+    const { asked } = core({ open: () => open });
+    render(<App />);
+    const list = await opened();
+    expect(within(list).getAllByRole("button", { name: "Show chat talk" })).not.toHaveLength(0);
+    expect(asked("activity_chat")).toEqual([]);
+
+    // The task's chat ends, and the window takes its tab away.
+    open = [STEWARD];
+    await act(() => emit("chat-stop", { plane: PLANE, session: 7, phase: "stopped" }));
+
+    await waitFor(() =>
+      expect(within(list).queryByRole("button", { name: "Show chat talk" })).toBeNull(),
+    );
+    const note = within(list).getAllByRole("listitem")[1];
+    expect(who(note)).toBe("talk (chat closed) → steward 3");
+    // The chat that is still open keeps its control, and the tab stays where it was.
+    expect(within(list).getAllByRole("button", { name: "Show chat steward 3" })).not.toHaveLength(
+      0,
+    );
+    expect(selected()).toContain("Activity");
+    // Asked of the chat that went, and of no other.
+    expect(asked("activity_chat")).toEqual([{ plane: PLANE, key: TALK_KEY }]);
+  });
+
+  it("keeps a line's chat control when its chat is restarted while the tab is open", async () => {
+    let open = [STEWARD, TALK];
+    const now: Record<string, number | null> = {};
+    core({ open: () => open, now });
+    render(<App />);
+    const list = await opened();
+
+    // Session 7 ends, and the same chat goes on as session 12.
+    open = [STEWARD, { ...TALK, session: 12 }];
+    now[TALK_KEY] = 12;
+    await act(() => emit("chat-stop", { plane: PLANE, session: 7, phase: "stopped" }));
+
+    const note = within(list).getAllByRole("listitem")[1];
+    await waitFor(() =>
+      expect(within(note).getByRole("button", { name: "Show chat talk" })).toBeInTheDocument(),
+    );
+    expect(who(note)).toBe("talk → steward 3");
   });
 
   it("draws what a chat said as text, never as markup", async () => {
@@ -1010,6 +1068,34 @@ describe("answering a task's question from the Activity tab (#1496)", () => {
     );
   });
 
+  it("keeps the form and what was typed when the task's chat closes, and says why", async () => {
+    let open = [STEWARD, TALK];
+    const { asked } = core({ lines: ASKING, open: () => open });
+    render(<App />);
+    const list = await opened();
+    const form = await answering(list);
+    const box = within(form).getByRole("textbox");
+    await typed(box, "prod-2");
+
+    open = [STEWARD];
+    await act(() => emit("chat-stop", { plane: PLANE, session: 7, phase: "stopped" }));
+
+    expect(
+      await within(list).findByText(
+        "talk's chat has closed, so an answer would reach no turn of its work. What you typed is still in the box, to copy.",
+      ),
+    ).toHaveAttribute("role", "alert");
+    expect(box).toHaveValue("prod-2");
+    expect(within(form).getByRole("button", { name: "Send" })).toBeDisabled();
+
+    // Close puts it away, and with no control left on the line the keyboard goes to the list.
+    await userEvent.click(within(form).getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(within(list).queryByRole("form")).toBeNull());
+    expect(answerControl(list)).toBeNull();
+    await waitFor(() => expect(list).toHaveFocus());
+    expect(asked("answer_task_question")).toEqual([]);
+  });
+
   it("keeps the form and what was typed when the task reports under the person", async () => {
     core({ lines: ASKING });
     render(<App />);
@@ -1116,6 +1202,19 @@ describe("answering a task's question from the Activity tab (#1496)", () => {
       "talk ended before it was handed this answer.",
     );
     expect(within(list).getAllByTestId("activity-unread")).toHaveLength(1);
+  });
+
+  it("takes Answer away when the task's chat closes while the tab is open", async () => {
+    let open = [STEWARD, TALK];
+    core({ lines: ASKING, open: () => open });
+    render(<App />);
+    const list = await opened();
+    expect(answerControl(list)).not.toBeNull();
+
+    open = [STEWARD];
+    await act(() => emit("chat-stop", { plane: PLANE, session: 7, phase: "stopped" }));
+
+    await waitFor(() => expect(answerControl(list)).toBeNull());
   });
 
   it("stops offering Answer when a press finds the task's chat closed", async () => {

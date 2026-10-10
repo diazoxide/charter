@@ -6797,13 +6797,20 @@ h2.sidebar-title .node-icon {
   font-size: 0.8rem;
 }
 
-/* A file another task's report also names (V100-68): a warning's mark and the sentence. */
+/* A file another task's report also names (V100-68): a warning's mark and the sentence. The
+   mark is in the waiting state's colour, held to 3:1 as a mark; the sentence is prose, in
+   primary text, as `state.waiting` on a view's `surface.raised` is 4.19 in the light theme. */
 .activity-shared {
   display: flex;
   grid-column: 3;
   gap: 0.3rem;
   align-items: center;
   margin: 0;
+  color: var(--text-primary);
+}
+
+.activity-shared > svg {
+  flex: none;
   color: var(--state-waiting);
 }
 

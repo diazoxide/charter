@@ -4,6 +4,8 @@ import {
   activityView,
   alsoSaid,
   answerable,
+  askAgain,
+  chatsOn,
   closedWhy,
   heard,
   namedByOthers,
@@ -345,5 +347,44 @@ describe("the questions the person may answer (#1496)", () => {
     expect(closed({ dispatch: "01K6D1", n: 2, kind: "report" })).toBe(
       "talk has ended, so an answer would reach no turn of its work.",
     );
+  });
+});
+
+describe("following the window's open chats (#1457)", () => {
+  const chats = new Map<string, number | null>([
+    ["01K6STEWARD", 3],
+    ["01K6TALK", 7],
+    ["01K6LINT", null],
+    ["01K6ELSEWHERE", 40],
+  ]);
+
+  it("knows each chat's session by its newest line", () => {
+    expect(
+      chatsOn(
+        drawn([
+          line({ dispatch: "d1", n: 0, from_session: 7 }),
+          line({ dispatch: "d1", n: 1, from_key: "01K6STEWARD", from_session: 3 }),
+          line({ dispatch: "d1", n: 2, from_session: null }),
+        ]),
+      ),
+    ).toEqual(
+      new Map([
+        ["01K6TALK", null],
+        ["01K6STEWARD", 3],
+      ]),
+    );
+  });
+
+  it("asks again of a chat whose session left the window's chats, and of no other", () => {
+    expect(askAgain(chats, new Set([3, 7]), new Set([3]))).toEqual(["01K6TALK"]);
+  });
+
+  it("asks of no chat the window never held, nor while nothing went", () => {
+    expect(askAgain(chats, new Set([3, 7]), new Set([3, 7]))).toEqual([]);
+    expect(askAgain(chats, new Set([3, 7, 9]), new Set([3, 7]))).toEqual([]);
+  });
+
+  it("asks again of a chat known closed where a chat came in: it may be the one back", () => {
+    expect(askAgain(chats, new Set([3, 7]), new Set([3, 7, 12]))).toEqual(["01K6LINT"]);
   });
 });
