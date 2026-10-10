@@ -1427,6 +1427,20 @@ Two rules hold for the whole area and are not repeated per file:
   text that is not a JSON object. Neither changes who owns the manifest: one a hand wrote is
   written unstamped (Edit as JSON's text byte for byte), and one charter wrote, or a first one,
   is stamped again.
+  **Edit as JSON also refuses** a `name` other than the workspace's folder, and `repos` that is
+  not a list of `{"name": …}` records, unless the file already held that exact value
+  (`settings::workspace::manifest_refusals`, #1292). A row's `branch`, where there is one, must
+  be a name git would take as a branch's (`git check-ref-format --branch`): not starting with
+  `-`, not `@`, not a full `refs/…` name. `HEAD` is let through, since `snapshot` records it for a
+  repo with no branch checked out.
+- **The workspace's lock** (#1292): every purlis writer of `workspace.json` (the Settings
+  tab's two saves, clone and drop, snapshot, fork, rename, and the scaffold that birth and
+  reinit write) takes the lock on the workspace's directory (`Workspace::manifest_lock`,
+  `rewrite::Lock`) before it reads the manifest, and holds it until the write, so two writers at
+  once never lose each other's change. The folder is checked again once the lock is held: if a
+  `workspace rename` or a removal took it away while the writer waited, the writer refuses
+  rather than make `workspaces/<old>` again. A workspace folder that is a link to another
+  folder is refused by every writer, in a sentence of its own; purlis never follows the link.
 - **Read by:** `workspace.read_manifest` (`charter/workspace.py:1500`), `manifest_owner`
   (`charter/workspace.py:1556`), `restore` (`charter/commands_workspace.py:955`), `fork`
   (`charter/commands_workspace.py:1709`), `merge_repo_rows` (`charter/workspace.py:1739`),
