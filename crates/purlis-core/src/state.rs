@@ -126,6 +126,12 @@ pub struct Detail {
     /// older hook's does, takes nothing away.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub unattended: bool,
+    /// On a `Stop`: the harness said helpers of the chat's own are still at work in the
+    /// background and will wake it ([`crate::hookwire::helpers_at_work`], #1626), so the turn
+    /// has not handed the chat to the person. Absent from an older hook, and from a harness
+    /// that does not say, which reads as no: the end of the turn is the person's, as before.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub helpers_at_work: bool,
     /// On a `SessionStart`: the model the harness said the session runs on, as its provider
     /// names it (Claude Code's payload carries `model`). What a commit's `Assisted-by` names
     /// once the app has recorded it for the chat (ADR 0087 §6, #1021). Absent where the harness
@@ -268,6 +274,7 @@ impl Event {
             Self::UserPromptSubmit => Said::Turn(Turn::Began),
             Self::Notification => Said::Ask(Ask::default()),
             Self::SubagentStop => Said::Item(Item::ChildEnded),
+            Self::Stop if detail.helpers_at_work => Said::Turn(Turn::AwaitsItsHelpers),
             Self::Stop => Said::Turn(Turn::Ended),
             Self::SessionEnd => Said::Session(match detail.ending {
                 Ending::Cleared => Session::ClearedAway,
@@ -582,6 +589,10 @@ impl Chat {
     ///   says `waiting on n tasks`. A task paused on a question to the chat that dispatched it
     ///   waits on that chat's answer, and its row says `asking <chat>`. None of the three is
     ///   an item ([`Waits`], [`Chat::heard_while`]).
+    /// - **A turn that ends while the harness's own helpers work in the background is no end**
+    ///   (#1626): the harness said they will wake it ([`Turn::AwaitsItsHelpers`]), so the chat
+    ///   is still working and nothing is raised. The turn their end wakes is the one whose end
+    ///   is the person's. A harness that does not say hands the person every end, as before.
     /// - **A chat that waited on its tasks becomes an item only once every one of them has
     ///   reported or ended and it has then stopped with nothing to do**: it is typed a line
     ///   when a report lands, reads it in a turn of its own, and that turn's end is the item.
@@ -854,6 +865,16 @@ impl Chat {
                     (false, true) => self.held = true,
                     (false, false) => self.needs_you = true,
                 }
+                self.asking = false;
+            }
+            // **Not the falling edge** (#1626): its helpers are still at work in the
+            // background and the harness wakes it when they finish, so it is working and the
+            // next move is nobody's yet. Nothing is raised and nothing it already needed the
+            // person for goes. The turn after their end is the one whose `Stop` is the edge,
+            // and a harness that wakes it on no such turn still nudges it once it sits idle
+            // (Claude Code's `idle_prompt`, which waits for its background agents).
+            Said::Turn(Turn::AwaitsItsHelpers) => {
+                self.state = State::Running;
                 self.asking = false;
             }
             // Emphatically not `Stop`: a dispatched sub-agent finishing does not end the
@@ -1756,6 +1777,34 @@ mod tests {
         assert!(chat.reported(Event::Stop));
         assert_eq!(chat.state(), State::Waiting);
         assert!(chat.needs_you());
+    }
+
+    #[test]
+    fn a_stop_while_its_helpers_work_keeps_the_chat_working_and_keeps_what_it_needed() {
+        // #1626: the harness wakes it when its helpers finish, so this `Stop` is no edge.
+        let helpers = Detail {
+            helpers_at_work: true,
+            ..Detail::default()
+        };
+        assert_eq!(
+            Event::Stop.said(helpers),
+            Said::Turn(Turn::AwaitsItsHelpers)
+        );
+        let mut chat = Chat::new();
+        chat.reported(Event::UserPromptSubmit);
+        chat.commit_refused("a refused commit");
+
+        chat.reported_from(Event::Stop, helpers);
+
+        assert_eq!(chat.state(), State::Running);
+        assert!(
+            chat.needs_you(),
+            "what it already needed the person for went"
+        );
+        assert!(!chat.held());
+        // The turn after its helpers' end ends, with nothing in flight: the person's move.
+        chat.reported(Event::Stop);
+        assert_eq!(chat.state(), State::Waiting);
     }
 
     #[test]
