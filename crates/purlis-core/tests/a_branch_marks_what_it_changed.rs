@@ -204,6 +204,16 @@ fn following_an_upstream(f: &support::Fixture, remote: &str) {
     support::git(&f.clone, &["checkout", "-q", "main"]);
     support::git(&f.clone, &["branch", "-q", "-D", "elsewhere"]);
     f.commit(&f.clone, "local");
+    // The fetch refspec a clone writes: the upstream is found through it, as git finds it
+    // (#1130). Nothing is ever fetched.
+    support::git(
+        &f.clone,
+        &[
+            "config",
+            &format!("remote.{remote}.fetch"),
+            &format!("+refs/heads/*:refs/remotes/{remote}/*"),
+        ],
+    );
     support::git(&f.clone, &["config", "branch.main.remote", remote]);
     support::git(
         &f.clone,
