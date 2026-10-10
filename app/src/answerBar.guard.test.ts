@@ -73,6 +73,24 @@ export function handBuilt({ name, text }: { name: string; text: string }): strin
   ].map((one) => `${name}: ${one}`);
 }
 
+/** The text of every `<SettingActions>` row in `source`: a form's buttons, as the form writes them. */
+const formRows = (source: string) =>
+  [...source.matchAll(/<SettingActions>([\s\S]*?)<\/SettingActions>/g)].map(([, row]) => row ?? "");
+
+/**
+ * **What ends something is asked, never filled in** (D-1210-8). A confirm whose only field is the
+ * typed name of what it ends is a question, so it ends in the bar, the act last; `SettingActions`
+ * ends the forms that make or change something (V89j). A dialog's file that puts an `ends-it` act
+ * in a form's row is drawing a confirm as a form, and this names it, as `file: ends-it`.
+ */
+export function endsInAForm({ name, text }: { name: string; text: string }): string[] {
+  if (!drawsADialog(text)) return [];
+  return formRows(text)
+    .flatMap(classNames)
+    .filter((one) => one === "ends-it")
+    .map((one) => `${name}: ${one}`);
+}
+
 describe("a question dialog's answer bar", () => {
   it("is built by hand in no dialog", () => {
     const all = sources();
@@ -81,6 +99,12 @@ describe("a question dialog's answer bar", () => {
       expect.arrayContaining([BAR, "QuitWarning.tsx", "DeleteWorkspace.tsx"]),
     );
     expect(all.flatMap(handBuilt)).toEqual([]);
+  });
+
+  it("ends every dialog's confirm that ends something, never a form's row", () => {
+    const all = sources();
+    expect(all.map(({ name }) => name)).toContain("DeleteVault.tsx");
+    expect(all.flatMap(endsInAForm)).toEqual([]);
   });
 
   it("is still drawn by the bar, with the class the stylesheet lays out", () => {
@@ -126,5 +150,37 @@ describe("a question dialog's answer bar", () => {
     expect(handBuilt({ name: "Opener.tsx", text: `<div className="doing">` })).toEqual([]);
     // `answer-question` is a different class, and `answer` alone is the bar's.
     expect(handBuilt({ name: "X.tsx", text: `<div className="answer-question" />` })).toEqual([]);
+  });
+
+  it("would catch a dialog's confirm drawn as a form again", () => {
+    const dialog = `import * as AlertDialog from "@radix-ui/react-alert-dialog";\n`;
+    const row = (inside: string) => `<SettingActions>\n${inside}\n</SettingActions>`;
+    const ends = `<button type="submit" className="ends-it" tabIndex={0}>Delete</button>`;
+    // DeleteVault's old shape: the act first, inside the form's row.
+    expect(endsInAForm({ name: "X.tsx", text: `${dialog}${row(ends)}` })).toEqual([
+      "X.tsx: ends-it",
+    ]);
+    // Last in the row is still a form's row, and a class held in an expression still counts.
+    expect(
+      endsInAForm({
+        name: "X.tsx",
+        text: `import { Dialog } from "@radix-ui/react-dialog";\n${row(
+          `<button>Cancel</button>\n<button className={busy ? "ends-it busy" : "ends-it"}>Go</button>`,
+        )}`,
+      }),
+    ).toEqual(["X.tsx: ends-it", "X.tsx: ends-it"]);
+    // In the bar it is where it belongs.
+    expect(endsInAForm({ name: "X.tsx", text: `${dialog}<AnswerBar>${ends}</AnswerBar>` })).toEqual(
+      [],
+    );
+    // A form's row that makes something, beside a confirm drawn in the bar, is a form.
+    expect(
+      endsInAForm({
+        name: "X.tsx",
+        text: `${dialog}${row(`<button type="submit">Rename</button>`)}<AnswerBar>${ends}</AnswerBar>`,
+      }),
+    ).toEqual([]);
+    // A page, not a dialog, keeps its own rows: NotCloned and WorkspaceRepos draw none.
+    expect(endsInAForm({ name: "NotCloned.tsx", text: row(ends) })).toEqual([]);
   });
 });

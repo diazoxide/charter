@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import * as AlertDialog from "@radix-ui/react-alert-dialog";
-import { Field, SettingActions, SettingRow } from "./settings/components";
+import { AnswerBar } from "./AnswerBar";
+import { Field, SettingRow } from "./settings/components";
 
 /** What a vault holds, as `vault_open` said it: its provider and its secrets' NAMES. */
 export type VaultHolds = { provider: string; secrets: readonly string[] };
@@ -28,6 +29,12 @@ export type VaultHolds = { provider: string; secrets: readonly string[] };
  * answer destroys something, its content is `role="alertdialog"`, and Escape is Cancel. The
  * keyboard lands in the name box, because typing is the answer this dialog asks for, and a stray
  * Return there deletes nothing until the name is right.
+ *
+ * **It is a question, so it ends in the answer bar** (D-1210-8). Its one field is the typed name
+ * of what it ends: that confirms an answer, it makes or changes nothing, so the dialog ends as
+ * `DeleteWorkspace` does — Cancel first, the delete last at the trailing edge — and not in a
+ * form's `SettingActions` (V89j), which ends the forms that make or change something.
+ * `answerBar.guard.test.ts` keeps an `ends-it` act out of any dialog's form row.
  */
 export function DeleteVault({
   vault,
@@ -118,17 +125,19 @@ export function DeleteVault({
               </p>
             )}
 
-            <SettingActions>
-              {/* `tabIndex={0}` on both, per `docs/ui-primitives.md` (charter-app#186). */}
-              <button type="submit" className="ends-it" tabIndex={0} disabled={!ready}>
-                Delete vault
-              </button>
+            {/* A question's bar, not a form's row (D-1210-8): the way out first, the delete last
+                at the trailing edge. `tabIndex={0}` on both, per `docs/ui-primitives.md`
+                (charter-app#186). */}
+            <AnswerBar>
               <AlertDialog.Cancel asChild>
                 <button type="button" tabIndex={0} disabled={deleting} onClick={onCancel}>
                   Cancel
                 </button>
               </AlertDialog.Cancel>
-            </SettingActions>
+              <button type="submit" className="ends-it" tabIndex={0} disabled={!ready}>
+                Delete vault
+              </button>
+            </AnswerBar>
           </form>
         </AlertDialog.Content>
       </AlertDialog.Portal>

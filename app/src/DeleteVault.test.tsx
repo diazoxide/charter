@@ -93,6 +93,24 @@ describe("the delete-vault dialog", () => {
     expect(button).toBeDisabled();
   });
 
+  /**
+   * **D-1210-8:** a confirm whose only field is the typed name of what it ends is a question, not
+   * a form, so it ends in the answer bar: the way out first, the act that cannot be taken back
+   * last, at the trailing edge, as `DeleteWorkspace` beside it does.
+   */
+  it("ends in the answer bar, with the way out first and the delete last", () => {
+    const { dialog, button } = draw();
+    const bar = button.closest(".answer");
+    expect(bar).not.toBeNull();
+    expect(dialog.querySelector(".ui-setting-actions")).toBeNull();
+    expect(
+      within(bar as HTMLElement)
+        .getAllByRole("button")
+        .map((one) => one.textContent),
+    ).toEqual(["Cancel", "Delete vault"]);
+    expect(button).toHaveClass("ends-it");
+  });
+
   it("puts the keyboard in the name box, and Escape deletes nothing", async () => {
     const { del, cancel, box } = draw();
     expect(box).toHaveFocus();

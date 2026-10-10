@@ -6,6 +6,10 @@ import type { ReactNode } from "react";
  * confirm. A *form* ends in `SettingActions` instead (V89j); this is its counterpart for a
  * question, and it is not a settings piece.
  *
+ * **A confirm that asks for the name typed back is still a question** (D-1210-8). Its one field
+ * confirms the answer and makes or changes nothing, so it ends here, like `DeleteVault`; a dialog
+ * never puts an `ends-it` act in a form's `SettingActions`.
+ *
  * **The row is the bar's; everything in it is the dialog's.** The buttons are native `<button>`s
  * (or Radix's own `Cancel` and `Action` around one) with their own `type`, `tabIndex={0}`,
  * `disabled` and `onClick`, in the order the dialog writes them. That order is the rule
