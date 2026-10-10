@@ -168,7 +168,7 @@ which reads the string literals of named places in the Rust source and builds no
 - the native menu's and the tray's labels;
 - the core's `in_window` sentences, and what an `in_window` body calls in its own file: a
   helper function, a `const`, and `self.to_string()`, read as the type's `Display` and its
-  variants' `#[error(…)]` text. A call into another module is either read or named in
+  variants' `#[error(…)]` text. A call into another module is either read (below) or named in
   `NOT_FOLLOWED` with why it holds no copy, or the check fails;
 - the errors of every `#[tauri::command]` in `app/src-tauri/src`: the literals inside its
   `Err(…)`, `map_err(…)`, `ok_or(…)` and `ok_or_else(…)`, in its body and in every function of
@@ -182,9 +182,23 @@ A format string's `{name}` reads as `…`. A new place the window shows Rust cop
 its `PLACES`. A fault found there that cannot be fixed at once goes in its `KEPT`, with why, and
 on #1156's checklist.
 
-Outside the check: copy assembled from parts at run time, and an error the core writes for the
-terminal that a command passes on as it was said (`map_err(|err| err.to_string())`). That text
-reaches the window, but the source cannot tell it from terminal-only `Display` text. Such an
-error gets an `in_window` of its own when the window needs its words, as `worktree::Refusal`
-has. DS-8's audit of every surface reads what the check cannot, and a review reads every new
-string against this page.
+A helper or a `const` of another module, in the app or the core, is read too when its words
+are the sentence: a `const`, or a function that returns a `String` or a `&str`, found by the
+call's path (`crate::dispatchaway::refused`, `purlis_core::dispatchplace::CHANGED_SINCE_ASKED`)
+or the file's `use`s. A call the check cannot find is named in `NOT_FOLLOWED` with why it holds
+no copy.
+
+**An error the core writes and a command passes on as it was said**
+(`map_err(|err| err.to_string())`) reaches the window word for word, so the check reads it
+where it is written: it finds the call the error comes from, reads the error type its signature
+names, and holds that type's `Display` and `#[error(…)]` text to the same rules, every
+variant's. A `String` error is read as its own `Err(…)` literals. What the check cannot read,
+such as an error the operating system words or a method whose receiver it cannot tell, is
+named in `NOT_READ` with why. A core sentence that is right for the terminal but uses a word
+the window retires ("worktree", "plane") is listed sentence by sentence in `TERMINAL_WORDS`,
+with the ticket that gives the window its own words: an `in_window`, as `worktree::Refusal`
+has.
+
+Outside the check: copy assembled from parts at run time, and a closure a caller passes in.
+DS-8's audit of every surface reads what the check cannot, and a review reads every new string
+against this page.

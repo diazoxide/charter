@@ -18,16 +18,27 @@ import { copyFaults, retiredTerms } from "./copy";
  * ids, paths and `Display` text for the terminal, and only the places below are the window's.
  * A place that matches nothing fails, so a rename cannot drop a file out of the check.
  *
- * Two kinds of place are read beyond a named span (#1156, 2026-10-09):
+ * Three kinds of place are read beyond a named span (#1156):
  * - **A command's error.** A `#[tauri::command]` that fails answers the window with a `String`,
  *   and the window shows it word for word. So the literals of every `Err(…)`, `map_err(…)`,
  *   `ok_or(…)` and `ok_or_else(…)` inside a command, in every file of `app/src-tauri/src`, are
  *   copy. A command's file is found by its attribute, not listed, so a new one is read at once.
  *   So are those of every function of the same file a command calls, and the helpers and
- *   `const`s of the file that build them, called or passed by name (#1156, 2026-10-10).
- * - **What an `in_window` body calls.** A helper function or a `const` in the same file is read
- *   as if its text were inline. A call this check cannot read (a helper in another module) is
- *   named in `NOT_FOLLOWED` with why it holds no copy, or the check fails.
+ *   `const`s that build them, called or passed by name (2026-10-10).
+ * - **What an `in_window` body or a command's error calls.** A helper function or a `const` of
+ *   the same file is read as if its text were inline. One of another module of the app or the
+ *   core is found by the call's path and the file's `use`s, and read when its words are the
+ *   sentence: a `const`, or a function that returns a `String` or a `&str` (2026-10-11, the
+ *   2026-10-10 comment's item 2). A call the check cannot find is named in `NOT_FOLLOWED` with
+ *   why it holds no copy, or the check fails.
+ * - **A core error a command passes on as it was said** (`.map_err(|e| e.to_string())`, the
+ *   2026-10-10 comment's item 1). The call it comes from is found as above (a method by its
+ *   name, or by `METHODS`), and its signature names the error: a type's `Display` and
+ *   `#[error(…)]` text is read, every variant's, and a `String` error's own `Err(…)` literals,
+ *   with what that function passes on in turn. What cannot be read (an error the operating
+ *   system words, a call not found) is named in `NOT_READ`, or the check fails. A core
+ *   sentence right for the terminal with a word the window retires is named, with the ticket
+ *   that gives the window its own words, in `TERMINAL_WORDS`.
  */
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -43,6 +54,25 @@ const read = (path: string) => {
 
 /** A string literal in a Rust source: its value as Rust reads it, and where it starts. */
 type Literal = { text: string; start: number; line: number };
+
+/** Where a span opens (a block's `{` or a call's `(`) and closes, in a source. */
+type Span = [number, number];
+/** A span of one file of the tree. */
+type Reach = { file: string; span: Span };
+
+/**
+ * **The Rust sources the check reads**: the app's and the core's on disk, or a fixture's.
+ * `paths` are where a call or a type is looked for, and `crates` names each crate a path may
+ * start with (`purlis_core::…`) by its `src`.
+ */
+type Tree = {
+  paths: readonly string[];
+  read: (path: string) => string;
+  crates: Readonly<Record<string, string>>;
+};
+
+/** A file's source with its comments and literals blanked out, read once. */
+const maskedOf = (tree: Tree, file: string) => rustLiterals(tree.read(file)).masked;
 
 /** A format string's `{name}` is read as `…`, as a TypeScript template's `${…}` is; `{{` is `{`. */
 function placeheld(text: string): string {
@@ -194,8 +224,13 @@ type Place = {
    * in turn: where a command's error is built when the command passes it on with `?`.
    */
   through?: boolean;
-  /** Also read the helpers and `const`s of the same file that a span calls or names. */
+  /**
+   * Also read the helpers and `const`s that a span calls or names: of the same file, or of
+   * another module of the app or the core, found by the call's path or the file's `use`s.
+   */
   follow?: boolean;
+  /** And the text of each core error a `within` span passes on as it was said (`PASSED_ON`). */
+  passedOn?: boolean;
 };
 
 /** A panel's empty state: its headline and body. The offer is a catalogue row's id. */
@@ -222,9 +257,9 @@ function rustFiles(dir: string): string[] {
 
 /**
  * The errors of each command in `file`: in its body and in every function of the same file it
- * calls, and the helpers and `const`s of the same file that build them (`Err(gone(id))`,
- * `.map_err(not_kept)`). A call into another module is not followed and need not be named: it
- * passes on an error the core wrote, which is #1156's own line.
+ * calls, and the helpers and `const`s that build them (`Err(gone(id))`, `.map_err(not_kept)`),
+ * in this file or another module (`Err(crate::dispatchaway::refused(…))`, #1156 2026-10-10
+ * item 2); and the text of each core error it passes on as it was said (item 1).
  */
 const commandErrors = (file: string): Place => ({
   file,
@@ -233,12 +268,26 @@ const commandErrors = (file: string): Place => ({
   through: true,
   opener: ERRORS,
   follow: true,
+  passedOn: true,
 });
 
 /** One place per file that holds a `#[tauri::command]`: the errors of each of its commands. */
 const COMMAND_PLACES: readonly Place[] = rustFiles(COMMANDS_DIR)
   .filter((file) => read(file).includes("#[tauri::command"))
   .map(commandErrors);
+
+/** Where the core is written. */
+const CORE_DIR = "crates/purlis-core/src";
+
+/** A test module's file: never where a call the window makes is written. */
+const isTests = (path: string) => /(?:^|[/_])tests?\.rs$|\/tests?\//.test(path);
+
+/** The app's and the core's sources, without their tests: where calls and types are looked for. */
+const REPO: Tree = {
+  paths: [...rustFiles(COMMANDS_DIR), ...rustFiles(CORE_DIR)].filter((path) => !isTests(path)),
+  read,
+  crates: { purlis_core: CORE_DIR },
+};
 
 const PLACES: readonly Place[] = [
   {
@@ -350,15 +399,61 @@ const RETIRED_TERM_DEBT: Readonly<Record<string, string>> = {
 };
 
 /**
- * **Calls an `in_window` body makes that this check does not read**, as `path::name` or `name`,
- * each with why it holds no copy. A call missing here, to a helper outside the file, fails the
- * check: read it inline, or name it here.
+ * **Calls an `in_window` body or a command's error makes that this check cannot find**, as
+ * `file: call` (the file the call is written in), each with why it holds no copy. A call
+ * missing here fails the check: make it one the check finds, or name it here. A call into a
+ * crate outside the app and the core (`std::fs::read`) is never named: it writes no words of
+ * purlis's.
  */
 const NOT_FOLLOWED: Readonly<Record<string, string>> = {
-  "crate::shown::short": "shortens a name the person or a chat gave; it writes no words",
-  "crate::dispatchunattended::SETTINGS":
-    "the path to a Settings group, its labels written as they read; reached only through " +
-    "`say`, for a chat nobody is at, which the window never shows",
+  "app/src-tauri/src/curation.rs: not_drawn":
+    "a parameter: each caller passes its own closure, written in its own body (follow-up: " +
+    "read a closure a command passes, #1156)",
+  "app/src-tauri/src/dispatchaway.rs: tell":
+    "the window's listener for the away refusals, set once at start; it sends data, not words",
+  "app/src-tauri/src/dispatchaway.rs: with":
+    "a parameter: the closure `reading` and `grounded` run over the ground they read",
+  "app/src-tauri/src/dispatchaway.rs: Shown::default": "a derived Default: it writes no words",
+};
+
+/** Why a ticket is named beside the terminal's words: the core sentence moves with it. */
+const CONTAIN_SENTENCE =
+  "the core's refusal of a write outside a project's data folders, written for the terminal " +
+  '("control plane"); the window shows it when it opens a persona\'s file. It moves with ' +
+  "the CLI's copy (#602), or gets a sentence of its own in an in_window (#1156 follow-up)";
+
+/**
+ * **Core sentences a command passes on as they were said, with a word the guide retires that
+ * is right for the terminal** (#1156, #602), as `path: "text"`, each with why and the ticket
+ * that gives the window its own words. Empty is the goal; adding one needs both.
+ */
+const TERMINAL_WORDS: Readonly<Record<string, string>> = {
+  "crates/purlis-core/src/contain.rs: \"'\u2026' resolves to '\u2026', outside the directories a control plane keeps its data in (persona-state, personas, workspaces). A committed symlink there redirects the \u2026, so purlis follows a link that lands inside them and refuses one that leaves\"":
+    CONTAIN_SENTENCE,
+};
+
+/**
+ * **A core error a command passes on as it was said that this check does not read**, as
+ * `file: call` (a call it cannot find, or whose error it cannot tell) or as the error type
+ * (one written outside purlis), each with why. A new one fails the check until it is read or
+ * named here.
+ */
+const NOT_READ: Readonly<Record<string, string>> = {
+  "io::Error":
+    'the operating system\'s own words ("No such file or directory (os error 2)"), not ' +
+    "purlis's: a command whose window needs more says so around it",
+};
+
+/**
+ * **The method a command passes an error on from, where its name is not enough**: several
+ * methods of that name answer a `Result`, and the receiver's type is not read. As
+ * `file: .method` (the command's file), naming the file of the one it calls.
+ */
+const METHODS: Readonly<Record<string, string>> = {
+  "app/src-tauri/src/lib.rs: .personas": "crates/purlis-core/src/workspaces.rs",
+  "app/src-tauri/src/personas.rs: .personas": "crates/purlis-core/src/workspaces.rs",
+  "app/src-tauri/src/piecefiles.rs: .place": "crates/purlis-core/src/files.rs",
+  "app/src-tauri/src/piecefiles.rs: .open": "crates/purlis-core/src/files.rs",
 };
 
 /** Words that read like a call before `(` and are not one. */
@@ -393,90 +488,571 @@ function callsIn(masked: string, [from, to]: [number, number]): string[] {
  * and the `#[error(…)]` text of each of its variants (thiserror's `Display`). Every variant's
  * text is read, though an arm may reach only some: one rule for all, and none is missed.
  */
-function displayOf(masked: string, at: number): [number, number][] {
+function displayOf(masked: string, at: number): Span[] {
   const impls = [...masked.slice(0, at).matchAll(/\bimpl(?:<[^>]*>)?\s+(\w+)(?:<[^>]*>)?\s*\{/g)];
   const type = impls.at(-1)?.[1];
-  if (type === undefined) return [];
-  const display = spans(masked, new RegExp(`\\bDisplay for ${type}\\b[^{;]*\\{`, "g"));
-  const defined = spans(masked, new RegExp(`\\benum ${type}\\b[^{;]*\\{`, "g"));
-  const errors = spans(masked, /#\[error\(/g).filter(([open]) =>
-    defined.some(([from, to]) => open > from && open < to),
-  );
-  return [...display, ...errors];
+  return type === undefined ? [] : textOfType(masked, type);
 }
 
 /**
- * Where a call or a name is written in the same file: each `fn name`'s body, a `const`'s value
- * up to its `;`, or, for `self.to_string()`, the type's `Display` (`displayOf`). Empty when the
- * file does not write it.
+ * What a type says when it is shown: its `Display`'s `fmt`, and its `#[error(…)]` text, on the
+ * type itself and on each variant. Empty when `masked` does not define it.
  */
-function writtenAt(masked: string, call: string, at: number): [number, number][] {
-  if (call === "self.to_string") return displayOf(masked, at);
-  const name = call.replace(/^(?:Self::|self\.)/, "");
-  if (name.includes("::")) return [];
+function textOfType(masked: string, type: string): Span[] {
+  const display = spans(masked, new RegExp(`\\bDisplay for ${type}\\b[^{;]*\\{`, "g"));
+  const errors = spans(masked, /#\[error\(/g);
+  const defined = [...masked.matchAll(new RegExp(`\\b(?:enum|struct)\\s+${type}\\b`, "g"))];
+  const said = defined.flatMap((one) => {
+    const at = one.index ?? 0;
+    // The attributes above it: back to the item before, which ends in `;` or `}`.
+    const above = Math.max(masked.lastIndexOf(";", at), masked.lastIndexOf("}", at));
+    const body = spans(masked, new RegExp(`\\benum\\s+${type}\\b[^{;]*\\{`, "g")).find(
+      ([open]) => open > at,
+    );
+    return errors.filter(
+      ([open]) => (open > above && open < at) || (body && open > body[0] && open < body[1]),
+    );
+  });
+  return [...display, ...said];
+}
+
+/**
+ * Where a call or a name is written in `masked` itself: each `fn name`'s body and each closure
+ * bound to it with `let`, or a `const`'s or `static`'s value up to its `;`. Empty when the file
+ * does not write it.
+ */
+function writtenAt(masked: string, name: string): Span[] {
   if (/^[A-Z]/.test(name)) {
-    return [...masked.matchAll(new RegExp(`\\bconst ${name}\\b`, "g"))].map((one) => {
+    return [...masked.matchAll(new RegExp(`\\b(?:const|static) ${name}\\b`, "g"))].map((one) => {
       const at = one.index ?? 0;
       const end = masked.indexOf(";", at);
       return [at, end < 0 ? masked.length : end];
     });
   }
-  return spans(masked, new RegExp(`\\bfn ${name}\\b[^{;]*\\{`, "g"));
+  return [
+    ...spans(masked, new RegExp(`\\bfn ${name}\\b[^{;]*\\{`, "g")),
+    ...closures(masked, name),
+  ];
+}
+
+/** Each `let name = |…| …;` in `masked`: a closure a body calls by name, to its statement's end. */
+function closures(masked: string, name: string): Span[] {
+  return [...masked.matchAll(new RegExp(`\\blet\\s+${name}\\s*=\\s*(?:move\\s*)?\\|`, "g"))].map(
+    (one) => {
+      const at = one.index ?? 0;
+      let depth = 0;
+      for (let end = at; end < masked.length; end += 1) {
+        if ("([{".includes(masked[end])) depth += 1;
+        if (")]}".includes(masked[end])) depth -= 1;
+        if (depth < 0 || (depth === 0 && masked[end] === ";")) return [at, end];
+      }
+      return [at, masked.length];
+    },
+  );
+}
+
+/** The crate's `src` a file is in, and its module path there (`work/log.rs` is `work::log`). */
+function rootOf(path: string): string {
+  return /^(.*?\/src)\//.exec(path)?.[1] ?? "";
+}
+function modulePath(path: string): string[] {
+  const root = rootOf(path);
+  const mods = path
+    .slice(root === "" ? 0 : root.length + 1)
+    .replace(/\.rs$/, "")
+    .split("/");
+  if (["mod", "lib", "main"].includes(mods.at(-1) ?? "")) mods.pop();
+  return mods;
+}
+function fileOfModule(tree: Tree, root: string, mods: readonly string[]): string | undefined {
+  const name = mods.join("::");
+  return tree.paths.find((path) => rootOf(path) === root && modulePath(path).join("::") === name);
+}
+
+/** What each name a file's `use`s bring in stands for, as a whole path (`a::b::{c, d as e}`). */
+function importsOf(masked: string): Map<string, string[]> {
+  const known = imported.get(masked);
+  if (known !== undefined) return known;
+  const found = new Map<string, string[]>();
+  const expand = (tree: string, prefix: string[]) => {
+    const brace = tree.indexOf("{");
+    if (brace < 0) {
+      const [path, alias] = tree.split("@");
+      const segs = [...prefix, ...path.split("::").filter(Boolean)];
+      if (segs.at(-1) === "self") segs.pop();
+      const name = alias ?? segs.at(-1);
+      if (name !== undefined && name !== "*") found.set(name, segs);
+      return;
+    }
+    const head = tree.slice(0, brace).split("::").filter(Boolean);
+    let depth = 0;
+    let from = brace + 1;
+    for (let at = brace + 1; at < tree.length; at += 1) {
+      if (tree[at] === "{") depth += 1;
+      if (tree[at] === "}" && depth > 0) depth -= 1;
+      else if ((tree[at] === "," && depth === 0) || (tree[at] === "}" && depth === 0)) {
+        if (at > from) expand(tree.slice(from, at), [...prefix, ...head]);
+        from = at + 1;
+      }
+    }
+  };
+  for (const one of masked.matchAll(/\buse\s+([^;]+);/g)) {
+    expand(one[1].replace(/\s+as\s+/g, "@").replace(/\s+/g, ""), []);
+  }
+  imported.set(masked, found);
+  return found;
+}
+const imported = new Map<string, Map<string, string[]>>();
+
+/**
+ * The crate and module a path's qualifier names, seen from `from`: `crate::`, `self::`,
+ * `super::`, another crate of the tree by name, a name `from` imports, or a module below it.
+ */
+function moduleOf(
+  tree: Tree,
+  from: string,
+  qual: readonly string[],
+  depth = 0,
+): { root: string; mods: string[] } | null {
+  const [first, ...rest] = qual;
+  const root = rootOf(from);
+  const here = modulePath(from);
+  if (first === undefined || depth > 4) return null;
+  if (first === "crate") return { root, mods: rest };
+  if (first === "self") return { root, mods: [...here, ...rest] };
+  if (first === "super") return { root, mods: [...here.slice(0, -1), ...rest] };
+  if (tree.crates[first] !== undefined) return { root: tree.crates[first], mods: rest };
+  // A module below this one first: a path's head is a module, and a name imported beside it
+  // (`pub use search::{search}`) is a function of the same spelling, in another namespace.
+  if (fileOfModule(tree, root, [...here, first])) return { root, mods: [...here, ...qual] };
+  const path = importsOf(maskedOf(tree, from)).get(first);
+  if (path !== undefined) return moduleOf(tree, from, [...path, ...rest], depth + 1);
+  return null;
+}
+
+/** Of `found`, those outside every `impl` and `trait` block: what `module::name` calls. */
+function freeOf(masked: string, found: Span[]): Span[] {
+  const blocks = spans(masked, /\b(?:impl|trait)\b[^{;]*\{/g);
+  return found.filter(([open]) => !blocks.some(([from, to]) => open > from && open < to));
+}
+
+/** Where `name` is written in the `impl` blocks of `type`: in `file`, else anywhere in its crate. */
+function inImpls(tree: Tree, file: string, type: string, name: string): Reach[] {
+  const opener = new RegExp(
+    `\\bimpl(?:<[^>]*>)?\\s+(?:[\\w:]+\\s+for\\s+)?${type}\\b[^{;]*\\{`,
+    "g",
+  );
+  const inFile = (path: string) => {
+    const masked = maskedOf(tree, path);
+    const impls = spans(masked, opener);
+    return writtenAt(masked, name)
+      .filter(([open]) => impls.some(([from, to]) => open > from && open < to))
+      .map((span) => ({ file: path, span }));
+  };
+  const here = inFile(file);
+  if (here.length > 0) return here;
+  return tree.paths
+    .filter((path) => rootOf(path) === rootOf(file) && tree.read(path).includes(`impl`))
+    .filter((path) => tree.read(path).includes(` ${type}`) && tree.read(path).includes(name))
+    .flatMap(inFile);
 }
 
 /**
- * The spans `place` reads in `masked`, and the calls it could not follow: its opener's spans
- * (inside `within`'s, if it names one, and the functions those call if it goes `through`), then,
- * if it follows, every helper and `const` of the same file they reach.
+ * Where a call `from` makes, or a name it uses, is written: in its own file (`name`,
+ * `Self::name`, `self.name`), or in the module its path names, in this crate or another of the
+ * tree (`crate::a::b`, `purlis_core::a::b`, an imported `a::b`, `Type::name`). Empty when the
+ * check cannot find it.
  */
-function spansOf(masked: string, place: Place): { read: [number, number][]; unread: string[] } {
-  const outer = place.within ? spans(masked, place.within) : null;
-  if (outer !== null && place.through) {
-    const seen = new Set<string>();
-    for (let next = 0; next < outer.length; next += 1) {
-      for (const call of callsIn(masked, outer[next])) {
-        // A function, not a `const`: its own errors are what reach the window.
-        if (seen.has(call) || /^[A-Z]/.test(call)) continue;
-        seen.add(call);
-        outer.push(...writtenAt(masked, call, outer[next][0]));
-      }
-    }
+function writtenIn(tree: Tree, from: string, call: string, at: number, depth = 0): Reach[] {
+  const masked = maskedOf(tree, from);
+  if (call === "self.to_string") return displayOf(masked, at).map((span) => ({ file: from, span }));
+  const segs = call.replace(/^self\./, "Self::").split("::");
+  const name = segs.at(-1) ?? "";
+  const qual = segs.slice(0, -1);
+  if (qual.length === 0 || (qual.length === 1 && qual[0] === "Self")) {
+    const here = writtenAt(masked, name).map((span) => ({ file: from, span }));
+    if (here.length > 0 || qual.length === 1) return here;
+    const path = importsOf(masked).get(name);
+    return path === undefined || depth > 4
+      ? []
+      : writtenIn(tree, from, path.join("::"), at, depth + 1);
   }
-  const read = spans(masked, place.opener).filter(
-    ([open]) => outer === null || outer.some(([from, to]) => open > from && open < to),
-  );
-  const unread = new Set<string>();
-  if (place.follow) {
-    const seen = new Set<string>();
-    for (let next = 0; next < read.length; next += 1) {
-      for (const call of callsIn(masked, read[next])) {
-        if (seen.has(call)) continue;
-        seen.add(call);
-        const at = writtenAt(masked, call, read[next][0]);
-        if (at.length === 0) unread.add(call);
-        read.push(...at);
-      }
-    }
+  const base = moduleOf(tree, from, qual);
+  if (base === null) {
+    // `Type::name` for a type of this file, or one it imports.
+    return /^[A-Z]/.test(qual[0]) && qual.length === 1 ? inImpls(tree, from, qual[0], name) : [];
   }
-  return { read, unread: [...unread] };
+  const type = /^[A-Z]/.test(base.mods.at(-1) ?? "") ? base.mods.pop() : undefined;
+  const file = fileOfModule(tree, base.root, base.mods);
+  if (file === undefined) return [];
+  if (type !== undefined) return inImpls(tree, file, type, name);
+  const there = freeOf(maskedOf(tree, file), writtenAt(maskedOf(tree, file), name)).map((span) => ({
+    file,
+    span,
+  }));
+  if (there.length > 0 || depth > 4) return there;
+  // A re-export: `pub use inner::name;` in the module the path names.
+  const again = importsOf(maskedOf(tree, file)).get(name);
+  return again === undefined ? [] : writtenIn(tree, file, again.join("::"), 0, depth + 1);
 }
+
+/** `outer`, and every function of the same file it calls, and every one those call in turn. */
+function grown(masked: string, outer: Span[]): Span[] {
+  const all = [...outer];
+  const seen = new Set<string>();
+  for (let next = 0; next < all.length; next += 1) {
+    for (const call of callsIn(masked, all[next])) {
+      // A function, not a `const`: its own errors are what reach the window.
+      if (seen.has(call) || /^[A-Z]/.test(call) || call.includes("::")) continue;
+      seen.add(call);
+      all.push(...writtenAt(masked, call.replace(/^self\./, "")));
+    }
+  }
+  return all;
+}
+
+/** The spans of `inner` that open inside one of `outer`. */
+function inside(inner: Span[], outer: Span[]): Span[] {
+  return inner.filter(([open]) => outer.some(([from, to]) => open > from && open < to));
+}
+
+/** What a function returns when its words are the sentence: a `String`, a `&str`, a `Cow<str>`. */
+const SENTENCE =
+  /^(?:String|&(?:'\w+)?str|(?:std::borrow::)?Cow<(?:'\w+,)?str>|impl(?:std::)?(?:fmt::)?Display)$/;
+
+/** Whether `reach` is a `const`'s value or the body of a function that returns a sentence. */
+function isSentence(tree: Tree, { file, span }: Reach): boolean {
+  const masked = maskedOf(tree, file);
+  if (!masked.startsWith("{", span[0])) return true;
+  const returned = returnOf(signatureOf(masked, span[0]));
+  return returned !== null && SENTENCE.test(returned);
+}
+
+/**
+ * Whether `call`, made in `from`, is into a crate outside the tree (`std::fs::read`,
+ * `serde_json::to_string`, `String::new`): code that writes no words of purlis's.
+ */
+function isForeign(tree: Tree, from: string, call: string): boolean {
+  const masked = maskedOf(tree, from);
+  const segs = call.replace(/^self\./, "Self::").split("::");
+  const path = importsOf(masked).get(segs[0]);
+  if (segs.length === 1) return path !== undefined && isForeign(tree, from, path.join("::"));
+  const first = path?.[0] ?? segs[0];
+  if (["crate", "self", "super", "Self"].includes(first)) return false;
+  if (tree.crates[first] !== undefined) return false;
+  if (fileOfModule(tree, rootOf(from), [...modulePath(from), first]) !== undefined) return false;
+  return !new RegExp(`\\b(?:enum|struct|trait|type|mod)\\s+${first}\\b`).test(masked);
+}
+
+/**
+ * Grows `read` by every helper and `const` its spans call or name, and names in `unread` each
+ * call it cannot find. A helper of the same file is read whole, as if inline; one of another
+ * file only when its words are the sentence (a `const`, or a function that returns a `String`
+ * or a `&str`), since any other function there hands back a value, not words. A call into a
+ * crate outside the tree writes no words of purlis's.
+ */
+function follow(tree: Tree, read: Reach[], unread: Set<string>) {
+  const seen = new Set<string>();
+  const had = new Set(read.map(({ file, span }) => `${file}@${span[0]}`));
+  for (let next = 0; next < read.length; next += 1) {
+    const { file, span } = read[next];
+    for (const call of callsIn(maskedOf(tree, file), span)) {
+      if (seen.has(`${file}\n${call}`)) continue;
+      seen.add(`${file}\n${call}`);
+      const at = writtenIn(tree, file, call, span[0]);
+      if (at.length === 0 && !isForeign(tree, file, call)) unread.add(`${file}: ${call}`);
+      for (const one of at) {
+        if (had.has(`${one.file}@${one.span[0]}`)) continue;
+        if (one.file !== file && !isSentence(tree, one)) continue;
+        had.add(`${one.file}@${one.span[0]}`);
+        read.push(one);
+      }
+    }
+  }
+}
+
+/**
+ * **A core error passed on as it was said** (#1156, 2026-10-10 item 1):
+ * `.map_err(|e| e.to_string())` or `.map_err(ToString::to_string)`. The window shows the
+ * error's `Display` word for word, so the type's text is the command's copy.
+ */
+const PASSED_ON =
+  /\.map_err\((?=\s*(?:\|\s*(\w+)\s*\|\s*\1\s*\.\s*to_string\(\s*\)|(?:std::string::)?ToString::to_string)\s*\))/g;
+
+/** What an error is passed on from: a function by its path, or a method (`.personas`). */
+type Callee = { text: string; method: boolean };
+
+/** The `(` that `close` closes, in `masked`; -1 when none does. */
+function openOf(masked: string, close: number): number {
+  let depth = 0;
+  for (let at = close; at >= 0; at -= 1) {
+    if (masked[at] === ")") depth += 1;
+    if (masked[at] === "(") depth -= 1;
+    if (depth === 0) return at;
+  }
+  return -1;
+}
+
+/**
+ * The calls whose error a `.map_err` at `end` passes on, read back through what keeps the error
+ * as it was: `.await`, `?` on an outer result, `.map(…)`, an earlier `.map_err(…)` of a join,
+ * a block's last expression, and `spawn_blocking`'s closure; `.and_then(…)` passes on its
+ * closure's error too. Null for an error from something other than a call (a variable).
+ */
+function calleesBefore(masked: string, end: number, depth = 0): (Callee | null)[] {
+  let at = end;
+  const also: (Callee | null)[] = [];
+  for (let step = 0; step < 20 && depth < 4; step += 1) {
+    while (at > 0 && /\s/.test(masked[at - 1])) at -= 1;
+    if (masked.slice(0, at).endsWith(".await")) {
+      at -= ".await".length;
+      continue;
+    }
+    if (masked[at - 1] === "?" || masked[at - 1] === "}") {
+      at -= 1;
+      continue;
+    }
+    if (masked[at - 1] !== ")") break;
+    const open = openOf(masked, at - 1);
+    const named = /(\.?)((?:\w+::)*\w+)\s*$/.exec(masked.slice(Math.max(0, open - 300), open));
+    if (open < 0 || named === null) break;
+    const [whole, dot, text] = named;
+    const name = text.split("::").at(-1) ?? text;
+    if (dot === "." && ["map", "map_err", "and_then"].includes(name)) {
+      if (name === "and_then") also.push(...calleesBefore(masked, at - 1, depth + 1));
+      at = open - whole.length;
+      continue;
+    }
+    if (name === "spawn_blocking") {
+      at -= 1;
+      continue;
+    }
+    return [{ text: dot === "." ? `.${name}` : text, method: dot === "." }, ...also];
+  }
+  return [null, ...also];
+}
+
+/** The code on the line a `.map_err` at `end` follows: how an unread one is named. */
+function lineBefore(masked: string, end: number): string {
+  return (masked.slice(0, end).trimEnd().split("\n").at(-1) ?? "").trim();
+}
+
+/** Whether a function's signature takes `self`, as a method does. */
+const takesSelf = (sig: string) =>
+  /\(\s*(?:&\s*(?:'\w+\s+)?(?:mut\s+)?)?(?:mut\s+)?self\b/.test(sig);
+
+/** A function's signature: from its `fn` to the `{` its body opens with. */
+function signatureOf(masked: string, open: number): string {
+  return masked.slice(masked.lastIndexOf("fn ", open), open);
+}
+
+/** What a signature returns, without spaces: the type after `->` past its parameters. */
+function returnOf(sig: string): string | null {
+  const open = sig.indexOf("(");
+  let depth = 0;
+  for (let at = open; open >= 0 && at < sig.length; at += 1) {
+    if (sig[at] === "(") depth += 1;
+    if (sig[at] === ")") depth -= 1;
+    if (depth === 0) {
+      const after = /^\s*->([\s\S]*)$/.exec(sig.slice(at + 1));
+      return after === null ? null : after[1].replace(/\bwhere\b[\s\S]*$/, "").replace(/\s+/g, "");
+    }
+  }
+  return null;
+}
+
+/** Where `callee` is written, for an error passed on from `file`. */
+function definitionsOf(tree: Tree, file: string, callee: Callee): Reach[] {
+  if (!callee.method) {
+    return writtenIn(tree, file, callee.text, 0).filter(({ file: at, span }) =>
+      maskedOf(tree, at).startsWith("{", span[0]),
+    );
+  }
+  // A method's receiver is not read, so it is found by its name: the one `METHODS` names, or
+  // every method of that name in the tree that answers a `Result`, if they agree on its error.
+  const name = callee.text.slice(1);
+  const named = METHODS[`${file}: ${callee.text}`];
+  const files =
+    named !== undefined
+      ? [named]
+      : tree.paths.filter((path) => tree.read(path).includes(`fn ${name}`));
+  return files.flatMap((path) => {
+    const masked = maskedOf(tree, path);
+    return writtenAt(masked, name)
+      .filter(([open]) => takesSelf(signatureOf(masked, open)))
+      .map((span) => ({ file: path, span }))
+      .filter((def) => named !== undefined || errorOf(tree, def) !== null);
+  });
+}
+
+/** The top-level parts of a type's generic arguments: `T, Result<A, B>` is two. */
+function splitTop(text: string): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let from = 0;
+  for (let at = 0; at < text.length; at += 1) {
+    if ("<([".includes(text[at])) depth += 1;
+    if (">)]".includes(text[at])) depth -= 1;
+    if (text[at] === "," && depth === 0) {
+      parts.push(text.slice(from, at));
+      from = at + 1;
+    }
+  }
+  return [...parts, text.slice(from)].filter((part) => part !== "");
+}
+
+/** The error type a `Result` names, read in `masked` (whose `type Result` it may use). */
+function errorIn(masked: string, returned: string, depth = 0): string | null {
+  const result = /^((?:\w+::)*)Result<(.*)>$/.exec(returned);
+  if (result === null) return null;
+  const args = splitTop(result[2]);
+  if (args.length === 2) return args[1].replace(/^std::io::/, "io::");
+  if (/(?:^|::)io::$/.test(result[1])) return "io::Error";
+  if (result[1] === "anyhow::") return "anyhow::Error";
+  const alias = /\btype\s+Result\b[^=;]*=\s*([^;]+);/.exec(masked);
+  if (result[1] !== "" || alias === null || depth > 0) return null;
+  return errorIn(masked, alias[1].replace(/\s+/g, ""), depth + 1);
+}
+
+/** The error type of the function whose body is `def`, as its signature names it. */
+function errorOf(tree: Tree, { file, span }: Reach): string | null {
+  const masked = maskedOf(tree, file);
+  const returned = returnOf(signatureOf(masked, span[0]));
+  return returned === null ? null : errorIn(masked, returned);
+}
+
+/** The file that defines the type `named` (`Refused`, `crate::contain::Refused`), seen from `from`. */
+function typeFile(tree: Tree, from: string, named: string): string | null {
+  const segs = named.replace(/<.*$/, "").split("::");
+  const type = segs.at(-1) ?? "";
+  const defines = (path: string) =>
+    new RegExp(`\\b(?:enum|struct)\\s+${type}\\b`).test(maskedOf(tree, path));
+  if (segs.length === 1 && defines(from)) return from;
+  const path = segs.length === 1 ? importsOf(maskedOf(tree, from)).get(type) : segs;
+  const base = path === undefined ? null : moduleOf(tree, from, path.slice(0, -1));
+  const file = base === null ? undefined : fileOfModule(tree, base.root, base.mods);
+  if (file !== undefined && defines(file)) return file;
+  // A re-export, or a type its crate defines once: read where it is written.
+  const once = tree.paths.filter((one) => rootOf(one) === rootOf(file ?? from) && defines(one));
+  return once.length === 1 ? once[0] : null;
+}
+
+/** A type the check does not read by its nature: the standard library's and other crates'. */
+const FOREIGN = /^(?:io::Error|anyhow::Error|std::|Box<dyn|serde_json::|toml::|tauri::)/;
+
+/** What a check of passed-on errors read, and what it could not, by the names `NOT_READ` uses. */
+type PassedOn = { read: Reach[]; notRead: string[] };
+
+/**
+ * The text of every core error the spans `outer` of `file` pass on as it was said, and of the
+ * functions of the same file they call: a `String` error's own `Err(…)` literals (and what it
+ * passes on in turn), or a named type's `Display` and `#[error(…)]`. What cannot be read is
+ * named, as `file: call` or as the error type.
+ */
+function passedOn(tree: Tree, file: string, outer: Span[], seen: Set<string>): PassedOn {
+  const masked = maskedOf(tree, file);
+  const read: Reach[] = [];
+  const notRead: string[] = [];
+  for (const [open] of inside(spans(masked, PASSED_ON), grown(masked, outer))) {
+    const end = open - ".map_err".length;
+    for (const callee of calleesBefore(masked, end)) {
+      const key = `${file}: ${callee?.text ?? lineBefore(masked, end)}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const defs = callee === null ? [] : definitionsOf(tree, file, callee);
+      const errors = [...new Set(defs.map((def) => errorOf(tree, def)))];
+      const error = errors.length === 1 ? errors[0] : null;
+      if (error === null) {
+        notRead.push(key);
+      } else if (error === "String") {
+        for (const def of defs) {
+          const at = maskedOf(tree, def.file);
+          read.push(
+            ...inside(spans(at, ERRORS), grown(at, [def.span])).map((span) => ({
+              file: def.file,
+              span,
+            })),
+          );
+          const deeper = passedOn(tree, def.file, [def.span], seen);
+          read.push(...deeper.read);
+          notRead.push(...deeper.notRead);
+        }
+      } else if (FOREIGN.test(error)) {
+        notRead.push(error);
+      } else {
+        const at = typeFile(tree, defs[0].file, error);
+        if (at === null) notRead.push(`${defs[0].file}: ${error}`);
+        else {
+          const type = error.replace(/<.*$/, "").split("::").at(-1) ?? error;
+          read.push(...textOfType(maskedOf(tree, at), type).map((span) => ({ file: at, span })));
+        }
+      }
+    }
+  }
+  return { read, notRead: [...new Set(notRead)] };
+}
+
+/**
+ * The spans `place` reads in the tree, the calls it could not follow, and the passed-on errors
+ * it could not read: its opener's spans (inside `within`'s, if it names one, and the functions
+ * of the same file those call if it goes `through`); then, if it follows, every helper and
+ * `const` they reach, in any file of the tree; and the errors it passes on as they were said.
+ */
+function spansOf(tree: Tree, place: Place): { read: Reach[]; unread: string[]; notRead: string[] } {
+  const masked = maskedOf(tree, place.file);
+  const within = place.within ? spans(masked, place.within) : null;
+  const outer = within !== null && place.through ? grown(masked, within) : within;
+  const own = spans(masked, place.opener);
+  const read: Reach[] = (outer === null ? own : inside(own, outer)).map((span) => ({
+    file: place.file,
+    span,
+  }));
+  const passed =
+    place.passedOn && within !== null
+      ? passedOn(tree, place.file, within, new Set())
+      : { read: [], notRead: [] };
+  read.push(...passed.read);
+  const unread = new Set<string>();
+  if (place.follow) follow(tree, read, unread);
+  return { read, unread: [...unread], notRead: passed.notRead };
+}
+
+/** A string the window shows: where it is written, and its text. */
+type Said = Literal & { file: string };
+
+/** The strings `place` holds in the tree, each with its file and line, each once. */
+function shownOf(tree: Tree, place: Place): Said[] {
+  const { read } = spansOf(tree, place);
+  const files = [...new Set(read.map(({ file }) => file))];
+  return files.flatMap((file) => {
+    const { literals, masked } = rustLiterals(tree.read(file));
+    const here = read.filter((one) => one.file === file).map(({ span }) => span);
+    return literals.flatMap((one) => {
+      const [from] = here.find(([from, to]) => one.start > from && one.start < to) ?? [-1];
+      if (from < 0) return [];
+      if (file === place.file && place.notCopy?.includes(fieldOf(masked, from, one.start) ?? "")) {
+        return [];
+      }
+      return [{ ...one, file, text: placeheld(one.text) }];
+    });
+  });
+}
+
+/** A tree of one source, for the tests of the check itself. */
+const oneFile = (file: string, source: string): Tree => ({
+  paths: [file],
+  read: () => source,
+  crates: {},
+});
 
 /** The strings `place` holds in `source`, each with its line, each once. */
 function shownIn(source: string, place: Place): Literal[] {
-  const { literals, masked } = rustLiterals(source);
-  const { read } = spansOf(masked, place);
-  return literals
-    .filter((one) => read.some(([from, to]) => one.start > from && one.start < to))
-    .filter((one) => {
-      const [from] = read.find(([from, to]) => one.start > from && one.start < to) ?? [0];
-      return !place.notCopy?.includes(fieldOf(masked, from, one.start) ?? "");
-    })
-    .map((one) => ({ ...one, text: placeheld(one.text) }));
+  return shownOf(oneFile(place.file, source), place);
 }
 
 /** The calls `place`'s spans make in `source` that the check cannot read. */
 function unreadIn(source: string, place: Place): string[] {
-  return spansOf(rustLiterals(source).masked, place).unread;
+  return spansOf(oneFile(place.file, source), place).unread;
 }
 
 describe("reading a Rust source's string literals", () => {
@@ -540,13 +1116,26 @@ describe("the places the window's Rust copy is read from", () => {
   });
 });
 
+/** Every place's strings, read once: the command places follow calls across the app and the core. */
+const shownAt = new Map<Place, Said[]>();
+function shown(place: Place): Said[] {
+  const known = shownAt.get(place);
+  if (known !== undefined) return known;
+  const found = shownOf(REPO, place);
+  shownAt.set(place, found);
+  return found;
+}
+
+/** How the lists below name a string: where it is written, and its text. */
+const keyOf = ({ file, text }: Said) => `${file}: ${JSON.stringify(text)}`;
+
 /** What breaks the guide's rules in `place`, as `file:line "text": fault`, but what is kept. */
 function faultsOf(place: Place): string[] {
-  return shownIn(read(place.file), place).flatMap(({ text, line }) =>
-    KEPT[`${place.file}: ${JSON.stringify(text)}`] !== undefined
+  return shown(place).flatMap((said) =>
+    KEPT[keyOf(said)] !== undefined
       ? []
-      : copyFaults(text, "shown").map(
-          (fault) => `${place.file}:${line} ${JSON.stringify(text)}: ${fault}`,
+      : copyFaults(said.text, "shown").map(
+          (fault) => `${said.file}:${said.line} ${JSON.stringify(said.text)}: ${fault}`,
         ),
   );
 }
@@ -642,6 +1231,239 @@ describe("the errors a command answers the window with", () => {
   });
 });
 
+/** A tree of fixture files, the core's under `core/src` and named `purlis_core`. */
+const fixture = (files: Record<string, string>): Tree => ({
+  paths: Object.keys(files),
+  read: (path) => files[path],
+  crates: { purlis_core: "core/src" },
+});
+
+describe("a core error a command passes on as it was said", () => {
+  const COMMANDS = "app/src/commands.rs";
+  const reading = (files: Record<string, string>) => {
+    const tree = fixture(files);
+    const place = commandErrors(COMMANDS);
+    return {
+      texts: shownOf(tree, place).map((one) => `${one.file}: ${one.text}`),
+      notRead: spansOf(tree, place).notRead,
+    };
+  };
+
+  it("reads the error type's #[error] text, every variant, through the call's path", () => {
+    const { texts, notRead } = reading({
+      [COMMANDS]: `
+        #[tauri::command]
+        pub fn open(root: String) -> Result<(), String> {
+            purlis_core::store::open(&root).map_err(|why| why.to_string())
+        }`,
+      "core/src/store.rs": `
+        pub fn open(root: &str) -> Result<(), Refused> { Err(Refused::Locked) }
+        #[derive(Debug, thiserror::Error)]
+        pub enum Refused {
+            #[error("'{0}' is not a store")]
+            NotOne(String),
+            #[error("the store is LOCKED")]
+            Locked,
+        }
+        fn elsewhere() -> &'static str { "never shown" }`,
+    });
+    expect(texts).toEqual([
+      "core/src/store.rs: '…' is not a store",
+      "core/src/store.rs: the store is LOCKED",
+    ]);
+    expect(notRead).toEqual([]);
+    // And the rules see the fault in it: the mutation is the core's word, not the app's.
+    const said = texts.map((one) => one.slice(one.indexOf(": ") + 2));
+    expect(said.flatMap((text) => copyFaults(text, "shown"))).toHaveLength(1);
+  });
+
+  it("reads a Display impl, past an import, a join's ? and spawn_blocking's closure", () => {
+    const { texts } = reading({
+      [COMMANDS]: `
+        use purlis_core::{other, store};
+        #[tauri::command]
+        pub async fn keep(root: String) -> Result<(), String> {
+            tauri::async_runtime::spawn_blocking(move || store::keep(&root))
+                .await
+                .map_err(|err| format!("keeping did not finish: {err}"))?
+                .map_err(|err| err.to_string())
+        }`,
+      "core/src/store.rs": `
+        pub fn keep(root: &str) -> Result<(), Kept> { Ok(()) }
+        pub struct Kept(String);
+        impl fmt::Display for Kept {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(f, "purlis kept nothing in {}", self.0)
+            }
+        }`,
+    });
+    expect(texts).toEqual([
+      "app/src/commands.rs: keeping did not finish: …",
+      "core/src/store.rs: purlis kept nothing in …",
+    ]);
+  });
+
+  it("reads a String error's own sentences, and what that function passes on in turn", () => {
+    const { texts } = reading({
+      [COMMANDS]: `
+        use purlis_core::grant;
+        #[tauri::command]
+        pub fn allow(host: String) -> Result<(), String> {
+            grant::allow(&host).map_err(ToString::to_string)
+        }`,
+      "core/src/grant.rs": `
+        use crate::hosts::Host;
+        pub fn allow(host: &str) -> Result<(), String> {
+            let label = "not an error";
+            if host.is_empty() { return Err("Name a host to allow.".to_owned()); }
+            Host::parse(host).map_err(|bad| bad.to_string())?;
+            Ok(())
+        }`,
+      "core/src/hosts.rs": `
+        pub struct Host;
+        impl Host { pub fn parse(text: &str) -> Result<Host, Bad> { Err(Bad) } }
+        #[derive(thiserror::Error)]
+        #[error("that is not a host name")]
+        pub struct Bad;`,
+    });
+    expect(texts).toEqual([
+      "core/src/grant.rs: Name a host to allow.",
+      "core/src/hosts.rs: that is not a host name",
+    ]);
+  });
+
+  it("reads a re-exported function of a module and its namesake (`files::search`)", () => {
+    const { texts } = reading({
+      [COMMANDS]: `
+        use purlis_core::files;
+        #[tauri::command]
+        pub fn find(text: String) -> Result<(), String> {
+            files::search(&text).map_err(|bad| bad.to_string())?;
+            Ok(())
+        }`,
+      "core/src/files.rs": `
+        mod search;
+        pub use search::{BadQuery, search};`,
+      "core/src/files/search.rs": `
+        pub fn search(text: &str) -> Result<(), BadQuery> { Ok(()) }
+        #[derive(thiserror::Error)]
+        pub enum BadQuery { #[error("the search is not a pattern: {0}")] Pattern(String) }`,
+    });
+    expect(texts).toEqual(["core/src/files/search.rs: the search is not a pattern: …"]);
+  });
+
+  it("reads both errors of an and_then, and a method its name finds", () => {
+    const { texts, notRead } = reading({
+      [COMMANDS]: `
+        use purlis_core::files;
+        #[tauri::command]
+        pub fn opened(path: String) -> Result<(), String> {
+            files::root().and_then(|root| root.open(&path)).map_err(|why| why.to_string())
+        }`,
+      "core/src/files.rs": `
+        pub fn root() -> Result<Root, NoRoot> { Ok(Root) }
+        pub struct Root;
+        impl Root { pub fn open(&self, path: &str) -> Result<(), Unopened> { Ok(()) } }
+        impl Other { pub fn open(&self) -> Option<u8> { None } }
+        #[derive(thiserror::Error)] #[error("the branch has no folder")] pub struct NoRoot;
+        #[derive(thiserror::Error)] #[error("the file did not open")] pub struct Unopened;`,
+    });
+    expect(texts).toEqual([
+      "core/src/files.rs: the branch has no folder",
+      "core/src/files.rs: the file did not open",
+    ]);
+    expect(notRead).toEqual([]);
+  });
+
+  it("names what it cannot read: a foreign error, an unfound call, two methods that disagree", () => {
+    const { notRead } = reading({
+      [COMMANDS]: `
+        #[tauri::command]
+        pub fn read(root: String, said: Result<(), Thing>) -> Result<(), String> {
+            purlis_core::disk::read(&root).map_err(|e| e.to_string())?;
+            purlis_core::disk::gone(&root).map_err(|e| e.to_string())?;
+            Plane::open(&root).personas().map_err(|e| e.to_string())?;
+            said.map_err(|e| e.to_string())
+        }`,
+      "core/src/disk.rs": `
+        pub fn read(root: &str) -> io::Result<String> { Ok(String::new()) }
+        impl Plane { pub fn personas(&self) -> io::Result<Vec<String>> { Ok(vec![]) } }`,
+      "core/src/model.rs": `
+        impl Model { pub fn personas(&self) -> Result<Vec<String>, String> { Ok(vec![]) } }`,
+    });
+    expect(notRead).toEqual([
+      "io::Error",
+      "app/src/commands.rs: purlis_core::disk::gone",
+      "app/src/commands.rs: .personas",
+      "app/src/commands.rs: said",
+    ]);
+  });
+});
+
+describe("a command's error built by a helper of another module (#1156, item 2)", () => {
+  const COMMANDS = "app/src/commands.rs";
+  const reading = (files: Record<string, string>) => {
+    const tree = fixture(files);
+    const place = commandErrors(COMMANDS);
+    return {
+      texts: shownOf(tree, place).map((one) => `${one.file}: ${one.text}`),
+      unread: spansOf(tree, place).unread,
+    };
+  };
+
+  it("reads a helper that returns the sentence, and a const, in the app or the core", () => {
+    const { texts, unread } = reading({
+      [COMMANDS]: `
+        use purlis_core::within;
+        #[tauri::command]
+        pub fn start(name: String) -> Result<(), String> {
+            if name.is_empty() { return Err(crate::away::refused(&name)); }
+            if name.len() > 9 { return Err(within::not_there(&name)); }
+            Err(purlis_core::place::CHANGED.to_owned())
+        }`,
+      "app/src/away.rs": `
+        pub fn refused(name: &str) -> String { format!("{name} Was Refused By Policy") }`,
+      "core/src/within.rs": `
+        pub fn not_there(name: &str) -> String { format!("{} is not there.", short(name)) }
+        fn short(name: &str) -> String { name.chars().take(9).collect() }`,
+      "core/src/place.rs": `
+        pub const CHANGED: &str = "The place changed since it was asked.";`,
+    });
+    expect(texts).toEqual([
+      "app/src/away.rs: … Was Refused By Policy",
+      "core/src/within.rs: … is not there.",
+      "core/src/place.rs: The place changed since it was asked.",
+    ]);
+    expect(unread).toEqual([]);
+    // The mutation: only the other module's helper breaks the guide, so only reading it finds it.
+    const said = texts.map((one) => one.slice(one.indexOf(": ") + 2));
+    expect(said.flatMap((text) => copyFaults(text, "shown"))).toHaveLength(1);
+  });
+
+  it("does not read a function of another module that answers a value, nor a foreign call", () => {
+    const { texts, unread } = reading({
+      [COMMANDS]: `
+        #[tauri::command]
+        pub fn shown(name: String) -> Result<(), String> {
+            Err(format!("{} is gone.", crate::paths::of(&name, std::path::MAIN_SEPARATOR_STR).display()))
+        }`,
+      "app/src/paths.rs": `
+        pub fn of(name: &str, sep: &str) -> PathBuf { PathBuf::from("NOT A SENTENCE") }`,
+    });
+    expect(texts).toEqual(["app/src/commands.rs: … is gone."]);
+    expect(unread).toEqual([]);
+  });
+
+  it("names a call it cannot find, by the file it is written in", () => {
+    const { unread } = reading({
+      [COMMANDS]: `
+        #[tauri::command]
+        pub fn start() -> Result<(), String> { Err(crate::missing::sentence()) }`,
+    });
+    expect(unread).toEqual(["app/src/commands.rs: crate::missing::sentence"]);
+  });
+});
+
 describe("what an in_window body calls", () => {
   const place = { file: "x.rs", what: "a test", opener: IN_WINDOW, follow: true };
   const texts = (source: string) => shownIn(source, place).map((one) => one.text);
@@ -694,18 +1516,18 @@ describe("what an in_window body calls", () => {
       impl X {
           pub fn in_window(&self) -> String { crate::other::sentence(&self.0) + ELSEWHERE }
       }`;
-    expect(unreadIn(source, place)).toEqual(["crate::other::sentence", "ELSEWHERE"]);
+    expect(unreadIn(source, place)).toEqual(["x.rs: crate::other::sentence", "x.rs: ELSEWHERE"]);
   });
 });
 
 describe("the window's copy written in Rust", () => {
+  const ALL = [...PLACES, ...COMMAND_PLACES];
+  const unique = (keys: string[]) => [...new Set(keys)].sort();
+
   for (const place of PLACES) {
     it(`follows the copy guide's rules: ${place.what} (${place.file})`, () => {
       // A place that reads nothing would pass by having nothing to fail.
-      expect(
-        shownIn(read(place.file), place).length,
-        `${place.file} still has ${place.what}`,
-      ).toBeGreaterThan(0);
+      expect(shown(place).length, `${place.file} still has ${place.what}`).toBeGreaterThan(0);
       expect(faultsOf(place)).toEqual([]);
     });
   }
@@ -713,39 +1535,59 @@ describe("the window's copy written in Rust", () => {
   it("follows the copy guide's rules: every command's error, in every file of the app", () => {
     // Most commands pass an error on as it was said, so a file may read nothing; the whole
     // reading may not. A floor, not a sentence: rewording one command's error is no reason for
-    // this to fail, and a reader that lost the commands reads far below it (about 100 today).
-    const found = COMMAND_PLACES.flatMap((place) => shownIn(read(place.file), place));
+    // this to fail, and a reader that lost the commands reads far below it.
+    const found = COMMAND_PLACES.flatMap(shown);
     expect(COMMAND_PLACES.length).toBeGreaterThan(20);
     expect(found.length).toBeGreaterThan(40);
     expect(COMMAND_PLACES.flatMap(faultsOf)).toEqual([]);
   });
 
-  it("reads every call an in_window body makes, or names why it need not", () => {
-    const unread = PLACES.filter((place) => place.follow).flatMap((place) =>
-      unreadIn(read(place.file), place)
-        .filter((call) => NOT_FOLLOWED[call] === undefined)
-        .map((call) => `${place.file}: ${call}`),
-    );
-    expect(unread).toEqual([]);
+  it("reads the core's errors a command passes on as they were said", () => {
+    // A floor, as above: a reader that lost the passed-on errors reads none of the core's.
+    const fromCore = COMMAND_PLACES.flatMap(
+      ({ file }) => passedOn(REPO, file, spans(maskedOf(REPO, file), COMMAND), new Set()).read,
+    ).filter(({ file }) => file.startsWith(CORE_DIR));
+    expect(new Set(fromCore.map(({ file }) => file)).size).toBeGreaterThan(5);
   });
 
-  it("says no retired term but the ones listed as debt (#602)", () => {
-    const retired = [...PLACES, ...COMMAND_PLACES].flatMap((place) =>
-      shownIn(read(place.file), place)
-        .filter(({ text }) => retiredTerms(text, "shown").length > 0)
-        .map(({ text }) => `${place.file}: ${JSON.stringify(text)}`),
+  it("reads every call an in_window body or a command's error makes, or names why it need not", () => {
+    const unread = ALL.filter((place) => place.follow).flatMap((place) =>
+      spansOf(REPO, place).unread.filter((call) => NOT_FOLLOWED[call] === undefined),
     );
-    expect(retired).toEqual(Object.keys(RETIRED_TERM_DEBT));
+    expect(unique(unread)).toEqual([]);
   });
 
-  it("keeps only faults that are still there, and only calls still made", () => {
-    const all = [...PLACES, ...COMMAND_PLACES].flatMap((place) =>
-      shownIn(read(place.file), place).map((one) => `${place.file}: ${JSON.stringify(one.text)}`),
+  it("reads every error a command passes on as it was said, or names why it cannot", () => {
+    const notRead = COMMAND_PLACES.flatMap((place) => spansOf(REPO, place).notRead);
+    expect(unique(notRead).filter((key) => NOT_READ[key] === undefined)).toEqual([]);
+  });
+
+  it("says no retired term but the ones listed as debt or as the terminal's words (#602)", () => {
+    const retired = ALL.flatMap(shown)
+      .filter(({ text }) => retiredTerms(text, "shown").length > 0)
+      .map(keyOf);
+    expect(unique(retired)).toEqual(
+      unique([...Object.keys(RETIRED_TERM_DEBT), ...Object.keys(TERMINAL_WORDS)]),
     );
-    expect(Object.keys(KEPT).filter((kept) => !all.includes(kept))).toEqual([]);
-    const calls = PLACES.filter((place) => place.follow).flatMap((place) =>
-      unreadIn(read(place.file), place),
+  });
+
+  it("keeps only faults that are still there, and only calls and errors still made", () => {
+    const all = new Set(ALL.flatMap(shown).map(keyOf));
+    expect(Object.keys(KEPT).filter((kept) => !all.has(kept))).toEqual([]);
+    const calls = new Set(
+      ALL.filter((place) => place.follow).flatMap((place) => spansOf(REPO, place).unread),
     );
-    expect(Object.keys(NOT_FOLLOWED).filter((call) => !calls.includes(call))).toEqual([]);
+    expect(Object.keys(NOT_FOLLOWED).filter((call) => !calls.has(call))).toEqual([]);
+    const notRead = new Set(COMMAND_PLACES.flatMap((place) => spansOf(REPO, place).notRead));
+    expect(Object.keys(NOT_READ).filter((key) => !notRead.has(key))).toEqual([]);
+    const methods = Object.entries(METHODS).filter(([site, file]) => {
+      const [from, method] = site.split(": .");
+      const masked = REPO.paths.includes(file) ? maskedOf(REPO, file) : "";
+      const there = writtenAt(masked, method).filter(([open]) =>
+        takesSelf(signatureOf(masked, open)),
+      );
+      return !read(from).includes(`.${method}(`) || there.length === 0;
+    });
+    expect(methods).toEqual([]);
   });
 });
