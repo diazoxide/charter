@@ -150,6 +150,27 @@ describe("a chat's start notice", () => {
     );
   });
 
+  it("offers Open file on the other checkout's AGENTS.md a withheld one names (#1244)", async () => {
+    setYourEditor("zed");
+    const withheld =
+      "purlis did not write this chat's AGENTS.md: /home/dev/plane/workspaces/alpha/svc/AGENTS.md " +
+      "is an untracked file purlis did not write, and the line that would hide purlis's would " +
+      "hide it too — commit or move it, and the next chat here gets one (ADR 0085).";
+    const asked = core([withheld], [SVC]);
+    render(<App />);
+    await openAChat();
+
+    const note = await startNotice();
+    expect(within(note).getByRole("button", { name: "Move aside…" })).toBeVisible();
+    await userEvent.click(within(note).getByRole("button", { name: "Open file" }));
+
+    await waitFor(() =>
+      expect(named(asked, "open_their_agents_md").map((one) => one.args)).toEqual([
+        expect.objectContaining({ workspace: "alpha", repo: "svc", piece: null, editor: "zed" }),
+      ]),
+    );
+  });
+
   it("links to Settings › You › Editor when Open file has no editor to open it in", async () => {
     const asked = core([HIDDEN], [SVC]);
     const links: SettingsLinkAsk[] = [];

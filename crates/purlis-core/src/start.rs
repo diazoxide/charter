@@ -327,14 +327,20 @@ fn ready_given(
     // Nothing here runs a command out of a file a chat can write, which is what the consent
     // gate below exists for: this writes charter's own documents into a tree charter owns,
     // and it is idempotent, so doing it for a start that is then refused costs nothing.
-    let mut notices = layered_or_refusal(&here, root, persona.as_deref())?;
+    let layered = layered_or_refusal(&here, root, persona.as_deref())?;
+    let mut notices = layered.notices;
     let hidden = hidden_agents_md_in(&here);
     notices.extend(hidden.said(|p| p.display().to_string()));
-    let agents_md = hidden
-        .found
-        .iter()
-        .filter_map(|file| branch_holding(root, file))
-        .collect();
+    // The operator's file a withheld `AGENTS.md` names gets the same way out as a hidden one
+    // (#1244): it is untracked and theirs, and the note says to commit or move it.
+    let mut agents_md: Vec<TheirAgentsMd> = Vec::new();
+    for file in hidden.found.iter().chain(layered.withheld_for.as_ref()) {
+        if let Some(branch) = branch_holding(root, file)
+            && !agents_md.contains(&branch)
+        {
+            agents_md.push(branch);
+        }
+    }
     // The gate. Startable kind, ignored file, approved command — one call, so no caller can
     // start a chat past a check another caller makes.
     if let Some(why) = crate::wiring::refusal_in(profile, root, declared) {
@@ -631,9 +637,9 @@ pub fn layered_or_refusal(
     here: &Path,
     root: &Path,
     persona: Option<&str>,
-) -> Result<Vec<String>, String> {
+) -> Result<Layered, String> {
     let Some(found) = crate::worktree::locate(root, here) else {
-        return Ok(Vec::new());
+        return Ok(Layered::default());
     };
     let piece = crate::worktree::path_for(root, &found.workspace, &found.repo, &found.piece)
         .and_then(|path| {
@@ -649,9 +655,27 @@ pub fn layered_or_refusal(
     let guidance = guidance_for(root, &piece, &found.workspace, persona);
     let (layered, guided) = crate::guest::wire_for_chat(root, &piece, guidance.as_deref());
     if layered.complete() {
-        return Ok(guided.and_then(|g| g.notice()).into_iter().collect());
+        let withheld_for = match &guided {
+            Some(crate::guest::Guidance::Withheld { theirs, .. }) => theirs.clone(),
+            _ => None,
+        };
+        return Ok(Layered {
+            notices: guided.and_then(|g| g.notice()).into_iter().collect(),
+            withheld_for,
+        });
     }
     Err(format!("{} Nothing was started.", layered.refusal(&piece)))
+}
+
+/// What a start that may go ahead found in its tree ([`layered_or_refusal`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Layered {
+    /// What the window says at the start, one line each: why the chat's `AGENTS.md` was not
+    /// written, where it was not.
+    pub notices: Vec<String>,
+    /// The operator's untracked `AGENTS.md`, in another checkout, that the chat's would have
+    /// hidden, so it was withheld (#1244): the note's file actions act on its branch.
+    pub withheld_for: Option<PathBuf>,
 }
 
 /// V35: every `AGENTS.md` that charter's exclude line hides in the repository a chat starting

@@ -1059,7 +1059,12 @@ pub enum Guidance {
     /// Not written, because it could not be hidden: the exclude cannot be written, or its line
     /// would hide an untracked file of the operator's in a checkout that reads the same
     /// exclude (charter#1072). A generated file that shows is one `git add` from a commit.
-    Withheld(String),
+    /// `theirs` is that file of the operator's, where it is the reason (#1244): what the start
+    /// note's Open file and Move aside… act on.
+    Withheld {
+        why: String,
+        theirs: Option<PathBuf>,
+    },
     /// Not written: the record or the file could not be written. No line is left behind.
     Blocked(String),
 }
@@ -1071,7 +1076,7 @@ impl Guidance {
     pub fn notice(&self) -> Option<String> {
         match self {
             Self::Written | Self::Current | Self::Tracked | Self::Theirs => None,
-            Self::Withheld(why) | Self::Blocked(why) => Some(format!(
+            Self::Withheld { why, .. } | Self::Blocked(why) => Some(format!(
                 "purlis did not write this chat's {AGENTS_MD}: {why} (ADR 0085)."
             )),
         }
@@ -1120,9 +1125,12 @@ fn guide(plane: &Path, tree: &Path, text: &str) -> Guidance {
         return Guidance::Tracked;
     }
     if let Some(committed) = commits_a_marker(tree) {
-        return Guidance::Withheld(format!(
-            "this repository commits a {committed}, and purlis's record is never committed"
-        ));
+        return Guidance::Withheld {
+            why: format!(
+                "this repository commits a {committed}, and purlis's record is never committed"
+            ),
+            theirs: None,
+        };
     }
     let record = layer::read_record(tree);
     // No offers: `planned` goes by the record alone for this one file.
@@ -1150,12 +1158,14 @@ fn guide(plane: &Path, tree: &Path, text: &str) -> Guidance {
         let _ = layer::carry_over(tree);
     }
     if let Wrote::Blocked(why) = first {
-        return Guidance::Withheld(format!(
-            "its line could not be written to the exclude ({why})"
-        ));
+        return Guidance::Withheld {
+            why: format!("its line could not be written to the exclude ({why})"),
+            theirs: None,
+        };
     }
     if left.contains(AGENTS_MD) {
-        return Guidance::Withheld(left_out_why(tree));
+        let (why, theirs) = left_out_why(tree);
+        return Guidance::Withheld { why, theirs };
     }
     if plan == Plan::Current {
         return Guidance::Current;
@@ -1194,23 +1204,31 @@ fn write_guidance(tree: &Path, text: &str, record: &layer::Record) -> Guidance {
 }
 
 /// Why the line for `tree`'s `AGENTS.md` was left out: the untracked file of the operator's,
-/// in a checkout that reads the same exclude, that it would have hidden (charter#1072).
-fn left_out_why(tree: &Path) -> String {
+/// in a checkout that reads the same exclude, that it would have hidden (charter#1072) — and
+/// that file, where it was found (#1244).
+fn left_out_why(tree: &Path) -> (String, Option<PathBuf>) {
     let theirs = exclude_file(tree)
         .and_then(|exclude| crate::worktree::listing::live_trees(tree, &exclude).0)
         .unwrap_or_default()
         .into_iter()
         .filter(|t| crate::contain::resolved(t) != crate::contain::resolved(tree))
         .find(|t| yours_untracked(t, AGENTS_MD))
-        .map(|t| t.join(AGENTS_MD).display().to_string());
+        .map(|t| t.join(AGENTS_MD));
     match theirs {
-        Some(theirs) => format!(
-            "{theirs} is an untracked file purlis did not write, and the line that would hide \
-             purlis's would hide it too — commit or move it, and the next chat here gets one"
+        Some(theirs) => (
+            format!(
+                "{} is an untracked file purlis did not write, and the line that would hide \
+                 purlis's would hide it too — commit or move it, and the next chat here gets one",
+                theirs.display()
+            ),
+            Some(theirs),
         ),
-        None => "the line that would hide it would hide an untracked file of yours in another \
-                 checkout of this repository"
-            .to_owned(),
+        None => (
+            "the line that would hide it would hide an untracked file of yours in another \
+             checkout of this repository"
+                .to_owned(),
+            None,
+        ),
     }
 }
 

@@ -166,7 +166,7 @@ fn it_is_withheld_where_its_line_would_hide_an_operators_file_in_the_clone() {
     );
     assert!(matches!(
         guest::wire_for_chat(&f.plane, &piece, Some("x\n")).1,
-        Some(guest::Guidance::Withheld(_))
+        Some(guest::Guidance::Withheld { .. })
     ));
     assert!(
         f.status(&f.clone).contains("?? AGENTS.md"),
@@ -340,7 +340,7 @@ fn a_record_that_cannot_be_published_leaves_no_line_behind_and_says_why() {
     let started = start::layered_or_refusal(&piece, &f.plane, Some("ops"));
     std::fs::set_permissions(&piece, std::fs::Permissions::from_mode(0o755)).unwrap();
 
-    let notices = started.expect("the chat starts");
+    let notices = started.expect("the chat starts").notices;
     assert!(!piece.join("AGENTS.md").exists());
     assert!(!exclude(&f).contains("/AGENTS.md"), "{}", exclude(&f));
     assert!(
@@ -358,7 +358,8 @@ fn a_withheld_agents_md_says_why_at_the_start() {
     std::fs::write(f.clone.join("AGENTS.md"), "# the operator's draft\n").unwrap();
     let piece = cut(&f, "p1");
 
-    let notices = start::layered_or_refusal(&piece, &f.plane, Some("ops")).unwrap();
+    let layered = start::layered_or_refusal(&piece, &f.plane, Some("ops")).unwrap();
+    let notices = &layered.notices;
 
     assert!(
         notices
@@ -366,6 +367,8 @@ fn a_withheld_agents_md_says_why_at_the_start() {
             .any(|n| n.contains(&f.clone.join("AGENTS.md").display().to_string())),
         "{notices:?}"
     );
+    // And the file it names is handed on, for the note's file actions (#1244).
+    assert_eq!(layered.withheld_for, Some(f.clone.join("AGENTS.md")));
 }
 
 #[test]
@@ -603,6 +606,52 @@ fn a_start_names_the_branch_whose_agents_md_charters_line_hides() {
             piece: None,
         }]
     );
+}
+
+/// #1244 (D-1244-1): where a chat's `AGENTS.md` is withheld because its line would hide the
+/// operator's untracked one in another checkout, the start names that checkout's branch, so the
+/// note offers Open file and Move aside… on it as it does on a hidden one.
+#[test]
+fn a_withheld_start_names_the_branch_of_the_file_it_would_have_hidden() {
+    purlis_core::unsteered!();
+    let f = plane();
+    std::fs::write(f.clone.join("AGENTS.md"), "# the operator's draft\n").unwrap();
+    let piece = cut(&f, "p1");
+    with_a_profile(&f);
+
+    let ready = start::ready(
+        &start::Start {
+            profile: Some("work".into()),
+            persona: Some("ops".into()),
+            name: "1".into(),
+            cwd: Some(piece.clone()),
+            ..Default::default()
+        },
+        &f.plane,
+    )
+    .expect("it starts");
+
+    assert!(!piece.join("AGENTS.md").exists(), "withheld");
+    assert!(
+        ready
+            .notices
+            .iter()
+            .any(|said| said.contains("did not write this chat's AGENTS.md")),
+        "{:?}",
+        ready.notices
+    );
+    assert_eq!(
+        ready.agents_md,
+        vec![start::TheirAgentsMd {
+            workspace: "alpha".into(),
+            repo: "svc".into(),
+            piece: None,
+        }]
+    );
+    // And what the note's Move aside… does to it, the same as to a hidden one.
+    let moved = guest::move_agents_md_aside(&f.plane, files::Branch::repo("alpha", "svc"))
+        .expect("it is moved");
+    assert_eq!(moved, "AGENTS.aside.md");
 }
 
 #[test]
