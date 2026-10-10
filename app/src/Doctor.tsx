@@ -428,9 +428,10 @@ function FixButton({ row, fixer }: { row: DoctorRow & { fix: string }; fixer: Fi
  * - `reinit` creates a missing baseline folder, which blocks nothing in the meantime.
  * - `local-ignore` is found only by the doctor the dialog runs: the one at open does not ask
  *   git, so its report would let the Notice's dismissal go while the finding stands.
- * - `workspace-reinit` (`workspace layout`, #1289): a workspace behind the layout still opens
- *   and works, so it blocks nothing, and the Alerts drawer already stands it as its `reinit`
- *   row with the same fix.
+ * - `workspace-reinit` (`workspace layout`, #1289; D-1301-2): a workspace behind the layout
+ *   still opens and works, so it blocks nothing, and the Alerts drawer already stands it as its
+ *   `reinit` row with the same fix. A Notice as well would say one finding in two standing
+ *   places.
  *
  * Each by the name of the doctor row that finds it: a clean row carries no fix id, so the name
  * is how a report says the finding has gone (and a dismissal of it is let go).
