@@ -98,6 +98,13 @@ jobs:
       # job's own machine.
       - name: Run the tests
         run: tools/no-orphans.sh --reap -- cargo nextest run --workspace --locked --profile ci
+      # The slowest tests and test binaries, as notices on the run: what makes the step above
+      # slow, readable through the checks API without the job's log. A report, so it never turns
+      # the job red.
+      - name: Annotate the slowest tests
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: node tools/slowest-tests.mjs target/nextest/ci/junit.xml
       # nextest does not run doctests, so cargo does.
       - name: Run the doctests
         run: tools/no-orphans.sh --reap -- cargo test --workspace --locked --doc
