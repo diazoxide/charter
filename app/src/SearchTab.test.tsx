@@ -11,7 +11,7 @@ import { ReferenceChats, type ChatsForReferences } from "./references";
 import { settleJump, useJumpAsks, type Pending } from "./fileJump";
 
 /**
- * **The Search tab's render states** (FM-8): what the real-app scenario
+ * **The Search view's render states** (FM-8, #1676): what the real-app scenario
  * (`workspace-explorer.e2e.ts`) does not reach on its fixture — a query the core refuses, a
  * branch it could not search, nothing matching, and a page cut short with "Show more". The core
  * is mocked; what it finds on real branches is `content_is_searched_across_branches.rs`'s.
@@ -97,7 +97,7 @@ function draw() {
 const box = () => screen.getByRole("searchbox", { name: "Search the files" });
 const status = () => screen.getByRole("status", { name: "Search progress" });
 
-describe("the Search tab", () => {
+describe("the Search view", () => {
   it("says what is never searched before anything is typed, and asks nothing", () => {
     const asked = core(() => 1);
     draw();
@@ -107,13 +107,14 @@ describe("the Search tab", () => {
     expect(asked.filter((one) => one.cmd === "search_files")).toEqual([]);
   });
 
-  it("says a tab it cannot read is unreadable, and the way out", () => {
+  it("says a search it cannot read is unreadable, and the way out", () => {
     core(() => 1);
     const view = searchView(searchFromFocus(BRANCH, BRANCH.workspace));
     render(<SearchTab plane={PLANE} view={{ ...view, key: "not a search" }} />);
 
-    expect(screen.getByText("This search tab could not be read")).toBeInTheDocument();
-    expect(screen.getByText("Close it and start a new search.")).toBeInTheDocument();
+    // The side view is the one place a search is drawn (#1701): there is no tab to close.
+    expect(screen.getByText("This search could not be read")).toBeInTheDocument();
+    expect(screen.getByText("Show Search again to start a new one.")).toBeInTheDocument();
   });
 
   it("asks the core once the query is still, over the branch it was opened on", async () => {
@@ -233,6 +234,23 @@ describe("the Search tab", () => {
 
     expect(status()).toHaveTextContent("No matches");
     expect(status()).toHaveTextContent("no branch folder called 'gone'");
+  });
+
+  it("says what to try when a finished search found nothing, in place of an empty list", async () => {
+    const asked = core(() => 1);
+    draw();
+    await userEvent.type(box(), "needle");
+    await vi.waitFor(() => expect(asked.some((one) => one.cmd === "search_files")).toBe(true));
+    // Still searching: no verdict yet, so nothing says "nothing".
+    expect(screen.queryByTestId("search-none")).toBeNull();
+
+    await told({ files: [], refused: [], ended: "done" }, asked);
+
+    // FR-19 (#614): the empty view says what goes there and what to do about it.
+    const none = screen.getByTestId("search-none");
+    expect(none).toHaveTextContent("Nothing matches “needle”");
+    expect(none).toHaveTextContent(/wider scope/);
+    expect(screen.queryByRole("listbox", { name: "Search results" })).toBeNull();
   });
 
   it("asks again without ending the last run first, so the two can never cross", async () => {

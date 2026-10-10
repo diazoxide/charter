@@ -1,24 +1,31 @@
-import type { ReactNode } from "react";
+import type { KeyboardEvent, ReactNode } from "react";
+import * as RovingFocusGroup from "@radix-ui/react-roving-focus";
 import {
   CircleCheck,
   CircleDashed,
   CircleSlash,
   CircleX,
   Clock,
+  FileDiff,
   FolderGit2,
   GitBranch,
+  GitFork,
   Hand,
   LoaderCircle,
+  Puzzle,
   SkipForward,
   TriangleAlert,
 } from "lucide-react";
 import type { FactCell, FactColumn, Piece, RepoState } from "./bindings";
+import { EmptyState } from "./EmptyState";
+import { treeKey, type Row } from "./Explorer";
 import { Menued } from "./Menus";
 import type { Catalogued, Offer } from "./actions";
 import type { WorkspaceState } from "./workspaceState";
 import type { Cloning } from "./NotCloned";
 import type { CloneState } from "./repoClones";
 import { useArrived } from "./lib/arrived";
+import { useTabStop } from "./roving";
 
 /**
  * The Changes view: what the focused workspace's repos are doing (ADR 0038 as amended
@@ -29,22 +36,47 @@ import { useArrived } from "./lib/arrived";
  * is what is true, and nothing in it can be pressed. **They were the bottom region until
  * #1676** (B-7): the bottom took height from the terminals, so it became a view on the left
  * side's activity bar, beside Chats, Explorer and Search, and the bottom of the window is the
- * terminals'. The content is the same; only where it is drawn moved. Its tab counts the files
- * git has uncommitted ({@link uncommitted}).
+ * terminals'. Its tab counts the files git has uncommitted ({@link uncommitted}).
+ *
+ * ## It is a tree, an editor's source-control view (#1701)
+ *
+ * In a side the bottom bar's table scrolled sideways past every column it had. So each repo is
+ * a heading — the repo and the branch its checkout is on — and what is true of it are rows
+ * under it, in the order a person asks: what is uncommitted, which branches are cut off it (and
+ * under that row, each branch), and what its pipeline last said; then a row per column an
+ * extension adds. Drawn with the window's one tree style (`.tree`, #1672): a level is a
+ * `role="group"` whose guide is a straight line, so the worktrees under a clone lost the bottom
+ * bar's elbows (#1682). Nothing folds: a fold is a press, and every row is always drawn.
+ *
+ * **A row that names something is one line**, the explorer's rule, asked of both sides by the
+ * operator: the view scrolls sideways rather than fold a name. A row that holds a SENTENCE — a
+ * tree purlis could not read, a pipeline nobody fetched — still wraps, because held on one line
+ * it would push the scroll out past everything else. `regions.e2e.ts` holds both halves, in a
+ * real WebView, because jsdom lays nothing out. The one-line rule is Tailwind's
+ * `whitespace-nowrap` on the row, from the utilities layer, so the sentence's own rule in
+ * `App.css` still wins on the sentence.
+ *
+ * ## The keyboard reads it; nothing in it is pressed
+ *
+ * **One Tab stop, and the tree's keys** (#1701): the WAI-ARIA "Tree View" pattern the explorer
+ * is — Up, Down, Home and End from the roving focus (`roving.ts`), Right into a row's first
+ * child, Left back to its parent, and type-ahead (`Explorer.treeKey`). The stop at rest is the
+ * first row, which is where ⌃⇧G puts the keyboard (`giveViewTheKeyboard` lands on a tree's
+ * stop). A row the keyboard is on is read, never run: Enter and Space do nothing here.
  *
  * **Read-only, and that is asserted rather than described** — `regions.e2e.ts` presses on
- * every control in here and expects to find none. It is the one half of ADR 0038's reading
- * ("the bottom is where you read what is true and do not touch it", where "the bottom" is
- * now this view) that a test can hold.
+ * every control in here and expects to find none. A focusable row is not a control: it is what
+ * lets the view be read and scrolled by keys. It is the one half of ADR 0038's reading ("the
+ * bottom is where you read what is true and do not touch it", where "the bottom" is now this
+ * view) that a test can hold.
  *
- * **A repo row has a context menu, and a menu is not a control** (charter-app#174). It is the
- * explorer's clone menu — `New tab in <repo>` and `Start new chats in <repo>` — drawn from the
- * same catalogue rows, now that the core says where a clone is (`Panels.paths`). The row gains
- * no button and no Tab stop, the menu is drawn in a portal outside this region, and neither row
- * touches the repo the region is reading: both are about where the next chat starts. So the
- * spec that presses on everything in here still finds nothing to press. A pointer reaches it
- * here; the keyboard reaches the same two rows on the explorer's clone heading and in the
- * palette.
+ * **A repo's rows have a context menu, and a menu is not a control** (charter-app#174). It is
+ * the explorer's clone menu — `New tab in <repo>` and `Start new chats in <repo>` — drawn from
+ * the same catalogue rows, now that the core says where a clone is (`Panels.paths`). It is on
+ * the heading and on each row that is about the clone (its changes, its branches' count, its
+ * pipeline, an extension's value); the menu is drawn in a portal outside this region, and none
+ * of its rows touches the repo the region is reading: they are about where the next chat
+ * starts. The keyboard opens it on the row it is on (Shift+F10, `Menus.openFromTheKeyboard`).
  *
  * **The worktree rows under each repo still have none, and that is a decision.** Their verbs
  * exist — `worktree.merge:<repo>/<piece>` and `worktree.remove:<repo>/<piece>`, drawn on the
@@ -55,61 +87,18 @@ import { useArrived } from "./lib/arrived";
  *
  * **A repo the workspace names and nobody cloned here has the explorer's Clone row as its menu**
  * (#1215), by the same argument as a clone's: a menu, drawn in a portal, and a clone adds a
- * folder beside the others without touching any repo this region reads. Its cell says what
+ * folder beside the others without touching any repo this region reads. Its heading says what
  * became of the clone — under way, or failed in the core's words — as text, never a control.
  *
- * **Nothing here waits on a network.** The CI cell is what a forge refresher last wrote into
- * `.charter/cache/glstate.json`; charter-app reads that file and never fetches. A cell with
+ * **Nothing here waits on a network.** The pipeline row is what a forge refresher last wrote
+ * into `.charter/cache/glstate.json`; charter-app reads that file and never fetches. A row with
  * nothing to show says why, because a blank one reads as "green" to a person in a hurry.
  *
  * **The worktrees are a count and a list of branches, not the explorer's rows again.** They
  * are in two regions — ADR 0038 names that as the visible crack in its own rule — and the
  * least dishonest way to have them in both is to make each answer its own question: on the
  * left a piece is a thing you pick, here it is a branch that exists and may be unwired.
- *
- * ## It is a table, and that is the answer to "add tabs columns"
- *
- * Every repo used to be one run-on sentence — `svc main · 3 changed, 1 untracked · origin/main
- * · 2 ahead · 2 worktrees · failed #41 · 2m ago` — and with four repos there was no way to read
- * *down* it. "Which of these is dirty" is a column question, and a column question asked of
- * prose is answered by reading every word of every row.
- *
- * So it is a real `<table>` with a real `<thead>`: the columns line up because a table lays
- * them out, and a screen reader says "Changes: 3 changed" rather than reading the row as one
- * sentence. A grid of `<li>`s would need `display: contents` to align across rows, which drops
- * the list semantics in WebKit — and this window runs in WebKit on both platforms.
- *
- * **It stays unpressable.** A `<table>` has no interactive element in it, `<thead>` is not a
- * tablist, and the column headings are `<th scope="col">`. Tabs in the sense of *controls* are
- * exactly what ADR 0038 forbids down here, and the spec that presses on everything in this
- * region would have said so.
- *
- * ## The worktrees are a tree here too
- *
- * Under each repo's row, spanning its full width, is that clone's pieces drawn with the same
- * guides the explorer uses — the operator asked for the tree in both places. It is not the
- * explorer's rows brought back: nothing in it is pickable, it carries the branch and the two
- * states that change what starting a chat there would mean, and the row above it keeps the
- * counts. It is the "list of branches" this component's own docstring has always promised,
- * finally drawn as the thing it is.
- *
- * ## A cell that names something is one line
- *
- * The same rule the explorer takes, asked of both regions by the operator: a row never folds,
- * and the region scrolls sideways instead. Here it replaces `overflow-wrap: anywhere`, which
- * broke `origin/main` in the middle of a word to make it fit — and a table cell is as tall as
- * its ROW, so one folded cell made all five of them two lines tall and the column question
- * this table exists to answer took two passes again.
- *
- * **The two cells that hold a SENTENCE still wrap**: a tree charter could not read, and a
- * pipeline nobody fetched, each say why in charter's own words. Held on one line, either would
- * push the region's horizontal scroll out past every column it has. `regions.e2e.ts` holds
- * both halves, in a real WebView, because jsdom lays nothing out.
  */
-/** charter's own columns — Repo, Branch, Changes, Worktrees, Pipeline — before any an
- *  extension adds. */
-const BUILT_IN_COLUMNS = 5;
-
 export function ChangesView({
   workspace,
   state,
@@ -123,7 +112,7 @@ export function ChangesView({
   /**
    * The columns the extensions on in this project and workspace add (charter-app#340), filled
    * per repo from each one's facts file by the core — `extension_facts`, which never starts a
-   * program. Read-only like every other cell here: a value, never a control.
+   * program. A row under each repo the file names: a value, never a control.
    */
   columns?: readonly FactColumn[];
   /** The catalogue by id, which is what a repo row's menu is drawn out of. */
@@ -133,17 +122,70 @@ export function ChangesView({
    *  what became of its clone, in words, never as a control. */
   cloning?: Cloning;
 }) {
+  const { panels, repos, pieces, piecesRefused, reading, trouble } = state;
+  const names = panels?.repos ?? [];
+  const absent = panels?.absent ?? [];
+  const rows = workspace === undefined ? [] : treeRows(names, absent, pieces, columns);
+  const stop = useTabStop(
+    undefined,
+    rows.map((one) => one.id),
+  );
+
   if (workspace === undefined) {
     return (
       <section className="state-bar" aria-label="Repository state" data-testid="changes-view">
-        <p className="empty">No workspace focused.</p>
+        <EmptyState
+          headline="No workspace focused"
+          body="Focus a workspace, and the branch, changes and pipeline of each of its repos are listed here."
+          mark={GitFork}
+          size="panel"
+          testid="changes-empty"
+        />
       </section>
     );
   }
 
-  const { panels, repos, pieces, piecesRefused, reading, trouble } = state;
   const byName = new Map((repos?.repos ?? []).map((repo) => [repo.name, repo]));
-  const names = panels?.repos ?? [];
+  const byId = new Map(rows.map((one) => [one.id, one]));
+  const item = (id: string) => {
+    const one = byId.get(id);
+    return {
+      role: "treeitem" as const,
+      "aria-level": one?.level,
+      "aria-posinset": one?.posinset,
+      "aria-setsize": one?.setsize,
+      "aria-expanded": one?.parents ? true : undefined,
+      "data-row": id,
+    };
+  };
+  const at: At = { item, offers, onPress };
+
+  const onKey = (event: KeyboardEvent<HTMLElement>) => {
+    if (menuKey(event)) {
+      // The menu of the repo the row is in, opened where the row is: the same event a pointer
+      // sends, from the row, so a worktree's row answers with nothing here too.
+      event.preventDefault();
+      const on = event.target as HTMLElement;
+      const box = on.getBoundingClientRect();
+      on.dispatchEvent(
+        new MouseEvent("contextmenu", {
+          bubbles: true,
+          cancelable: true,
+          clientX: box.left,
+          clientY: box.bottom,
+        }),
+      );
+      return;
+    }
+    if (event.altKey || event.ctrlKey || event.metaKey) return;
+    const to = treeKey(rows, (event.target as HTMLElement).dataset.row, event.key);
+    if (to === "not-mine") return;
+    event.preventDefault();
+    if (to === "stay" || !("focus" in to)) return;
+    [...event.currentTarget.querySelectorAll<HTMLElement>("[data-row]")]
+      .find((el) => el.dataset.row === to.focus)
+      ?.focus();
+  };
 
   return (
     <section className="state-bar" aria-label="Repository state" data-testid="changes-view">
@@ -160,62 +202,59 @@ export function ChangesView({
 
       {panels === undefined ? (
         <Pending>Reading the project…</Pending>
-      ) : names.length === 0 && panels.absent.length === 0 ? (
-        <p className="none">No repos in this workspace</p>
+      ) : names.length === 0 && absent.length === 0 ? (
+        <EmptyState
+          headline="No repos in this workspace"
+          body="Each repo the workspace names is listed here: the branch it is on, its changes, the branches cut off it and its pipeline."
+          mark={FolderGit2}
+          size="panel"
+          testid="changes-empty"
+        />
       ) : (
-        <table className="repo-states">
-          <thead>
-            <tr>
-              <th scope="col">Repo</th>
-              <th scope="col">Branch</th>
-              <th scope="col">Changes</th>
-              <th scope="col">Branches</th>
-              <th scope="col">Pipeline</th>
-              {columns.map((column) => (
-                <th
-                  scope="col"
-                  key={`${column.extension}/${column.id}`}
-                  title={`From the extension ${column.extension}`}
-                >
-                  {column.title}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          {names.map((name) => (
-            <RepoRows
-              key={name}
-              name={name}
-              state={byName.get(name)}
-              pieces={pieces[name]}
-              piecesRefused={piecesRefused[name]}
-              reading={reading}
-              offers={offers}
-              onPress={onPress}
-              columns={columns}
-            />
-          ))}
-          {panels.absent.map((name) => (
-            <tbody key={`absent-${name}`}>
-              {/* Its menu is the explorer's Clone row (#1215): a menu, not a control, so the
-                  region stays unpressable. */}
-              <Menued on={{ on: "absent", repo: name }} offers={offers} onPress={onPress}>
-                <tr className="repo-row absent" data-testid={`repo-${name}`}>
-                  <th scope="row" className="repo">
-                    <FolderGit2 className="node-icon" />
-                    <span>{name}</span>
-                  </th>
-                  {/* Membership without a clone. Said, because a repo the workspace means to
-                      hold and nobody has cloned is not the same as one that is not listed —
-                      and, while one is under way, what became of the clone. */}
-                  <td className="branch none" colSpan={BUILT_IN_COLUMNS - 1 + columns.length}>
-                    {absentSaid(cloning.get(name))}
-                  </td>
-                </tr>
+        <RovingFocusGroup.Root asChild orientation="vertical" {...stop}>
+          <div
+            className="tree"
+            role="tree"
+            aria-label={`Repos of ${workspace}`}
+            data-testid="changes-tree"
+            onKeyDown={onKey}
+          >
+            {names.map((name) => (
+              <RepoRows
+                key={name}
+                name={name}
+                state={byName.get(name)}
+                pieces={pieces[name]}
+                piecesRefused={piecesRefused[name]}
+                reading={reading}
+                columns={columns}
+                at={at}
+              />
+            ))}
+            {absent.map((name) => (
+              // Its menu is the explorer's Clone row (#1215): a menu, not a control, so the
+              // region stays unpressable. Membership without a clone is said, because a repo the
+              // workspace means to hold and nobody has cloned is not the same as one that is not
+              // listed — and, while one is under way, what became of the clone.
+              <Menued
+                key={`absent-${name}`}
+                on={{ on: "absent", repo: name }}
+                offers={offers}
+                onPress={onPress}
+              >
+                <div data-testid={`repo-${name}`}>
+                  <RovingFocusGroup.Item asChild tabStopId={absentRow(name)}>
+                    <div className="repo-row absent whitespace-nowrap" {...item(absentRow(name))}>
+                      <FolderGit2 className="node-icon" />
+                      <span className="repo">{name}</span>{" "}
+                      <span className="none">{absentSaid(cloning.get(name))}</span>
+                    </div>
+                  </RovingFocusGroup.Item>
+                </div>
               </Menued>
-            </tbody>
-          ))}
-        </table>
+            ))}
+          </div>
+        </RovingFocusGroup.Root>
       )}
 
       {/* A refusal is drawn, never swallowed: a row that is simply missing looks like a
@@ -231,6 +270,94 @@ export function ChangesView({
       </p>
     </section>
   );
+}
+
+/** Shift+F10, or the keyboard's own menu key: what opens a context menu from the keyboard
+ *  (`Menus.openFromTheKeyboard`'s two keys). */
+function menuKey(event: KeyboardEvent<HTMLElement>): boolean {
+  return event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey);
+}
+
+/** What every row is drawn with: its tree attributes by id, and the clone menu's catalogue. */
+type At = {
+  item: (id: string) => {
+    role: "treeitem";
+    "aria-level"?: number;
+    "aria-posinset"?: number;
+    "aria-setsize"?: number;
+    "aria-expanded"?: boolean;
+    "data-row": string;
+  };
+  offers: Catalogued;
+  onPress: (offer: Offer) => void;
+};
+
+const repoRow = (repo: string) => `repo:${repo}`;
+const absentRow = (repo: string) => `absent:${repo}`;
+const changesRow = (repo: string) => `changes:${repo}`;
+const branchesRow = (repo: string) => `branches:${repo}`;
+const pieceRow = (repo: string, piece: string) => `piece:${repo}/${piece}`;
+const ciRow = (repo: string) => `ci:${repo}`;
+const factRow = (repo: string, column: FactColumn) =>
+  `fact:${repo}/${column.extension}/${column.id}`;
+
+/**
+ * **Every row of the tree, in the order it is drawn** — for the one Tab stop and for the keys
+ * (`Explorer.treeKey`), which read a row's parent and the row after it. The drawing below
+ * follows the same order; a test that walks the keys holds the two together.
+ */
+export function treeRows(
+  names: readonly string[],
+  absent: readonly string[],
+  pieces: Record<string, Piece[]>,
+  columns: readonly FactColumn[],
+): Row[] {
+  const rows: Row[] = [];
+  const tops = names.length + absent.length;
+  const add = (row: Omit<Row, "drawn">) => rows.push({ ...row, drawn: true });
+  names.forEach((repo, n) => {
+    const facts = columns.filter((column) => column.cells.some((cell) => cell.repo === repo));
+    const cut = pieces[repo] ?? [];
+    const size = 3 + facts.length;
+    add({
+      id: repoRow(repo),
+      name: repo,
+      level: 1,
+      parent: undefined,
+      posinset: n + 1,
+      setsize: tops,
+      parents: true,
+    });
+    const under = (id: string, name: string, place: number, parents = false) =>
+      add({ id, name, level: 2, parent: repoRow(repo), posinset: place, setsize: size, parents });
+    under(changesRow(repo), "changes", 1);
+    under(branchesRow(repo), "branches", 2, cut.length > 0);
+    cut.forEach((one, m) =>
+      add({
+        id: pieceRow(repo, one.piece),
+        name: one.piece,
+        level: 3,
+        parent: branchesRow(repo),
+        posinset: m + 1,
+        setsize: cut.length,
+        parents: false,
+      }),
+    );
+    under(ciRow(repo), "pipeline", 3);
+    facts.forEach((column, m) => under(factRow(repo, column), column.title, 4 + m));
+  });
+  absent.forEach((repo, n) =>
+    add({
+      id: absentRow(repo),
+      name: repo,
+      level: 1,
+      parent: undefined,
+      posinset: names.length + n + 1,
+      setsize: tops,
+      parents: false,
+    }),
+  );
+  return rows;
 }
 
 /** What a repo that is not cloned here says in its row: that, or what its clone is doing. */
@@ -284,124 +411,186 @@ function Pending({ children }: { children: ReactNode }) {
   );
 }
 
-/** One repo: its row of columns, and — when git has listed any — its worktrees as a tree
- *  under it.
- *
- *  Its own `<tbody>`, so the two rows are one thing to the browser and to a screen reader,
- *  and so the tree is unmistakably *this* clone's rather than a row that happens to follow. */
+/** One row about a clone: a tree row, inside the clone's menu (see {@link RepoRows}). */
+function CloneRow({
+  id,
+  at,
+  className,
+  testId,
+  children,
+}: {
+  id: string;
+  at: At;
+  className: string;
+  testId?: string;
+  children: ReactNode;
+}) {
+  return (
+    <RovingFocusGroup.Item asChild tabStopId={id}>
+      <div className={`${className} whitespace-nowrap`} data-testid={testId} {...at.item(id)}>
+        {children}
+      </div>
+    </RovingFocusGroup.Item>
+  );
+}
+
+/** One repo: its heading, and under it what is true of it — in {@link treeRows}' order. */
 function RepoRows({
   name,
   state,
   pieces,
   piecesRefused,
   reading,
-  offers,
-  onPress,
   columns,
+  at,
 }: {
   name: string;
   state: RepoState | undefined;
   pieces: Piece[] | undefined;
   piecesRefused: string | undefined;
   reading: boolean;
-  offers: Catalogued;
-  onPress: (offer: Offer) => void;
   columns: readonly FactColumn[];
+  at: At;
 }) {
-  const tree = pieces !== undefined && pieces.length > 0;
+  const unread = reading ? "reading…" : "not read";
+  const cut = pieces ?? [];
   return (
-    <tbody>
-      {/* The clone's menu, on its row of columns and not on the `<tbody>`: the tree under it
-          is the pieces', which have no menu down here (see the docstring). `asChild`, so the
-          table gains no element. */}
-      <Menued on={{ on: "clone", repo: name }} offers={offers} onPress={onPress}>
-        <tr className="repo-row" data-testid={`repo-${name}`}>
-          <th scope="row" className="repo">
-            <FolderGit2 className="node-icon" />
-            <span>{name}</span>
-          </th>
-          {state === undefined ? (
-            <td className="branch pending" colSpan={2}>
-              {reading ? "reading…" : "not read"}
-            </td>
-          ) : state.unreadable ? (
-            // Never "clean". A tree charter could not read is the one thing a panel must not
-            // round down, because the round-down says everything is fine. It takes both columns
-            // rather than leaving an empty "Changes" cell beside it — an empty cell in a table
-            // reads as "nothing", which is the round-down in another shape.
-            <td colSpan={2}>
+    // **The clone's menu is on the whole repo, heading and rows** (`asChild`, so the tree gains
+    // no element): a right-click on any row about the clone opens it, and so does the keyboard
+    // on one (`menuKey`). Its worktrees' rows stop the event, so they answer with nothing.
+    <Menued on={{ on: "clone", repo: name }} offers={at.offers} onPress={at.onPress}>
+      <div data-testid={`repo-${name}`}>
+        <CloneRow id={repoRow(name)} at={at} className="repo-row">
+          <FolderGit2 className="node-icon" />
+          <span className="repo">{name}</span>
+          {state !== undefined && state.unreadable === null && (
+            <span className="branch">
+              {" "}
+              <GitBranch className="node-icon" />
+              <span>{headOf(state)}</span>
+              {state.upstream && <span className="upstream">{state.upstream}</span>}
+              {gapOf(state) && <span className="gap">{gapOf(state)}</span>}
+            </span>
+          )}
+        </CloneRow>
+        <div role="group">
+          <CloneRow id={changesRow(name)} at={at} className="changes">
+            <FileDiff className="node-icon" />
+            {state === undefined ? (
+              <span className="pending">{unread}</span>
+            ) : state.unreadable ? (
+              // Never "clean". A tree charter could not read is the one thing this view must not
+              // round down, because the round-down says everything is fine. A sentence, so it
+              // wraps (`.branch.unreadable`).
               <span className="branch unreadable" role="alert">
                 <TriangleAlert className="node-icon" />
                 {state.unreadable}
               </span>
-            </td>
-          ) : (
-            <>
-              <td className="branch">
-                <GitBranch className="node-icon" />
-                <span>{headOf(state)}</span>
-                {state.upstream && <span className="upstream">{state.upstream}</span>}
-                {gapOf(state) && <span className="gap">{gapOf(state)}</span>}
-              </td>
-              <td className="dirt">{dirtOf(state)}</td>
-            </>
-          )}
-          <td className="worktrees" data-testid={`worktrees-${name}`}>
+            ) : (
+              <span className="dirt">{dirtOf(state)}</span>
+            )}
+          </CloneRow>
+          <CloneRow
+            id={branchesRow(name)}
+            at={at}
+            className="worktrees"
+            testId={`worktrees-${name}`}
+          >
+            <GitBranch className="node-icon" />
             <Worktrees pieces={pieces} refused={piecesRefused} />
-          </td>
-          <CiCell name={name} state={state} reading={reading} />
-          {columns.map((column) => (
-            <FactCellOf
-              key={`${column.extension}/${column.id}`}
-              testId={`fact-${column.extension}-${column.id}-${name}`}
-              cell={column.cells.find((cell) => cell.repo === name)}
-            />
-          ))}
-        </tr>
-      </Menued>
-      {tree && (
-        <tr className="worktree-tree-row">
-          {/* The whole width, because a tree indented inside one column of five would be
-              three characters wide at the window sizes this region is given. */}
-          <td colSpan={BUILT_IN_COLUMNS + columns.length}>
-            <ul className="worktree-tree" data-testid={`worktree-tree-${name}`}>
-              {pieces.map((piece) => (
-                <li key={piece.piece}>
-                  <GitBranch className="node-icon" />
-                  <span className="piece">{piece.piece}</span>
-                  {/* The branch only when it says something the name does not. charter cuts a
+          </CloneRow>
+          {cut.length > 0 && (
+            // The branches' own level: the shared tree's group and its straight guide (#1682).
+            // No menu on these rows (see the docstring): the event is stopped here, before the
+            // clone's menu round the repo hears it.
+            <div
+              role="group"
+              data-testid={`worktree-tree-${name}`}
+              onContextMenu={(event) => event.preventDefault()}
+            >
+              {cut.map((piece) => (
+                <RovingFocusGroup.Item
+                  asChild
+                  tabStopId={pieceRow(name, piece.piece)}
+                  key={piece.piece}
+                >
+                  <div
+                    className="piece whitespace-nowrap"
+                    {...at.item(pieceRow(name, piece.piece))}
+                  >
+                    <GitBranch className="node-icon" />
+                    <span className="piece-name">{piece.piece}</span>
+                    {/* The branch only when it says something the name does not. charter cuts a
                       piece on a branch of its own name by default, and `perf perf` down a
                       whole column is the same word twice on every row. */}
-                  {piece.branch && piece.branch !== piece.piece && (
-                    <code className="branch">{piece.branch}</code>
-                  )}
-                  {/* The same two states the count above totals, said here of the one tree
+                    {piece.branch && piece.branch !== piece.piece && (
+                      <>
+                        {" "}
+                        <code className="branch">{piece.branch}</code>
+                      </>
+                    )}
+                    {/* The same two states the count above totals, said here of the one tree
                       they are true of. A total answers "is anything wrong in this clone";
                       a row answers "which one". */}
-                  {piece.stale ? (
-                    <span className="label stale">stale</span>
-                  ) : (
-                    !piece.wired && <span className="label unwired">unwired</span>
-                  )}
-                </li>
+                    {piece.stale ? (
+                      <>
+                        {" "}
+                        <span className="label stale">stale</span>
+                      </>
+                    ) : (
+                      !piece.wired && (
+                        <>
+                          {" "}
+                          <span className="label unwired">unwired</span>
+                        </>
+                      )
+                    )}
+                  </div>
+                </RovingFocusGroup.Item>
               ))}
-            </ul>
-          </td>
-        </tr>
-      )}
-    </tbody>
+            </div>
+          )}
+          <CloneRow id={ciRow(name)} at={at} className="ci" testId={`ci-${name}`}>
+            {state === undefined ? (
+              <span className="pending">{unread}</span>
+            ) : (
+              <CiWords state={state} />
+            )}
+          </CloneRow>
+          {columns.map((column) => {
+            const cell = column.cells.find((one) => one.repo === name);
+            // A repo the facts file named no value for has no row — never another repo's value.
+            if (cell === undefined) return null;
+            return (
+              <CloneRow
+                key={`${column.extension}/${column.id}`}
+                id={factRow(name, column)}
+                at={at}
+                className={cell.stale ? "fact stale" : "fact"}
+                testId={`fact-${column.extension}-${column.id}-${name}`}
+              >
+                <FactOf column={column} cell={cell} />
+              </CloneRow>
+            );
+          })}
+        </div>
+      </div>
+    </Menued>
   );
 }
 
-/** One extension's value for one repo. Empty when its facts file named no value for this repo
- *  — never another repo's. A stale value is dimmed and says how old it is. */
-function FactCellOf({ testId, cell }: { testId: string; cell: FactCell | undefined }) {
-  if (cell === undefined) return <td className="fact" data-testid={testId} />;
+/** One extension's value for one repo, named by its column. A stale value is dimmed and says
+ *  how old it is. */
+function FactOf({ column, cell }: { column: FactColumn; cell: FactCell }) {
   return (
-    <td className={cell.stale ? "fact stale" : "fact"} data-testid={testId}>
+    <>
+      <Puzzle className="node-icon" />
+      <span className="stamp" title={`From the extension ${column.extension}`}>
+        {column.title}
+      </span>{" "}
       {cell.value}
       {cell.stale && <span className="stamp"> · {ago(cell.age_seconds)}</span>}
-    </td>
+    </>
   );
 }
 
@@ -430,27 +619,6 @@ function Worktrees({ pieces, refused }: { pieces: Piece[] | undefined; refused?:
       {unwired > 0 && <span className="label unwired"> {unwired} unwired</span>}
       {stale > 0 && <span className="label stale"> {stale} stale</span>}
     </>
-  );
-}
-
-/** One repo's CI cell, which always says something. */
-function CiCell({
-  name,
-  state,
-  reading,
-}: {
-  name: string;
-  state: RepoState | undefined;
-  reading: boolean;
-}) {
-  return (
-    <td className="ci" data-testid={`ci-${name}`}>
-      {state === undefined ? (
-        <span className="pending">{reading ? "reading…" : "not read"}</span>
-      ) : (
-        <CiWords state={state} />
-      )}
-    </td>
   );
 }
 

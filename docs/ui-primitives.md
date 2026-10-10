@@ -726,6 +726,12 @@ model and a select-on-`mousedown` this window's strips do not have:
   Left to close or climb, and a typed letter to the next row it starts. `Explorer.tsx` says
   why the levels are written down and not left to the DOM. A tree's rows are `treeitem`s and
   no longer `button`s to a role query, so a test reaches them by that role.
+- **The Changes view is a tree too** (#1701), an editor's source-control view: each repo a
+  heading row (the repo and its branch) and, one level in, its changes, its branches (each
+  branch one level further), its pipeline and a row per extension column. One Tab stop, the
+  same keys, and nothing folds, since a fold would be a press in a view that is only read. Its
+  rows are `treeitem`s that take the keyboard and run nothing; the repo's context menu opens
+  from a focused row on Shift+F10, as on any menued row.
 - **Explorer is three sections, and each tree is its own Tab stop** (#1677): _Workspaces_,
   _Repos and branches_ and _Files_, in that order, each under a heading that is a disclosure
   button (`aria-expanded`, `aria-controls`) and folds it — a button and not a `<details>`, since
@@ -1105,7 +1111,7 @@ chat has the keyboard, `Ctrl+Shift+F` stays its find bar, and everywhere else in
 shows the left side's Search view (#1676; it opened a Search tab before), searching as narrow as
 the focus. It is one of the left side's keys, below.
 
-**In the Search tab's hits, `Shift+Enter` hands the hit stepped to to a chat** (#1151): it opens
+**In the Search view's hits, `Shift+Enter` hands the hit stepped to to a chat** (#1151): it opens
 the preview's chat picker for that hit and its line, as *Add to a chat's context* does, and
 Escape closes it. It is a key on the listbox, which is never a terminal, so it takes nothing from
 a chat; and it is not a button inside an option, which a listbox cannot hold. Enter alone still

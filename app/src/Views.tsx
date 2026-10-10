@@ -30,7 +30,6 @@ import {
   Puzzle,
   RefreshCw,
   Save,
-  Search,
   Send,
   Settings2,
   UserRound,
@@ -80,8 +79,6 @@ import { SessionRecordTab } from "./SessionRecordTab";
 import { TodoTab } from "./TodoTab";
 import { TODO_VIEW, todoRefOf } from "./todos";
 import { pieceDiffOf, pieceOf } from "./pieceViews";
-import { SEARCH, isSearch } from "./contentSearch";
-import { SearchTab } from "./SearchTab";
 import { SESSION_VIEW, sessionTitle, sessionView } from "./sessions";
 import { ActivityTab } from "./ActivityTab";
 import { ChatNetworkTab } from "./ChatNetworkTab";
@@ -277,7 +274,6 @@ export const OWN_MARKS: Record<string, React.ComponentType<{ className?: string 
   "piece-diff": GitCompare,
   /** What one task changed (#1511, `taskChanges.ts`). */
   [TASK_CHANGES_VIEW]: GitCompare,
-  [SEARCH]: Search,
 };
 
 /** The glyph a view's tab carries: a person for a persona, a piece of a puzzle for a view an
@@ -357,8 +353,8 @@ export function ViewPane({
   split?: number;
   /** The operator moved this view's divider. */
   onSplit?: (split: number) => void;
-  /** The pane now shows `to` rather than `from`, under `title`: a Search tab that asks
-   *  something new (FM-8). */
+  /** The pane now shows `to` rather than `from`, under `title`: a memory list's archive, or
+   *  Settings at another level. */
   onShowInstead?: (from: ViewRef, to: ViewRef, title: string) => void;
 }) {
   // **The view follows the disk itself** (FD-10), on every change: the lists and memories
@@ -499,10 +495,6 @@ export function ViewPane({
           /* The plane's save standing and its save button (charter-app#294). Keyed by the
              plane, so a pane that comes to show another project's starts from its own read. */
           <SavingView key={plane} plane={plane} workspace={workspace} />
-        ) : isSearch(view) ? (
-          /* ⌘⇧F's Search tab (FM-8). Keyed by the plane alone: its view follows what it asks,
-             and a new query is the same tab asking again, not another tab. */
-          <SearchTab key={plane} plane={plane} view={view} onAsk={onShowInstead} />
         ) : piece !== undefined ? (
           /* A piece's files, or one of them, in the light editor (RC-5). Keyed by the view, so
              a pane that comes to show another file starts from its own read. */

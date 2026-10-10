@@ -39,6 +39,7 @@ import { cleanup, render, screen, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { OWN_MARKS, ViewPane } from "../Views";
+import { SearchTab } from "../SearchTab";
 import type { Offer } from "../actions";
 import { DRAFT, forgetDrafts, wantEdit } from "../memories";
 import type {
@@ -1183,17 +1184,6 @@ const STATES: State[] = [
     drawn: /^added line$/,
   },
   {
-    name: "a Search tab before anything is typed",
-    view: { from: null, view: "search", key: "branch|alpha|alpha/svc/fix-it||" },
-    drawn: /^Search the content of the files$/,
-  },
-  {
-    name: "a Search tab whose query the core refused",
-    view: { from: null, view: "search", key: "project|||r|open(" },
-    answers: { search_files: new Error("regex parse error: unclosed group") },
-    drawn: /unclosed group/,
-  },
-  {
     name: "an extension's view, its action refused",
     view: EXTENSION,
     answers: {
@@ -1217,6 +1207,24 @@ const STATES: State[] = [
     view: EXTENSION,
     answers: { open_view: new Error("persona-statistics timed out") },
     drawn: /timed out/,
+  },
+];
+
+/**
+ * **The left side's Search view**, which no pane draws since #1701 (D-1701-2): drawn as the side
+ * draws it, and held to the same four rules.
+ */
+const SEARCHES: State[] = [
+  {
+    name: "before anything is typed",
+    view: { from: null, view: "search", key: "branch|alpha|alpha/svc/fix-it||" },
+    drawn: /^Search the content of the files$/,
+  },
+  {
+    name: "whose query the core refused",
+    view: { from: null, view: "search", key: "project|||r|open(" },
+    answers: { search_files: new Error("regex parse error: unclosed group") },
+    drawn: /unclosed group/,
   },
 ];
 
@@ -1267,6 +1275,13 @@ describe.each(Object.keys(BUILT_IN))("every view in %s", (theme) => {
       />,
     );
     await state.then?.();
+    expect((await screen.findAllByText(state.drawn)).length).toBeGreaterThan(0);
+    expect(complaints(container)).toEqual([]);
+  });
+
+  it.each(SEARCHES)("draws the Search view $name with tokens only", async (state) => {
+    core(state.answers);
+    const { container } = render(<SearchTab plane={PLANE} view={state.view} />);
     expect((await screen.findAllByText(state.drawn)).length).toBeGreaterThan(0);
     expect(complaints(container)).toEqual([]);
   });
