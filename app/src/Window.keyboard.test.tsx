@@ -84,6 +84,8 @@ function chat(session: number, name: string, inFront = false) {
 function core({
   waiting = [] as number[],
   chats = [chat(1, "one"), chat(2, "two", true), chat(3, "three")],
+  /** Whether the core derives the asks registry's list (#1690): each waiting chat a question. */
+  registry = false,
 } = {}) {
   /** Every command the window sent, by name. */
   const asked: string[] = [];
@@ -132,6 +134,19 @@ function core({
     if (cmd === "chats_that_would_not_start") return [];
     if (cmd === "running_sessions") return [];
     if (cmd === "alerts_everywhere") return [{ plane: PLANE, alerts: [], stopped: null }];
+    if (cmd === "asks_waiting" && registry)
+      return {
+        plane: PLANE,
+        asks: waiting.map((session) => ({
+          session,
+          ask: `question:${session}`,
+          says: "Waiting on your reply",
+          options: [],
+          source: "question",
+          chain: [`steward ${chats.find((one) => one.session === session)?.name ?? session}`],
+          answer: { via: "in-its-pane" },
+        })),
+      };
     return null;
   });
   return { asked };
@@ -418,27 +433,29 @@ describe("a list is one Tab stop", () => {
     await waitFor(() => expect(piece).toHaveAttribute("tabindex", "0"));
   });
 
-  it("the needs-you list: its button is the stop, and the arrows move in the list it opens", async () => {
-    await theWholeWindow();
-    const hand = within(screen.getByTestId("title-bar")).getByRole("button", {
-      name: "2 chats need you",
+  it("the hand: its button is the stop, and Enter opens the Inbox, where the arrows move (#1692)", async () => {
+    core({ waiting: [3, 1], registry: true });
+    render(<App />);
+    await waitFor(() => expect(tabsOf("Tabs")).toHaveLength(3));
+    const hand = await within(screen.getByTestId("title-bar")).findByRole("button", {
+      name: "2 things wait on you",
     });
     expect(hand).toHaveAttribute("tabindex", "0");
 
     hand.focus();
     await userEvent.keyboard("{Enter}");
-    const items = await screen.findAllByRole("menuitem");
-    // The oldest chat asking first, and the chats alone: their Ignore is no item (#248).
-    expect(items.map((item) => item.querySelector(".needs-you-name")?.textContent)).toEqual([
-      "steward three",
-      "steward one",
-    ]);
-    await waitFor(() => expect(items[0]).toHaveFocus());
+    const inbox = await screen.findByRole("tabpanel", { name: "Inbox" });
+    // Each chat waiting is a group under its chain, in the order the registry first saw them.
+    expect(
+      within(inbox)
+        .getAllByRole("heading", { level: 3 })
+        .map((one) => one.textContent),
+    ).toEqual(["steward three", "steward one"]);
+    const asks = within(inbox).getAllByRole("listitem");
+    // The keyboard lands on the first ask, never on one of its buttons.
+    await waitFor(() => expect(asks[0]).toHaveFocus());
     await userEvent.keyboard("{ArrowDown}");
-    await waitFor(() => expect(items[1]).toHaveFocus());
-
-    await userEvent.keyboard("{Escape}");
-    await waitFor(() => expect(hand).toHaveFocus());
+    expect(within(asks[0]).getByRole("textbox", { name: "Reply to steward three" })).toHaveFocus();
   });
 });
 

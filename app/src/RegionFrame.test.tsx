@@ -343,7 +343,7 @@ describe("the right side's activity bar (#1678)", () => {
       within(right())
         .getAllByRole("tab")
         .map((tab) => tab.getAttribute("aria-label")),
-    ).toEqual(["Todos", "Memory", "Personas", "Sessions", "Vaults"]);
+    ).toEqual(["Inbox", "Todos", "Memory", "Personas", "Sessions", "Vaults"]);
     expect(right().closest("[data-side]")).toHaveAttribute("data-side", "right");
     expect(screen.getByRole("tabpanel", { name: "Memory" })).toContainElement(
       screen.getByTestId("v-memory"),

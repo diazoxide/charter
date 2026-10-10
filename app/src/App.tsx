@@ -249,6 +249,8 @@ function App() {
   /** The same, for the Settings tab at the You level (SE-23's Your settings…): on the project in
    *  front's strip, since You is the machine's and any strip will do. */
   const [yourSettingsAsk, setYourSettingsAsk] = useState<{ plane: PlaneId; at: number }>();
+  /** The Inbox the title bar's ✋ asked for (#1692, I-2): the project it opens on, and a count. */
+  const [inboxAsk, setInboxAsk] = useState<{ plane: PlaneId; at: number }>();
   /**
    * The last link into a Settings group the window followed (SE-22): the project in front, the
    * link, and a count. Its own ask and not `settingsTabAsk`, because a link names its level and
@@ -1674,6 +1676,20 @@ function App() {
     },
     [reread, registry.held],
   );
+  /**
+   * **The ✋ opens the Inbox** (#1692, I-2): the project in front's, where something waits there,
+   * and otherwise the first project along the strip with something waiting, brought to the
+   * front. With nothing waiting anywhere, the Inbox in front, which says so.
+   */
+  const openInbox = useCallback(() => {
+    const front = inFrontNow.current;
+    const waits = (plane: PlaneId) => (registry.held[plane]?.length ?? 0) > 0;
+    const plane =
+      front !== undefined && waits(front) ? front : (planesNow.current.find(waits) ?? front);
+    if (plane === undefined) return;
+    setShowing({ at: "plane", plane });
+    setInboxAsk((was) => ({ plane, at: (was?.at ?? 0) + 1 }));
+  }, [registry.held]);
   const otherAsks = useMemo<OtherAsk[]>(
     () =>
       planes.flatMap((plane) =>
@@ -2000,6 +2016,9 @@ function App() {
           openAsked: needsYouAsked,
           asked: askedCount,
           others: otherAsks,
+          // A core that has said nothing of its asks has no Inbox worth opening (it would only
+          // say it is reading): the hand keeps its list, as its number keeps counting rows.
+          onInbox: inFront === undefined || askedCount === undefined ? undefined : openInbox,
           onOpenOther: (ask: OtherAsk) => {
             const name = ask.chain.at(-1) ?? `chat ${ask.session}`;
             pressNeeding(ask.plane, {
@@ -2136,6 +2155,8 @@ function App() {
           fileAsked={fileAsk?.plane === plane ? fileAsk : undefined}
           awayRefused={awayRefusals.held[plane]}
           onShowNeedsYou={showNeedsYou}
+          waiting={registry.held[plane]}
+          inboxAsked={inboxAsk?.plane === plane ? inboxAsk.at : undefined}
         />
       ))}
 

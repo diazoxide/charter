@@ -7,7 +7,8 @@
  */
 /**
  * **One of purlis's own views**: the left side's Chats and Explorer (#1673), Search and Changes
- * (#1676), and the right side's Todos, Memory, Personas, Sessions and Vaults (#1678). Data, as
+ * (#1676), and the right side's Inbox (#1692), Todos, Memory, Personas, Sessions and Vaults
+ * (#1678). Data, as
  * a region is: the catalogue says which region holds it, the placement says which is open, and
  * `RegionFrame` draws the bar and the views from that.
  */
@@ -16,6 +17,7 @@ export type OwnViewId =
   | "explorer"
   | "search"
   | "changes"
+  | "inbox"
   | "todos"
   | "memory"
   | "personas"
@@ -43,8 +45,10 @@ export const panelKeyOf = (view: PanelViewId): string => view.slice("panel:".len
 export const isPanelView = (view: string): view is PanelViewId =>
   view.startsWith("panel:") && view.length > "panel:".length;
 
-/** The right side's own views, in its bar's order (#1678): the attention region's. */
+/** The right side's own views, in its bar's order (#1678): the attention region's. The Inbox is
+ *  first (#1692, I-2): what waits on the person heads the "for you" side. */
 export const ATTENTION_VIEWS: readonly OwnViewId[] = [
+  "inbox",
   "todos",
   "memory",
   "personas",
@@ -60,6 +64,7 @@ export const VIEWS: Record<OwnViewId, { name: string }> = {
   // region drew until it went (B-7).
   search: { name: "Search" },
   changes: { name: "Changes" },
+  inbox: { name: "Inbox" },
   todos: { name: "Todos" },
   memory: { name: "Memory" },
   personas: { name: "Personas" },

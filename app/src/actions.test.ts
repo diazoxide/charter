@@ -1730,6 +1730,7 @@ describe("carrying out a row", () => {
         "showExtensions",
         "showSideView:chats",
         "showSideView:explorer",
+        "showSideView:inbox",
         "showSideView:changes",
         "showSideView:todos",
         "showSideView:memory",
@@ -2325,8 +2326,9 @@ describe("the palette at fifty chats", () => {
     // 842 since #1673: Show the Chats view, Show the Explorer view, and the Navigation region.
     // 899 since #1676 and #1678: Show the Changes view (Search's row is Search in files), the
     // right side's five views, and the Attention region.
+    // 900 since #1692: Show the Inbox view.
     // This window has no todos loaded, so no `todo.` rows.
-    expect(offers).toHaveLength(899);
+    expect(offers).toHaveLength(900);
   });
 
   /**

@@ -504,8 +504,14 @@ describe("while you were away (#1514)", () => {
     // The chats still need the person, on the title bar's list, as they did before.
     expect(screen.getByTestId("needs-you-button")).toHaveAccessibleName("3 chats need you");
     // And Dismiss told the core nothing: nothing was answered, ignored or looked at.
+    // The asks registry reading its list again is a read, on its own timer (#1692), not an answer.
     await settle();
-    expect(held.commands().slice(before)).toEqual([]);
+    expect(
+      held
+        .commands()
+        .slice(before)
+        .filter((cmd) => cmd !== "asks_waiting"),
+    ).toEqual([]);
   });
 
   it("is never drawn with the setting off, and the window is as before", async () => {

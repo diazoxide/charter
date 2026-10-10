@@ -1,8 +1,9 @@
+import { StrictMode } from "react";
 import { afterEach, describe, expect, it } from "vitest";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
-import { IN_ITS_CHAT, answerThrough, useAsks } from "./asks";
+import { IN_ITS_CHAT, answerThrough, asksMoved, useAsks } from "./asks";
 import type { Shown } from "./bindings";
 
 /**
@@ -169,6 +170,24 @@ describe("the list", () => {
     waiting = [];
     act(() => result.current.reread(PLANE));
     await waitFor(() => expect(result.current.held[PLANE]).toEqual([]));
+  });
+
+  it("is read again when the window itself answered one where no event says so (#1692)", async () => {
+    // A Notice's Keep blocked, or an answer in the Inbox, moves the core with no event of its
+    // own: the window says so, and the list follows, so an answer in one place clears both.
+    let waiting: Shown[] = [HOST];
+    mockIPC((cmd) => (cmd === "asks_waiting" ? { plane: PLANE, asks: waiting } : null));
+    const { result } = renderHook(() => useAsks([PLANE]));
+    await waitFor(() => expect(result.current.held[PLANE]).toEqual([HOST]));
+    waiting = [];
+    act(() => asksMoved(PLANE));
+    await waitFor(() => expect(result.current.held[PLANE]).toEqual([]));
+  });
+
+  it("reads its list under React's StrictMode, which runs its effects twice", async () => {
+    mockIPC((cmd) => (cmd === "asks_waiting" ? { plane: PLANE, asks: [HOST] } : null));
+    const { result } = renderHook(() => useAsks([PLANE]), { wrapper: StrictMode });
+    await waitFor(() => expect(result.current.held[PLANE]).toEqual([HOST]));
   });
 
   it("holds nothing for a project the core says nothing for", async () => {

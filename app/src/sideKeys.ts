@@ -13,6 +13,7 @@ import { opensSearch, searchKeySaid } from "./searchKey";
  * | Show Chats | `⌘⇧C` | `Ctrl+Shift+C` |
  * | Show Search (#1676) | `⌘⇧F` | `Ctrl+Shift+F` |
  * | Show Changes (#1676) | `⌃⇧G` | `Ctrl+Shift+G` |
+ * | Show the Inbox (#1692) | `⌘⇧I` | `Ctrl+Shift+I` |
  *
  * **What a chat keeps** (`docs/ui-primitives.md`, the palette's rule, charter-app#106). xterm.js
  * 6.0.0 sends nothing for a `⌘` chord but `⌘A`, so on a Mac none of these was a byte. Off a
@@ -34,6 +35,11 @@ import { opensSearch, searchKeySaid } from "./searchKey";
  * Off a Mac, Ctrl with Alt is AltGr on Windows, so only a key that still types `b` is read, and a
  * layout whose AltGr+B types a character keeps it; and since a terminal sends Ctrl+Alt+B (an
  * escape and Ctrl+B), a chat with the keyboard keeps it too.
+ *
+ * **⌘⇧I is the Inbox's** (#1692, I-2) because it is free: VS Code has none on it, and Ctrl+Shift+I is
+ * no terminal byte (Ctrl with a letter is encoded only without Shift; Ctrl+I alone is Tab), so it
+ * is the window's while a chat has the keyboard too, as Ctrl+Shift+E is. It is a webview's
+ * developer tools only in a debug build.
  *
  * ⌘⇧C is Chats' because it is free: VS Code gives it to an external terminal, which this window
  * has no use for, and ⌘⇧H, ⌘⇧J and ⌘⇧T are taken (`taskKeys.ts`, `shellKey.ts`).
@@ -64,6 +70,7 @@ export function sideKeyOf(e: KeyboardEvent, mac: boolean): SideKey | undefined {
   }
   if (letter === "e") return { show: "explorer" };
   if (letter === "c") return mac ? { show: "chats" } : { show: "chats", chatKeeps: true };
+  if (letter === "i") return { show: "inbox" };
   return undefined;
 }
 
@@ -79,6 +86,7 @@ export function sideKeysSaid(
         explorer: "⌘⇧E",
         search: searchKeySaid(mac),
         changes: "⌃⇧G",
+        inbox: "⌘⇧I",
       }
     : {
         navigation: "Ctrl+B",
@@ -87,6 +95,7 @@ export function sideKeysSaid(
         explorer: "Ctrl+Shift+E",
         search: searchKeySaid(mac),
         changes: "Ctrl+Shift+G",
+        inbox: "Ctrl+Shift+I",
       };
 }
 

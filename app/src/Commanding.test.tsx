@@ -168,6 +168,9 @@ const WATCHING = new Set([
   "workspace_panels",
   "workspace_repos",
   "worktree_of_chat",
+  // The asks registry's list (#1690), read again whenever a source may have moved and settled
+  // over a burst (#1692), so where it lands is about timers, not about what an action did.
+  "asks_waiting",
 ]);
 
 /**

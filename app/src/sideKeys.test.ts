@@ -63,6 +63,7 @@ describe("the keys of the left side (#1673, B-10)", () => {
       explorer: "⌘⇧E",
       search: "⌘⇧F",
       changes: "⌃⇧G",
+      inbox: "⌘⇧I",
     });
     expect(sideKeysSaid(false)).toEqual({
       navigation: "Ctrl+B",
@@ -71,6 +72,7 @@ describe("the keys of the left side (#1673, B-10)", () => {
       explorer: "Ctrl+Shift+E",
       search: "Ctrl+Shift+F",
       changes: "Ctrl+Shift+G",
+      inbox: "Ctrl+Shift+I",
     });
   });
 });
@@ -127,5 +129,28 @@ describe("the key of the right side (#1678, B-10)", () => {
   it("is not taken off a Mac from a layout whose AltGr+B types a character", () => {
     // Ctrl+Alt is AltGr on Windows: a key that types something with it is that character's.
     expect(sideKeyOf(press("{", { ctrl: true, alt: true }, "KeyB"), false)).toBeUndefined();
+  });
+});
+
+describe("the key of the Inbox (#1692, I-2)", () => {
+  it("shows the Inbox on ⌘⇧I, and Ctrl+Shift+I everywhere else", () => {
+    expect(sideKeyOf(press("I", { meta: true, shift: true }), true)).toEqual({ show: "inbox" });
+    expect(sideKeyOf(press("I", { ctrl: true, shift: true }), false)).toEqual({ show: "inbox" });
+  });
+
+  it("is the window's while a chat has the keyboard, since Ctrl with Shift and a letter is no byte", () => {
+    expect(sideKeyOf(press("I", { ctrl: true, shift: true }), false)).not.toHaveProperty(
+      "chatKeeps",
+    );
+  });
+
+  it("is not the Inbox's without Shift, which is a terminal's Tab off a Mac", () => {
+    expect(sideKeyOf(press("i", { meta: true }), true)).toBeUndefined();
+    expect(sideKeyOf(press("i", { ctrl: true }), false)).toBeUndefined();
+  });
+
+  it("is spelled for the platform", () => {
+    expect(sideKeysSaid(true).inbox).toBe("⌘⇧I");
+    expect(sideKeysSaid(false).inbox).toBe("Ctrl+Shift+I");
   });
 });

@@ -804,3 +804,65 @@ describe("the hand counts the asks registry's asks (#1690)", () => {
     expect(row.querySelector("b")).toBeNull();
   });
 });
+
+describe("the hand opens the Inbox (#1692, I-2)", () => {
+  it("opens the Inbox on a press, and draws no list of its own", async () => {
+    let opened = 0;
+    render(
+      <NeedsYouMenu
+        quiet={[]}
+        items={[needing("/a", 3, "ops", "charter")]}
+        asked={1}
+        onPress={() => {}}
+        onInbox={() => (opened += 1)}
+      />,
+    );
+    const hand = screen.getByRole("button", { name: "1 thing waits on you" });
+    // Not a menu's button while it opens the Inbox: it says it opens nothing that pops up.
+    expect(hand).not.toHaveAttribute("aria-haspopup", "menu");
+    await userEvent.click(hand);
+    expect(opened).toBe(1);
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("opens the Inbox from the keyboard too", async () => {
+    let opened = 0;
+    render(
+      <NeedsYouMenu
+        quiet={[]}
+        items={[needing("/a", 3, "ops", "charter")]}
+        asked={1}
+        onPress={() => {}}
+        onInbox={() => (opened += 1)}
+      />,
+    );
+    screen.getByRole("button", { name: "1 thing waits on you" }).focus();
+    await userEvent.keyboard("{Enter}");
+    expect(opened).toBe(1);
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("still opens its list where something asks it open: the dispatches refused while you were away", async () => {
+    const { rerender } = render(
+      <NeedsYouMenu
+        quiet={[]}
+        items={[needing("/a", 3, "ops", "charter")]}
+        asked={1}
+        onPress={() => {}}
+        onInbox={() => {}}
+        openAsked={0}
+      />,
+    );
+    rerender(
+      <NeedsYouMenu
+        quiet={[]}
+        items={[needing("/a", 3, "ops", "charter")]}
+        asked={1}
+        onPress={() => {}}
+        onInbox={() => {}}
+        openAsked={1}
+      />,
+    );
+    expect(await screen.findByRole("menu")).toBeInTheDocument();
+  });
+});
