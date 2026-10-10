@@ -16,13 +16,18 @@
 //!
 //! # Where the local plane lives
 //!
-//! In charter's directory in the config home, beside the machine store
-//! (`$CHARTER_CONFIG_HOME`, else `$XDG_CONFIG_HOME`, else `~/.config`, then `charter/`), which
-//! is the rule `machine.rs` keeps and ADR 0034's amendment records. The ticket says "app
-//! data"; ADR 0069 §1 names the config home as the Machine tier's home rather than the OS
-//! application-data directory. The plane itself is in the **Plane** tier: its files are in its
-//! own git. With no remote, that tier's usual backup does not exist for it, which is FR-10's
-//! to cover (`docs/plane-format.md`).
+//! In purlis's data home (`$PURLIS_DATA_HOME`, else `$XDG_DATA_HOME/purlis`, else the OS data
+//! directory's `purlis/`, [`crate::datahome`]), as `local-project/`. **Never in the config
+//! home**: a chat's sandbox denies writing the config home whole, because it holds the person's
+//! own approvals (ADR 0067 §5, class 3), so no sandboxed chat could start in a project there
+//! (#1670). The data home is the Machine tier's home for what is too large or too long-lived for
+//! the config home (ADR 0069 §1 as ADR 0075 amends it), and nothing a chat is denied sits above
+//! a folder in it. A machine whose local project is still in the config home
+//! (`<config>/local-plane`) has it moved at the app's next launch ([`crate::localproject`]).
+//!
+//! The plane itself is in the **Plane** tier: its files are in its own git. With no remote,
+//! that tier's usual backup does not exist for it, which is FR-10's to cover
+//! (`docs/plane-format.md`).
 //!
 //! # Nothing here signs anybody in, and no credential is read
 //!
@@ -39,12 +44,20 @@ use std::path::{Path, PathBuf};
 
 use crate::harness::Harness;
 
-/// The local plane's directory name inside charter's directory in the config home.
-pub const LOCAL_PLANE: &str = "local-plane";
+/// The local project's directory name in purlis's data home.
+pub const LOCAL_PLANE: &str = "local-project";
 
-/// Where this machine's local plane is, under `config_root` (see [`crate::machine::config_root`]).
-pub fn local_plane(config_root: &Path) -> PathBuf {
-    crate::machine::dir(config_root).join(LOCAL_PLANE)
+/// Where this machine's local project is, in the data home `data_home`
+/// ([`local_project_home`]).
+pub fn local_plane(data_home: &Path) -> PathBuf {
+    data_home.join(LOCAL_PLANE)
+}
+
+/// The data home the app makes the local project in, as `env` names it
+/// ([`crate::datahome::root_in`]): never the config home, which a chat's sandbox denies whole
+/// (#1670).
+pub fn local_project_home(env: &dyn Fn(&str) -> Option<String>) -> Option<PathBuf> {
+    crate::datahome::root_in(env)
 }
 
 /// Where the local plane's forge comes from when the plane is made (#839).
@@ -85,17 +98,26 @@ impl std::fmt::Display for NotMade {
     }
 }
 
-/// The local plane under `config_root`, made first when it is not there yet.
+/// The local plane in the data home `data_home`, made first when it is not there yet.
+///
+/// Refused when the data home is inside a project or a git work tree, where purlis's data home
+/// never is (ADR 0075 §6, [`crate::datahome::refusal`]).
 ///
 /// A plane already there is left exactly as it is, and nothing is asked. The plane is
 /// scaffolded the way the app's New project dialog scaffolds one, with no repo adopted and no
 /// remote: `git remote` is empty until the operator shares it. Its `[[forge]]` comes from
 /// `forge`, by `charter init`'s rule: a repo's `origin`, else the operator's answer.
-pub fn ensure_local_plane(config_root: &Path, forge: ForgeFrom<'_>) -> Result<PathBuf, NotMade> {
-    let at = local_plane(config_root);
+pub fn ensure_local_plane(data_home: &Path, forge: ForgeFrom<'_>) -> Result<PathBuf, NotMade> {
+    let at = local_plane(data_home);
     let root = at.canonicalize().ok();
     if let Some(root) = root.filter(|root| crate::names::has_manifest(root)) {
         return Ok(root);
+    }
+    if let Some(why) = crate::datahome::refusal(data_home) {
+        return Err(NotMade::Refused(format!(
+            "purlis keeps its local project in its data home, and {why}. Set PURLIS_DATA_HOME \
+             to a folder outside any project or repository, and start purlis again."
+        )));
     }
     // Asked before anything is made, so a question leaves no empty directory behind.
     let (kind, owner, host) = match forge {
@@ -778,11 +800,35 @@ mod tests {
     }
 
     #[test]
-    fn the_local_plane_is_in_charters_directory_in_the_config_home() {
+    fn the_local_plane_is_in_the_data_home_and_never_in_the_config_home() {
         assert_eq!(
-            local_plane(Path::new("/cfg")),
-            PathBuf::from("/cfg/charter/local-plane")
+            local_plane(Path::new("/data/purlis")),
+            PathBuf::from("/data/purlis/local-project")
         );
+        let env = |name: &str| match name {
+            "PURLIS_CONFIG_HOME" => Some("/cfg".to_owned()),
+            "PURLIS_DATA_HOME" => Some("/data/purlis".to_owned()),
+            _ => None,
+        };
+        assert_eq!(
+            local_project_home(&env).map(|home| local_plane(&home)),
+            Some(PathBuf::from("/data/purlis/local-project"))
+        );
+    }
+
+    #[test]
+    fn no_local_plane_is_made_in_a_data_home_inside_a_repository() {
+        let dir = tempfile::tempdir().expect("a directory");
+        std::fs::create_dir_all(dir.path().join("repo/.git")).expect("a work tree");
+        let data = dir.path().join("repo/data");
+
+        let made = ensure_local_plane(&data, GITHUB);
+
+        assert!(
+            matches!(&made, Err(NotMade::Refused(why)) if why.contains("PURLIS_DATA_HOME")),
+            "{made:?}"
+        );
+        assert!(!local_plane(&data).exists(), "a folder was made");
     }
 
     #[test]

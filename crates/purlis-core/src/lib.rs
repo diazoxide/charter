@@ -98,6 +98,7 @@ pub mod layer;
 pub mod leakguard;
 pub mod leftovers;
 pub mod livesub;
+pub mod localproject;
 pub mod machine;
 pub mod manifest;
 pub mod mdsection;

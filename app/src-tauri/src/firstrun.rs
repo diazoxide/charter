@@ -336,10 +336,10 @@ pub async fn open_repo(
     template: TemplateChoice,
     forge: Option<ForgeWord>,
 ) -> Result<RepoAnswer, String> {
-    let config = config_of(&planes)?;
+    let data = data_home()?;
     let forge = forge.map(Kind::from);
     let made = tauri::async_runtime::spawn_blocking(move || {
-        let (root, taken) = match taken_in(&config, Path::new(&path), &template.into(), forge)? {
+        let (root, taken) = match taken_in(&data, Path::new(&path), &template.into(), forge)? {
             Taken::In(root, taken) => (root, taken),
             Taken::AsksForge(why) => return Ok(Err(why)),
         };
@@ -518,10 +518,10 @@ pub async fn open_local_project(
     planes: tauri::State<'_, Planes>,
     forge: ForgeWord,
 ) -> Result<Opened, String> {
-    let config = config_of(&planes)?;
+    let data = data_home()?;
     let kind = Kind::from(forge);
     let root = tauri::async_runtime::spawn_blocking(move || {
-        firstrun::ensure_local_plane(&config, firstrun::ForgeFrom::Named(kind))
+        firstrun::ensure_local_plane(&data, firstrun::ForgeFrom::Named(kind))
             .map_err(|why| why.to_string())
     })
     .await
@@ -529,13 +529,27 @@ pub async fn open_local_project(
     planes.open_if_approved(&root).map(Opened::from)
 }
 
-/// Where the local project goes, or why this machine has nowhere to keep it.
-fn config_of(planes: &Planes) -> Result<PathBuf, String> {
-    planes.config().map(Path::to_path_buf).ok_or_else(|| {
+/// Where the local project goes: purlis's data home, never the config home a chat's sandbox
+/// denies (#1670); or why this machine has nowhere to keep it.
+fn data_home() -> Result<PathBuf, String> {
+    purlis_core::datahome::root().ok_or_else(|| {
         "purlis has nowhere to keep a project on this machine. Open a project, or make one \
          under New project → Advanced."
             .to_owned()
     })
+}
+
+/// The local project moved out of the config home at the app's launch, where an older purlis
+/// made it (`purlis_core::localproject`), and what came of it said once, in the app's log. A
+/// project left where it is is said again by the doctor's `local project` row when it opens.
+pub fn move_the_local_project() {
+    match purlis_core::localproject::at_launch() {
+        None => {}
+        Some(moved @ purlis_core::localproject::Moved::Moved { .. }) => {
+            tracing::info!("purlis: {moved}");
+        }
+        Some(moved) => tracing::warn!("purlis: {moved}"),
+    }
 }
 
 /// What [`taken_in`] came to.
@@ -547,11 +561,11 @@ enum Taken {
     AsksForge(String),
 }
 
-/// The local plane under `config`, made if it is not there, with `repo` taken in and the
+/// The local plane in the data home `data`, made if it is not there, with `repo` taken in and the
 /// project laid out from the template `choice` names. A plane that is made takes its forge
 /// from `forge`, the operator's answer, else from `repo`'s remote.
 fn taken_in(
-    config: &Path,
+    data: &Path,
     repo: &Path,
     choice: &firstrun::Choice,
     forge: Option<Kind>,
@@ -567,7 +581,7 @@ fn taken_in(
     let from = forge.map_or(firstrun::ForgeFrom::Repo(repo), |kind| {
         firstrun::ForgeFrom::Answered { kind, repo }
     });
-    let root = match firstrun::ensure_local_plane(config, from) {
+    let root = match firstrun::ensure_local_plane(data, from) {
         Ok(root) => root,
         Err(firstrun::NotMade::AsksForForge(why)) => return Ok(Taken::AsksForge(why)),
         Err(firstrun::NotMade::Refused(why)) => return Err(why),
@@ -603,19 +617,18 @@ mod tests {
     #[test]
     fn a_repo_whose_remote_does_not_say_asks_for_the_forge_before_anything_is_made() {
         let dir = tempfile::tempdir().expect("a directory");
-        let config = dir.path().join("config");
+        let data = dir.path().join("data");
         let repo = a_repo(&dir.path().join("widget"));
 
-        let asked = taken_in(&config, &repo, &firstrun::Choice::Fits, None).expect("answered");
+        let asked = taken_in(&data, &repo, &firstrun::Choice::Fits, None).expect("answered");
 
         assert!(
             matches!(&asked, Taken::AsksForge(why) if why.ends_with("has no `origin` remote")),
             "{asked:?}"
         );
-        assert!(!firstrun::local_plane(&config).exists());
+        assert!(!firstrun::local_plane(&data).exists());
         let (root, _) = taken(
-            taken_in(&config, &repo, &firstrun::Choice::Fits, Some(Kind::GitLab))
-                .expect("answered"),
+            taken_in(&data, &repo, &firstrun::Choice::Fits, Some(Kind::GitLab)).expect("answered"),
         );
         let manifest = std::fs::read_to_string(root.join("charter.toml")).expect("made");
         assert!(manifest.contains("kind = \"gitlab\""), "{manifest}");
@@ -624,12 +637,12 @@ mod tests {
     #[test]
     fn a_repo_on_github_names_the_projects_forge_and_owner_without_asking() {
         let dir = tempfile::tempdir().expect("a directory");
-        let config = dir.path().join("config");
+        let data = dir.path().join("data");
         let repo = a_repo(&dir.path().join("widget"));
         with_origin(&repo, "https://github.com/acme/widget.git");
 
         let (root, _) =
-            taken(taken_in(&config, &repo, &firstrun::Choice::Fits, None).expect("answered"));
+            taken(taken_in(&data, &repo, &firstrun::Choice::Fits, None).expect("answered"));
 
         let manifest = std::fs::read_to_string(root.join("charter.toml")).expect("made");
         assert!(manifest.contains("kind = \"github\""), "{manifest}");
@@ -657,15 +670,14 @@ mod tests {
     #[test]
     fn a_self_managed_remote_named_gitlab_makes_a_project_on_its_host() {
         let dir = tempfile::tempdir().expect("a directory");
-        let config = dir.path().join("config");
+        let data = dir.path().join("data");
         let repo = a_repo(&dir.path().join("widget"));
         with_origin(&repo, "git@git.example.com:platform/widget.git");
 
-        let asked = taken_in(&config, &repo, &firstrun::Choice::Fits, None).expect("answered");
+        let asked = taken_in(&data, &repo, &firstrun::Choice::Fits, None).expect("answered");
         assert!(matches!(asked, Taken::AsksForge(_)), "{asked:?}");
         let (root, _) = taken(
-            taken_in(&config, &repo, &firstrun::Choice::Fits, Some(Kind::GitLab))
-                .expect("answered"),
+            taken_in(&data, &repo, &firstrun::Choice::Fits, Some(Kind::GitLab)).expect("answered"),
         );
 
         let cfg = purlis_core::forge::load_config(&root).expect("charter.toml reads");
@@ -683,14 +695,14 @@ mod tests {
     #[test]
     fn a_repo_on_a_second_forge_adds_that_forge_to_the_first_run_project_once() {
         let dir = tempfile::tempdir().expect("a directory");
-        let config = dir.path().join("config");
+        let data = dir.path().join("data");
         let on = |name: &str, url: &str| {
             let repo = a_repo(&dir.path().join(name));
             with_origin(&repo, url);
             repo
         };
         let take = |repo: &Path| {
-            taken(taken_in(&config, repo, &firstrun::Choice::NoTemplate, None).expect("answered"))
+            taken(taken_in(&data, repo, &firstrun::Choice::NoTemplate, None).expect("answered"))
         };
 
         let (root, first) = take(&on("site", "https://github.com/acme/site.git"));
@@ -893,11 +905,11 @@ mod tests {
     #[test]
     fn a_repo_opened_on_the_first_run_is_laid_out_from_the_template_it_was_given() {
         let dir = tempfile::tempdir().expect("a directory");
-        let config = dir.path().join("config");
+        let data = dir.path().join("data");
         let repo = a_repo(&dir.path().join("widget"));
 
         let (root, taken) = taken_in(
-            &config,
+            &data,
             &repo,
             &firstrun::Choice::Named("go".to_owned()),
             GITHUB,
@@ -912,16 +924,16 @@ mod tests {
     #[test]
     fn a_new_machine_gets_a_local_plane_with_the_repository_as_a_workspace_of_its_name() {
         let dir = tempfile::tempdir().expect("a directory");
-        let config = dir.path().join("config");
+        let data = dir.path().join("data");
         let repo = a_repo(&dir.path().join("widget"));
 
-        let (root, taken) = taken_in(&config, &repo, &firstrun::Choice::Fits, GITHUB)
+        let (root, taken) = taken_in(&data, &repo, &firstrun::Choice::Fits, GITHUB)
             .map(taken)
             .expect("the repository is opened");
 
         assert_eq!(
             root,
-            firstrun::local_plane(&config).canonicalize().expect("made")
+            firstrun::local_plane(&data).canonicalize().expect("made")
         );
         assert_eq!(taken.workspace, "widget");
         assert_eq!(taken.clone, root.join("workspaces/widget/widget"));
@@ -930,9 +942,9 @@ mod tests {
     #[test]
     fn a_second_repository_goes_into_the_same_local_plane() {
         let dir = tempfile::tempdir().expect("a directory");
-        let config = dir.path().join("config");
+        let data = dir.path().join("data");
         let (first, _) = taken_in(
-            &config,
+            &data,
             &a_repo(&dir.path().join("one")),
             &firstrun::Choice::Fits,
             GITHUB,
@@ -941,7 +953,7 @@ mod tests {
         .expect("the first repository");
 
         let (second, taken) = taken_in(
-            &config,
+            &data,
             &a_repo(&dir.path().join("two")),
             &firstrun::Choice::Fits,
             GITHUB,
@@ -957,24 +969,19 @@ mod tests {
     #[test]
     fn a_path_that_is_not_a_full_one_is_refused_before_anything_is_made() {
         let dir = tempfile::tempdir().expect("a directory");
-        let config = dir.path().join("config");
+        let data = dir.path().join("data");
 
-        let refused = taken_in(
-            &config,
-            Path::new("widget"),
-            &firstrun::Choice::Fits,
-            GITHUB,
-        )
-        .expect_err("refused");
+        let refused = taken_in(&data, Path::new("widget"), &firstrun::Choice::Fits, GITHUB)
+            .expect_err("refused");
 
         assert!(refused.contains("is not a full path"), "{refused}");
-        assert!(!firstrun::local_plane(&config).exists());
+        assert!(!firstrun::local_plane(&data).exists());
     }
 
     #[test]
     fn a_repo_opened_on_the_first_run_counts_its_instructions_and_adds_them_only_when_asked() {
         let dir = tempfile::tempdir().expect("a directory");
-        let config = dir.path().join("config");
+        let data = dir.path().join("data");
         let repo = a_repo(&dir.path().join("widget"));
         std::fs::write(repo.join("AGENTS.md"), "Run make check.\n").expect("instructions");
         for argv in [
@@ -990,7 +997,7 @@ mod tests {
             .expect("git runs in a test");
             assert!(done.status.success(), "git {argv:?}");
         }
-        let (root, taken) = taken_in(&config, &repo, &firstrun::Choice::Fits, GITHUB)
+        let (root, taken) = taken_in(&data, &repo, &firstrun::Choice::Fits, GITHUB)
             .map(taken)
             .expect("opened");
 
