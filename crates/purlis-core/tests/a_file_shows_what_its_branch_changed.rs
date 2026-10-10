@@ -213,9 +213,11 @@ fn a_path_through_a_link_is_refused_and_nothing_past_it_is_read() {
     let refused =
         files::what_changed(&reader(), &f.plane, branch(&f), "out/secret.txt").unwrap_err();
 
-    assert!(
-        matches!(&refused, Refused::NotInPiece(said) if said == "out/secret.txt"),
-        "{refused:?}"
+    // Refused by the reader's child, which confines the path in the folder it found (#1189),
+    // in the sentence every file command says it with.
+    assert_eq!(
+        refused.to_string(),
+        "'out/secret.txt' is not a path inside the branch's folder"
     );
 }
 
@@ -233,9 +235,49 @@ fn a_branch_that_is_not_there_is_refused_by_name() {
     )
     .unwrap_err();
 
-    assert!(!refused.to_string().is_empty(), "{refused:?}");
+    // The reader's child refuses it, in the sentence the app's own lookup said it with (#1189).
+    assert_eq!(
+        refused.to_string(),
+        format!(
+            "{} in workspace '{}' has no branch folder called 'nope'",
+            f.repo, f.ws
+        )
+    );
+}
+
+/// #1189: "Show what changed" finds the branch's folder in the reader's child, never in the
+/// process that asks. With a reader that cannot start, nothing of the branch is looked up here:
+/// a branch that is not there is answered with the reader's failure, not refused by name, and
+/// a path refused by its spelling alone is refused before any child is asked.
+#[test]
+fn the_branchs_folder_is_found_by_the_reader_and_not_in_this_process() {
+    purlis_core::unsteered!();
+    let plane = tempfile::tempdir().unwrap();
+    let nobody = files::Reader::new(
+        plane.path().join("no-such-program"),
+        [files::READ_ARG].map(std::ffi::OsString::from),
+    );
+
+    for branch in [
+        Branch::piece("alpha", "widget", "nope"),
+        Branch::repo("alpha", "widget"),
+    ] {
+        let refused = files::what_changed(&nobody, plane.path(), branch, "src/lib.rs").unwrap_err();
+        assert!(
+            refused.to_string().starts_with(files::READ_FAILED),
+            "{branch:?}: {refused}"
+        );
+    }
+
+    let refused = files::what_changed(
+        &nobody,
+        plane.path(),
+        Branch::repo("alpha", "widget"),
+        "../x",
+    )
+    .unwrap_err();
     assert!(
-        !matches!(refused, Refused::NotChanged(_)),
-        "a missing branch is not an unchanged file: {refused:?}"
+        matches!(&refused, Refused::NotInPiece(said) if said == "../x"),
+        "{refused:?}"
     );
 }

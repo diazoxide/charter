@@ -200,39 +200,71 @@ pub struct WhatChanged {
 /// empty diff. Its hunks are read at the sides the list was read at, so the two agree however
 /// the branch moved between them.
 ///
-/// **Only the comparison is read in the reader's child.** Confining the path finds the branch's
-/// folder as every file command does, in this process: `git worktree list` for a piece, `git
-/// rev-parse` for a repo's own folder (#1189 moves that into the reader).
+/// **One ask of the reader, and nothing of the branch read in this process** (#1189). The
+/// path's own spelling is checked here, before any child starts. Everything that needs the
+/// branch — finding its folder, confining the path in it, the file list, the file's hunks — is
+/// done in one child, which finds the folder as the status read does ([`super::status`]),
+/// starting no git. A refusal the child answers with keeps its sentence word for word.
 pub fn what_changed(
     reader: &super::Reader,
     plane: &Path,
     branch: Branch<'_>,
     path: &str,
 ) -> Result<WhatChanged, Refused> {
-    let relative = super::named(plane, branch, path)?;
-    let compared = compare(reader, plane, branch, &Comparison::BranchAndUncommitted)?;
-    let Some(change) = compared.files.into_iter().find(|one| one.path == relative) else {
-        if compared.more > 0 {
-            return Err(Refused::Read(format!(
-                "purlis compares the first {MARKED} files this branch changed, and '{path}' is \
-                 not among them"
-            )));
-        }
-        return Err(Refused::NotChanged(path.to_string()));
+    super::spelled_inside(path)?;
+    let ask = super::Ask::WhatChanged {
+        path: path.to_string(),
     };
-    let diff = compare_file(
-        reader,
-        plane,
-        branch,
-        &compared.sides,
-        &change.path,
-        change.from.as_deref(),
-    )?;
-    Ok(WhatChanged {
+    match reader.ask(plane, branch, ask)? {
+        super::Answer::WhatChanged(Shown::Changed(shown)) => Ok(shown),
+        super::Answer::WhatChanged(Shown::NotListed { more: 0 }) => {
+            Err(Refused::NotChanged(path.to_string()))
+        }
+        super::Answer::WhatChanged(Shown::NotListed { .. }) => Err(Refused::Read(format!(
+            "purlis compares the first {MARKED} files this branch changed, and '{path}' is not \
+             among them"
+        ))),
+        _ => Err(Refused::Read("the reader answered something else".into())),
+    }
+}
+
+/// What the reader's child answers "Show what changed" with: the file compared, or that the
+/// comparison's file list does not hold it — and how many files past [`MARKED`] it left out, so
+/// the app says whether the file is unchanged or only not among the first.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum Shown {
+    Changed(WhatChanged),
+    NotListed { more: usize },
+}
+
+/// [`what_changed`], in this process: only the bounded reader's child calls it. The branch is
+/// opened once, and the path confined in its resolved folder before anything else is read.
+pub(super) fn what_changed_here(
+    plane: &Path,
+    branch: Branch<'_>,
+    path: &str,
+) -> Result<Shown, Refused> {
+    let opened = open(plane, branch)?;
+    let relative = super::named_in(&opened.base, path)?;
+    let compared = compared_in(plane, branch, &opened, &Comparison::BranchAndUncommitted)?;
+    let Some(change) = compared.files.into_iter().find(|one| one.path == relative) else {
+        return Ok(Shown::NotListed {
+            more: compared.more,
+        });
+    };
+    let Some(at) = plain(&change.path) else {
+        return Err(Refused::NotInPiece(change.path));
+    };
+    let from = match change.from.as_deref() {
+        Some(from) => Some(plain(from).ok_or_else(|| Refused::NotInPiece(from.to_string()))?),
+        None => None,
+    };
+    let diff = file_diff_in(plane, branch, &opened, &compared.sides, at, from)?;
+    Ok(Shown::Changed(WhatChanged {
         change,
         base: compared.base,
         diff,
-    })
+    }))
 }
 
 /// One member of a cross-repo change, compared (e).
@@ -308,12 +340,22 @@ pub(super) fn compare_here(
     branch: Branch<'_>,
     comparison: &Comparison,
 ) -> Result<Compared, Refused> {
+    compared_in(plane, branch, &open(plane, branch)?, comparison)
+}
+
+/// [`compare_here`] of a branch already opened: so one child that reads a comparison and then
+/// one of its files opens the branch once ([`what_changed_here`]).
+fn compared_in(
+    plane: &Path,
+    branch: Branch<'_>,
+    opened: &Opened,
+    comparison: &Comparison,
+) -> Result<Compared, Refused> {
     let unreadable = |why: String| Refused::Unreadable {
         what: format!("the changes of {}", branch.called()),
         why,
     };
-    let opened = open(plane, branch)?;
-    let (since, head, named) = resolve(plane, branch, &opened, comparison)?;
+    let (since, head, named) = resolve(plane, branch, opened, comparison)?;
     let held = match head {
         At::WorkingTree => Some(hold(plane, &opened.base).map_err(unreadable)?),
         At::Commit(_) => None,
@@ -381,10 +423,6 @@ pub(super) fn compare_file_here(
     path: &str,
     from: Option<&str>,
 ) -> Result<FileDiff, Refused> {
-    let unreadable = |why: String| Refused::Unreadable {
-        what: path.to_string(),
-        why,
-    };
     let Some(path) = plain(path) else {
         return Err(Refused::NotInPiece(path.to_string()));
     };
@@ -392,7 +430,24 @@ pub(super) fn compare_file_here(
         Some(from) => Some(plain(from).ok_or_else(|| Refused::NotInPiece(from.to_string()))?),
         None => None,
     };
-    let opened = open(plane, branch)?;
+    file_diff_in(plane, branch, &open(plane, branch)?, sides, path, from)
+}
+
+/// [`compare_file_here`] of a branch already opened, for a path and its source already checked
+/// to be plain.
+fn file_diff_in(
+    plane: &Path,
+    branch: Branch<'_>,
+    opened: &Opened,
+    sides: &Sides,
+    path: String,
+    from: Option<String>,
+) -> Result<FileDiff, Refused> {
+    let what = path.clone();
+    let unreadable = |why: String| Refused::Unreadable {
+        what: what.clone(),
+        why,
+    };
     let commit = |hex: &str| -> Result<gix::ObjectId, Refused> {
         let full = hex.len() == 40 || hex.len() == 64;
         let id = (full && hex.bytes().all(|b| b.is_ascii_hexdigit()))
