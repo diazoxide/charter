@@ -7798,6 +7798,18 @@ h2.sidebar-title .node-icon {
   color: var(--danger-text);
 }
 
+/* A search hit handed to a chat (#1151): what the core answered, and the chat picker. */
+.search-handed {
+  color: var(--text-primary);
+}
+
+.search-pick .pick-a-chat-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  padding: 0.25rem 0.75rem;
+}
+
 .search-hits {
   flex: 1 1 auto;
   min-height: 0;

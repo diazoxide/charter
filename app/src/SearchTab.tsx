@@ -10,6 +10,12 @@
  * jump), and Enter opens the one stepped to in its branch's file tab, at its line. Escape in the
  * hits goes back to the box.
  *
+ * **Shift+Enter hands the hit to a chat** (FM-9, #1151): it opens the preview's chat picker for
+ * the hit stepped to, with its line, under the summary — a key on the listbox, never a button
+ * inside an option. The pick is typed into that chat as *Add to a chat's context* types it,
+ * unsent (`handReference`), and what the core answered, or why nothing was handed, is said in the
+ * tab's status line. Escape closes the picker, and the keyboard goes back to the hits either way.
+ *
  * What is searched, and what never is, is the core's (`contentSearch.ts`). This draws.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -33,7 +39,15 @@ import {
   type SearchHeard,
 } from "./contentSearch";
 import { jumpTo } from "./fileJump";
-import { dragReference } from "./references";
+import {
+  ChatsToPick,
+  dragReference,
+  handReference,
+  referenceSaid,
+  useReferenceChats,
+  type ChatHere,
+  type Referenced,
+} from "./references";
 import { placeName } from "./pieceViews";
 import type { ViewRef } from "./tabs";
 
@@ -297,6 +311,16 @@ function Hits({
   const [active, setActive] = useState(0);
   const at = Math.min(active, Math.max(0, lines - 1));
   const counted = heard.files.reduce((sum, file) => sum + file.count, 0);
+  const lent = useReferenceChats();
+  /** The hit whose chat is being picked (Shift+Enter). */
+  const [picking, setPicking] = useState<Referenced>();
+  /** What the last hand to a chat answered, said in the status line. */
+  const [handed, setHanded] = useState<{ words: string; refused: boolean }>();
+  const picker = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (picking !== undefined)
+      picker.current?.querySelector<HTMLElement>("[role=menuitem]")?.focus();
+  }, [picking]);
 
   // The line stepped to stays in view.
   useEffect(() => {
@@ -318,16 +342,82 @@ function Hits({
     return <EmptyState headline={heard.trouble} size="panel" testid="search-trouble" />;
   }
 
-  const open = (n: number) => {
+  /** The hit `n` lines into what is shown: its file and its line's number. */
+  const hitAt = (n: number) => {
     const found = shown.find((one) => n >= one.first && n < one.first + one.file.lines.length);
-    if (found === undefined) return;
-    const { file } = found;
+    if (found === undefined) return undefined;
+    return { file: found.file, line: found.file.lines[n - found.first].number };
+  };
+
+  const open = (n: number) => {
+    const hit = hitAt(n);
+    if (hit === undefined) return;
+    const { file, line } = hit;
     jumpTo({
       plane: file.plane,
       place: { workspace: file.workspace, repo: file.repo, piece: file.piece },
       path: file.path,
-      line: file.lines[n - found.first].number,
+      line,
     });
+  };
+
+  /** Shift+Enter: the chat picker for hit `n`, or the sentence that says why there is none. */
+  const pick = (n: number) => {
+    const hit = hitAt(n);
+    if (hit === undefined) return;
+    const { file, line } = hit;
+    const r: Referenced = {
+      plane: file.plane,
+      workspace: file.workspace,
+      repo: file.repo,
+      piece: file.piece,
+      path: file.path,
+      folder: false,
+      lines: { first: line, last: line },
+    };
+    const said = referenceSaid(r);
+    if (lent === undefined || lent.chats.length === 0)
+      setHanded({ words: `No chat is open in this project to add ${said} to.`, refused: true });
+    else if (r.plane !== lent.plane)
+      setHanded({
+        words: `${said} is in another project, so this project's chats cannot take it.`,
+        refused: true,
+      });
+    else {
+      setHanded(undefined);
+      setPicking(r);
+    }
+  };
+
+  /** The picker is done: closed, and the keyboard back on the hits. */
+  const picked = () => {
+    setPicking(undefined);
+    list.current?.focus();
+  };
+
+  const handTo = (r: Referenced, chat: ChatHere) => {
+    if (lent === undefined) return;
+    picked();
+    void handReference(lent.plane, chat.session, chat.name, r).then((ran) =>
+      setHanded(
+        ran.ok ? { words: ran.said ?? "", refused: false } : { words: ran.refused, refused: true },
+      ),
+    );
+  };
+
+  const pickerKeys = (e: React.KeyboardEvent) => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      picked();
+      return;
+    }
+    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+    e.preventDefault();
+    const items = [...(picker.current?.querySelectorAll<HTMLElement>("[role=menuitem]") ?? [])];
+    const now = items.indexOf(document.activeElement as HTMLElement);
+    const step = e.key === "ArrowDown" ? 1 : -1;
+    items[(now + step + items.length) % items.length]?.focus();
   };
 
   const keys = (e: React.KeyboardEvent) => {
@@ -343,7 +433,10 @@ function Hits({
       } else to(at - 1);
     } else if (e.key === "Home") to(0);
     else if (e.key === "End") to(lines - 1);
-    else if (e.key === "Enter") {
+    else if (e.key === "Enter" && e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      e.preventDefault();
+      pick(at);
+    } else if (e.key === "Enter") {
       e.preventDefault();
       open(at);
     } else if (e.key === "Escape") {
@@ -373,7 +466,21 @@ function Hits({
             {`${heard.unsearched.length} file${heard.unsearched.length === 1 ? "" : "s"} not searched: ${heard.unsearched.join("; ")}`}
           </span>
         )}
+        {handed !== undefined && (
+          <span className={handed.refused ? "search-refused" : "search-handed"}>
+            {handed.words}
+          </span>
+        )}
       </p>
+      {picking !== undefined && lent !== undefined && (
+        <div className="search-pick" ref={picker} onKeyDown={pickerKeys}>
+          <ChatsToPick
+            chats={lent.chats}
+            label={`Add ${referenceSaid(picking)} to a chat's context`}
+            onPick={(chat) => handTo(picking, chat)}
+          />
+        </div>
+      )}
       <div
         ref={list}
         className="search-hits"
@@ -381,6 +488,7 @@ function Hits({
         aria-label="Search results"
         tabIndex={0}
         aria-activedescendant={lines > 0 ? `search-hit-${at}` : undefined}
+        aria-keyshortcuts="Shift+Enter"
         onKeyDown={keys}
       >
         {shown.map(({ file, project, branch, first }) => {
