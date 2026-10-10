@@ -290,11 +290,10 @@ pub struct WhatChanged {
 /// One file of a branch compared against the branch it was cut from, committed or not: its
 /// lines and git's hunks, or what it is when it is not drawn as lines. Refused, in the core's
 /// sentence, for a path any file command would refuse and for a file the branch did not change.
-// The comparison is read by gitoxide in the core's bounded reader, as `branch_status` is (RC-2,
-// D-88f, D-88h). Confining the path first finds the branch's folder as every file command does
-// (`files::named`), which runs `git worktree list` or `git rev-parse` in this process; that is
-// #1189's to move into the reader. On a blocking thread and never the one that draws (SC-2). Not
-// a doc comment, because the generated bindings carry those.
+// Read by gitoxide in the core's bounded reader, as `branch_status` is (RC-2, D-88f, D-88h): one
+// ask, in which the child finds the branch's folder, confines the path in it, and reads the
+// comparison, so this process starts no git for it (#1189). On a blocking thread and never the
+// one that draws (SC-2). Not a doc comment, because the generated bindings carry those.
 #[tauri::command]
 #[specta::specta]
 pub async fn what_changed(

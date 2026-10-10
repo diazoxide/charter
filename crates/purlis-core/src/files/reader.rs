@@ -302,6 +302,9 @@ pub enum Ask {
         path: String,
         from: Option<String>,
     },
+    /// One file, by its path relative to the branch's folder, against the branch's base, the
+    /// folder found and the path confined here too: "Show what changed" in one ask (#1189).
+    WhatChanged { path: String },
 }
 
 /// What the child answers.
@@ -314,6 +317,7 @@ pub enum Answer {
     AheadBehind(AheadBehind),
     Compared(super::Compared),
     FileDiff(super::FileDiff),
+    WhatChanged(super::Shown),
 }
 
 /// One question, as it crosses to the child.
@@ -613,6 +617,9 @@ fn serve() -> i32 {
         Ask::CompareFile { sides, path, from } => {
             super::compare::compare_file_here(plane, branch, &sides, &path, from.as_deref())
                 .map(Answer::FileDiff)
+        }
+        Ask::WhatChanged { path } => {
+            super::compare::what_changed_here(plane, branch, &path).map(Answer::WhatChanged)
         }
     }
     .map_err(|refused| refused.to_string());
