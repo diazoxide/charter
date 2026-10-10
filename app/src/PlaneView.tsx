@@ -16,6 +16,7 @@ import {
 import clsx from "clsx";
 import { listen } from "./here";
 import { QueueRead } from "./QueueRead";
+import { machineChanged } from "./settings/thisMachine";
 import { withQueue } from "./queueRows";
 import { MAIN, thisWindow } from "./windows";
 import { Group, Panel, Separator } from "react-resizable-panels";
@@ -3641,6 +3642,8 @@ export const PlaneView = memo(function PlaneView({
         .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
       if (said.status === "error") return { ok: false, refused: said.error };
       setPinning((asked) => asked + 1);
+      // Settings › You › This machine lists the pins, and may be on screen (#1240).
+      machineChanged();
       return { ok: true };
     },
     [plane],
@@ -4112,6 +4115,9 @@ export const PlaneView = memo(function PlaneView({
         if (failed !== undefined)
           setReport({ from: "workspace.drag", refused: true, words: failed });
         setPinning((asked) => asked + 1);
+        // This machine lists the pins in order, and may be on screen (#1240). Read again either
+        // way: a refused write leaves the store as it says, and that is what the group shows.
+        machineChanged();
       })();
     },
     [onWorkspaceStrip, pinnedWorkspaces, plane, workspacesShown.shown],
