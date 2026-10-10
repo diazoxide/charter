@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { useId, useMemo, useState, type ReactNode } from "react";
 import * as Popover from "@radix-ui/react-popover";
 import * as RovingFocusGroup from "@radix-ui/react-roving-focus";
 import clsx from "clsx";
@@ -17,6 +17,7 @@ import {
 import { PersonaMark } from "./PersonaMark";
 import type { Offer } from "./actions";
 import type { PanelEmpty, PanelRow, RowAction } from "./bindings";
+import { byDay, isDated, type Day } from "./dayGroups";
 import { EmptyState } from "./EmptyState";
 import { useTabStop } from "./roving";
 
@@ -114,6 +115,7 @@ export function PanelList({
   page = PAGE,
   testid,
   offerFor,
+  titleOnly = false,
 }: {
   rows: readonly PanelRow[];
   /** What to say when there are none — the panel's own sentence, not a shared default. */
@@ -139,6 +141,13 @@ export function PanelList({
   wrap?: RowMenu;
   page?: number;
   testid?: string;
+  /**
+   * **A row on the right side is its title alone** (#1674, B-9): the note — a date, a count —
+   * is said on hover, and a list whose every note is a date is drawn under the days it was
+   * written on (`dayGroups.ts`). The right side's panels set it; a list in a view tab has the
+   * pane's width and keeps its notes on the line.
+   */
+  titleOnly?: boolean;
 }) {
   const [query, setQuery] = useState("");
   const [limit, setLimit] = useState(page);
@@ -157,8 +166,17 @@ export function PanelList({
     );
   }, [wanted, rows]);
 
-  const drawn = matching.slice(0, limit);
+  // **Grouped by day when the whole list is dated**, decided on every row and never on the
+  // ones a search left, so typing never makes headings appear over a list that has none. The
+  // days are put in order before the page is cut, so the first page is the newest day's.
+  // One clock for the whole render, so its days cannot disagree with each other.
+  const now = new Date();
+  const dated = titleOnly && isDated(rows, noteOf);
+  const ordered = dated ? byDay(matching, noteOf, now).flatMap((day) => day.items) : matching;
+  const drawn = ordered.slice(0, limit);
+  const days = dated ? byDay(drawn, noteOf, now) : undefined;
   const more = matching.length - drawn.length;
+  const dayIds = useId();
   // **Once there is more than a page**, which is the operator's own rule. Against the whole
   // list and never the filtered one: a box that vanished when a search narrowed the list to
   // eight rows would take away the control being used.
@@ -174,6 +192,23 @@ export function PanelList({
       ? []
       : drawn.flatMap((row) => row.actions.map((action) => actionStop(row, action)))),
   ]);
+
+  function drawRow(row: PanelRow) {
+    return (
+      <Row
+        key={row.key}
+        row={row}
+        open={open === row.key}
+        onOpen={(opening) => onOpen(opening ? row.key : undefined)}
+        detail={detailOf?.(row) ?? defaultDetail(row)}
+        snippet={snippetOf(row, wanted)}
+        onRun={onRun}
+        onAct={onAct}
+        wrap={wrap}
+        titleOnly={titleOnly}
+      />
+    );
+  }
 
   if (rows.length === 0) {
     // **The empty state's way out is the catalogue's row** (#1156), drawn only while the
@@ -230,21 +265,21 @@ export function PanelList({
         <p className="none">Nothing here matches “{query.trim()}”.</p>
       ) : (
         <RovingFocusGroup.Root asChild orientation="vertical" {...stop}>
-          <ul className="panel-rows" aria-label={label}>
-            {drawn.map((row) => (
-              <Row
-                key={row.key}
-                row={row}
-                open={open === row.key}
-                onOpen={(opening) => onOpen(opening ? row.key : undefined)}
-                detail={detailOf?.(row) ?? defaultDetail(row)}
-                snippet={snippetOf(row, wanted)}
-                onRun={onRun}
-                onAct={onAct}
-                wrap={wrap}
-              />
-            ))}
-          </ul>
+          {days === undefined ? (
+            <ul className="panel-rows" aria-label={label}>
+              {drawn.map(drawRow)}
+            </ul>
+          ) : (
+            /* One scroll for the whole list and one roving group across its days: Down walks
+               from the last row of Today to the first of Yesterday. */
+            <div className="panel-rows panel-days" role="group" aria-label={label}>
+              {days.map(({ day, items }) => (
+                <DayRows key={day} day={day} id={`${dayIds}-${day}`}>
+                  {items.map(drawRow)}
+                </DayRows>
+              ))}
+            </div>
+          )}
         </RovingFocusGroup.Root>
       )}
 
@@ -261,6 +296,22 @@ export function PanelList({
         </button>
       )}
     </div>
+  );
+}
+
+const noteOf = (row: PanelRow) => row.note;
+
+/** One day's heading and the rows written on it. */
+function DayRows({ day, id, children }: { day: Day; id: string; children: ReactNode }) {
+  return (
+    <>
+      <h3 className="panel-day" id={id}>
+        {day}
+      </h3>
+      <ul className="panel-day-rows" aria-labelledby={id}>
+        {children}
+      </ul>
+    </>
   );
 }
 
@@ -303,8 +354,10 @@ function Row({
   onRun,
   onAct,
   wrap,
+  titleOnly,
 }: {
   row: PanelRow;
+  titleOnly: boolean;
   open: boolean;
   onOpen: (opening: boolean) => void;
   detail: ReactNode;
@@ -325,6 +378,14 @@ function Row({
   // memory's (SI-9b, ADR 0065 Q4) — so it carries no native tooltip repeating its words over
   // the row below. A row whose card is a popover keeps one, for the reader who does not click.
   const tooltip = row.runs === null && row.text !== shortened ? row.text : undefined;
+  // **On the right side the note is the hover** (#1674): the date a memory was written, how
+  // much a persona remembers. On the whole row, so it is the row's description too.
+  const hover =
+    titleOnly && row.note !== null
+      ? row.text !== shortened
+        ? `${row.text}\n${row.note}`
+        : row.note
+      : undefined;
   const body = (
     <>
       {persona ? (
@@ -332,10 +393,10 @@ function Row({
       ) : (
         <Mark className="node-icon" />
       )}
-      <span className="row-text" title={tooltip}>
+      <span className="row-text" title={hover === undefined ? tooltip : undefined}>
         {shortened}
       </span>
-      {row.note !== null && <span className="row-note">{` · ${row.note}`}</span>}
+      {row.note !== null && !titleOnly && <span className="row-note">{` · ${row.note}`}</span>}
       {row.tone === "default" && <Star className="node-icon" />}
     </>
   );
@@ -351,7 +412,9 @@ function Row({
 
   const inner =
     detail === null && row.runs === null ? (
-      <span className="row">{body}</span>
+      <span className="row" title={hover}>
+        {body}
+      </span>
     ) : row.runs !== null ? (
       /* **A row that does something is a plain button that does it, and opens no card.** A
          persona's row opens that persona's tab (`persona.show:<name>`, the operator's ruling of
@@ -362,6 +425,7 @@ function Row({
         <button
           type="button"
           className="row"
+          title={hover}
           onClick={() => {
             if (row.runs !== null) onRun?.(row.runs);
           }}
@@ -376,7 +440,7 @@ function Row({
       <Popover.Root open={open} onOpenChange={opened}>
         <Popover.Trigger asChild>
           <RovingFocusGroup.Item asChild tabStopId={row.key} active={open}>
-            <button type="button" className="row">
+            <button type="button" className="row" title={hover}>
               {body}
             </button>
           </RovingFocusGroup.Item>

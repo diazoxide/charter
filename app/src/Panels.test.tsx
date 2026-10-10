@@ -1,6 +1,6 @@
 /// <reference types="node" />
 import { useState } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks } from "@tauri-apps/api/mocks";
@@ -173,7 +173,6 @@ function draw(
     offers?: Catalogued;
     onPress?: (offer: Offer) => void;
     contributed?: PanelView[];
-    views?: ExtensionView[];
     vaults?: VaultSummary[];
     onAddTodo?: (workspace: string, text: string) => Promise<string | undefined>;
   } = {},
@@ -187,7 +186,6 @@ function draw(
         offers={on.offers ?? new Map()}
         onPress={on.onPress ?? (() => {})}
         contributed={on.contributed ?? []}
-        views={on.views ?? []}
         shownRow={shownRow}
         onShowRow={setShownRow}
         vaults={on.vaults === undefined ? undefined : { vaults: on.vaults, reload: () => {} }}
@@ -403,27 +401,53 @@ describe("charter's own panels", () => {
     ).toBeInTheDocument();
   });
 
-  it("marks the plane's default persona, in the word and beside it", () => {
-    // The word stays a word: the region's scenario spec asks the panel whether it says
-    // `default`, and a screen reader gets the same sentence a sighted reader does. The star
-    // the tone draws is decoration on top of it.
+  it("draws a persona as its badge and its name, and nothing else on the line (#1674)", () => {
+    // The persona's tab holds the rest: how much it remembers and its Statistics. The
+    // default persona keeps its star beside the name, and the word is the row's hover.
     draw();
 
     const rows = within(screen.getByTestId("panel-personas")).getAllByRole("listitem");
     const [devops, steward] = rows;
-    expect(steward).toHaveTextContent("default");
+    expect(devops).toHaveTextContent(/^devops$/);
+    expect(steward).toHaveTextContent(/^steward$/);
+    expect(within(screen.getByTestId("panel-personas")).queryByText(/memories/)).toBeNull();
     expect(steward).toHaveClass("is-default");
     expect(devops).not.toHaveClass("is-default");
+    expect(within(steward).getByRole("button")).toHaveAttribute("title", "default · 2 memories");
+  });
+});
+
+describe("rows on the right are one line (#1674)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 2, 3, 12, 0));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
-  it("carries how much each persona remembers, which the operator asked to see in the list", () => {
+  it("draws a todo as its title, its date on hover, under the day it was written", () => {
     draw();
 
-    const notes = within(screen.getByTestId("panel-personas")).getAllByText(/2 memories/);
-    expect(notes).toHaveLength(2);
-    // `0 memories` is said rather than left off: a row that omits the count reads as one
-    // charter did not look at, which is a different fact from a persona with none.
-    expect(notes[1]).toHaveTextContent("default · 2 memories");
+    const todos = screen.getByTestId("panel-todos");
+    const todo = within(todos).getByRole("button", { name: "Review the rollout plan" });
+    expect(todo).toHaveTextContent(/^Review the rollout plan$/);
+    expect(todo).toHaveAttribute("title", "2026-03-02");
+    expect(within(todos).getByRole("heading", { name: "Yesterday" })).toBeInTheDocument();
+    expect(within(todos).getByRole("list", { name: "Yesterday" })).toContainElement(todo);
+  });
+
+  it("draws a memory as its title, its date on hover, under the day it was written", () => {
+    draw({ state: withMemory(), offers: crudOffers() });
+
+    const memory = within(screen.getByTestId("panel-memory")).getByRole("button", {
+      name: "The API returns 418 on Mondays",
+    });
+    expect(memory).toHaveTextContent(/^The API returns 418 on Mondays$/);
+    expect(memory).toHaveAttribute("title", "2026-03-02 09:12");
+    expect(
+      within(screen.getByTestId("panel-memory")).getByRole("heading", { name: "Yesterday" }),
+    ).toBeInTheDocument();
   });
 });
 
@@ -530,54 +554,16 @@ const STATISTICS: ExtensionView = {
 };
 
 describe("persona statistics", () => {
-  it("are a button on the personas heading when an extension offers a view about personas", () => {
-    draw({ views: [STATISTICS], offers: everyOffer() });
+  it("are not on the personas heading: they are in each persona's tab (#1674)", () => {
+    // `Views.test.tsx` holds the tab's half: Statistics beside a persona's own view, opened
+    // about that persona. The palette still lists the whole project's.
+    draw({ offers: everyOffer() });
 
-    const panel = screen.getByTestId("panel-personas");
-    expect(within(panel).getByRole("button", { name: "Statistics" })).toBeInTheDocument();
-    // The todos panel is about nothing charter publishes, so it is offered nothing.
-    expect(
-      within(screen.getByTestId("panel-todos")).queryByRole("button", { name: "Statistics" }),
-    ).toBeNull();
-  });
-
-  it("are no button at all when no extension offers them", () => {
-    // The statistics are a plugin's, and so is their absence: a personas panel with no
-    // extension installed has no button that could only ever say "not installed".
-    draw();
-
-    expect(
-      within(screen.getByTestId("panel-personas")).queryByRole("button", { name: "Statistics" }),
-    ).toBeNull();
-  });
-
-  it("run the catalogue's row that opens the whole plane's statistics in a tab of their own", async () => {
-    // **Pressing it asks nothing here.** It runs the row the palette lists; the window opens a
-    // tab, and the tab asks the extension's program (`Views.test.tsx`). Reading this panel
-    // starts no program at all.
-    const pressed: Offer[] = [];
-    draw({ views: [STATISTICS], offers: everyOffer(), onPress: (offer) => pressed.push(offer) });
-
-    await userEvent.click(
-      within(screen.getByTestId("panel-personas")).getByRole("button", { name: "Statistics" }),
-    );
-
-    expect(pressed.map((offer) => offer.id)).toEqual(["view.open:persona-statistics/statistics"]);
-    expect(pressed[0].does).toEqual({
-      verb: "openView",
-      view: { from: "persona-statistics", view: "statistics", key: "" },
-      title: "Statistics",
-    });
-  });
-
-  it("are never offered on a contributed panel, which cannot claim a subject", () => {
-    draw({ views: [STATISTICS], offers: everyOffer(), contributed: [contributedPanel()] });
-
-    expect(
-      within(screen.getByTestId("panel-ext-acme-reviews")).queryByRole("button", {
-        name: "Statistics",
-      }),
-    ).toBeNull();
+    for (const panel of ["panel-personas", "panel-todos"]) {
+      expect(
+        within(screen.getByTestId(panel)).queryByRole("button", { name: "Statistics" }),
+      ).toBeNull();
+    }
   });
 });
 
@@ -868,7 +854,8 @@ describe("the shared row in Personas", () => {
     const shared = within(screen.getByTestId("panel-personas")).getByRole("button", {
       name: /^shared/,
     });
-    expect(shared).toHaveTextContent("1 memory");
+    expect(shared).toHaveTextContent(/^shared$/);
+    expect(shared).toHaveAttribute("title", "1 memory");
     await userEvent.click(shared);
 
     expect(pressed.map((offer) => offer.id)).toEqual(["memory.shared"]);
