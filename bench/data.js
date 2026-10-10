@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791672384427,
+  "lastUpdate": 1791673974237,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -6636,6 +6636,48 @@ window.BENCHMARK_DATA = {
             "value": 101.346723,
             "unit": "ms",
             "extra": "median of 5 runs: 100.644, 101.300, 101.347, 102.037, 102.061 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "eyehollow@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "dbrownsimple"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "9c525dde6644d6fede4db1a84da720c53707a328",
+          "message": "Train 46 review: a late failure silences no ask, and a grant waits for the row to settle\n\n- asknotify: a chat's own wait is an update only for the app's reasons that are not a task\n  that came to nothing. With #1693's derive, a chat in the queue only for failures asks\n  nothing; one that also waits on the person for itself is an ask, so a failure left\n  unlooked-at no longer silences that chat's notification (reasons_besides_failures).\n- Inbox: an update's Allow is held for SETTLE_MS after the row's own words or answers\n  change, or after it is laid out somewhere else, not only after the stops above it change.\n  Tests: the keyboard path, a changed grant sentence, a row moved by layout alone.\n- inboxupdates store: a file larger than any this store writes (MOST_BYTES) reads as none\n  and is written over, as an unreadable one is.\n- WINDOW_ONLY's count in the UI RPC test gains the three update commands.\n\nRefs #1693 #1694\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nAssisted-by: claude-code:claude-opus-5-5\nPurlis-Chat: 01M4AREQXXRGBAEWM0SZ0N0WBN\nPurlis-Persona: steward",
+          "timestamp": "2026-10-11T03:07:03+04:00",
+          "tree_id": "4b698b088d657d36f37ff893ed8bf35b20bd4d16",
+          "url": "https://github.com/purlis/purlis/commit/9c525dde6644d6fede4db1a84da720c53707a328"
+        },
+        "date": 1791673973011,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.5217645,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.477, 0.489, 0.522, 0.534, 0.542 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 17.019177,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.762, 16.814, 17.019, 17.129, 17.392 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 105.678424,
+            "unit": "ms",
+            "extra": "median of 5 runs: 104.038, 104.664, 105.678, 105.805, 105.892 ms"
           }
         ]
       }
