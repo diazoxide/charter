@@ -115,6 +115,19 @@ describe("the community files", () => {
     expect(read(".github/PULL_REQUEST_TEMPLATE.md")).toMatch(/Signed-off-by/);
   });
 
+  it("hold a change to the window to a screenshot of the real window (DS-5, #628)", () => {
+    // ST8: a UI change is done only once a real screenshot of it has been checked.
+    expect(prose(".github/PULL_REQUEST_TEMPLATE.md")).toContain(
+      "- [ ] A change to the window: a screenshot of the real window was looked at before " +
+        "calling it done (light and dark, narrow and wide where it matters), and is attached or " +
+        "described here.",
+    );
+    expect(prose("CONTRIBUTING.md")).toContain(
+      "A change to what the window draws is done only once someone has looked at a screenshot " +
+        "of the real window, in the light and the dark theme,",
+    );
+  });
+
   it("exempt the maintainers' own pull requests from the sign-off, agents' commits included", () => {
     // The operator's ruling V32b: the DCO is for outside contributors. A pull request a
     // maintainer opens needs no sign-off, and neither do the commits their agents make in it.
