@@ -867,6 +867,41 @@ mod tests {
         );
     }
 
+    /// #881: a repo on a self-managed host asks which forge it is, and the answer's project
+    /// keeps the remote's host, and the owner its path names, without either being typed.
+    #[test]
+    fn a_self_managed_repo_named_gitlab_makes_a_project_on_its_host() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let repo = a_repo(&dir.path().join("svc"));
+        let added = purlis_core::forklock::output(
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(&repo)
+                .args([
+                    "remote",
+                    "add",
+                    "origin",
+                    "git@git.example.com:platform/svc.git",
+                ]),
+        )
+        .expect("git runs in a test");
+        assert!(added.status.success());
+        let at = dir.path().join("svc-plane");
+        let adopt = Some(repo.to_string_lossy().into_owned());
+
+        let asked = scaffold_at(&at, false, adopt.clone(), None).expect_err("asked");
+        assert!(matches!(asked, NotMade::AsksForForge(_)), "{asked:?}");
+        let root = scaffold_at(&at, false, adopt, Some(purlis_core::forge::Kind::GitLab))
+            .expect("the answer makes it");
+
+        let cfg = purlis_core::forge::load_config(&root).expect("charter.toml reads");
+        let forges = purlis_core::forge::to_query(&cfg).expect("the forges read");
+        assert_eq!(forges.len(), 1, "{forges:?}");
+        assert_eq!(forges[0].0.kind, purlis_core::forge::Kind::GitLab);
+        assert_eq!(forges[0].0.host, "git.example.com");
+        assert_eq!(forges[0].1, "platform");
+    }
+
     #[test]
     fn a_directory_that_is_not_a_repository_cannot_be_adopted() {
         let dir = tempfile::tempdir().expect("a directory");

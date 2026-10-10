@@ -9,6 +9,9 @@
 //! a wrong kind sends every forge call to the wrong API. The owner is the remote's path without
 //! its last segment, which is the org or user on GitHub and the group, subgroups included, on
 //! GitLab.
+//!
+//! Once the operator has named a self-managed remote's kind, its host and owner are read from
+//! it ([`hosted_as`]), so the new project's forge block is not typed again (#881).
 
 use std::path::Path;
 
@@ -36,20 +39,7 @@ pub fn forge_of_url(url: &str) -> Option<FromRemote> {
     let kind = [Kind::GitHub, Kind::GitLab]
         .into_iter()
         .find(|kind| kind.default_host() == host)?;
-    let path = forge::namespace_of(url)?;
-    let segments: Vec<&str> = path.split('/').collect();
-    if !segments.iter().all(|segment| segment_ok(segment)) {
-        return None;
-    }
-    // GitHub names exactly `owner/repo`; a GitLab group may hold subgroups.
-    let fits = match kind {
-        Kind::GitHub => segments.len() == 2,
-        Kind::GitLab => segments.len() >= 2,
-    };
-    if !fits {
-        return None;
-    }
-    let owner = segments[..segments.len() - 1].join("/");
+    let owner = owner_of(url, kind)?;
     Some(FromRemote { kind, owner })
 }
 
@@ -74,15 +64,76 @@ fn hides_another_host(url: &str) -> bool {
         .is_some_and(|(user, _)| user.contains([':', '#', '?', '\\']))
 }
 
-/// What the `origin` of the repo at `repo` names, or why it names nothing charter can use: the
-/// sentence the caller asks the operator with.
-pub fn forge_of_repo(repo: &Path) -> Result<FromRemote, String> {
+/// Where a self-managed remote is, once the operator has named its forge's kind (#881).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Hosted {
+    /// The remote's host, as [`forge::host_of`] reads it: what the forge block's `host` is.
+    pub host: String,
+    /// The org, user or group the repo belongs to, or empty when the remote's path does not
+    /// read as one for the named kind.
+    pub owner: String,
+}
+
+/// The host, and the owner when its path reads as one, of a remote whose kind the operator
+/// named because its host does not say (#881): what the new project's forge block is written
+/// with, so the operator does not type the host again.
+///
+/// `None` when the host is not one a forge block can hold, when it is `github.com` or
+/// `gitlab.com` (those are read without asking, and a named kind there would retype every repo
+/// on it), or when the remote hides another host. The same strictness as [`forge_of_url`],
+/// because the answer is written into a new project.
+pub fn hosted_as(url: &str, kind: Kind) -> Option<Hosted> {
+    if hides_another_host(url) {
+        return None;
+    }
+    let host = forge::host_of(url);
+    let own = [Kind::GitHub, Kind::GitLab]
+        .into_iter()
+        .any(|kind| kind.default_host() == host);
+    if host.is_empty() || own || !forge::host_ok(&host) {
+        return None;
+    }
+    Some(Hosted {
+        owner: owner_of(url, kind).unwrap_or_default(),
+        host,
+    })
+}
+
+/// [`hosted_as`], of the `origin` of the repo at `repo`.
+pub fn hosted_repo(repo: &Path, kind: Kind) -> Option<Hosted> {
+    hosted_as(&origin_of(repo), kind)
+}
+
+/// The owner a remote's path names for `kind`: every segment but the repo's own, each one a
+/// name, and as many as the kind holds (GitHub names exactly `owner/repo`; a GitLab group may
+/// hold subgroups).
+fn owner_of(url: &str, kind: Kind) -> Option<String> {
+    let path = forge::namespace_of(url)?;
+    let segments: Vec<&str> = path.split('/').collect();
+    if !segments.iter().all(|segment| segment_ok(segment)) {
+        return None;
+    }
+    let fits = match kind {
+        Kind::GitHub => segments.len() == 2,
+        Kind::GitLab => segments.len() >= 2,
+    };
+    fits.then(|| segments[..segments.len() - 1].join("/"))
+}
+
+/// The `origin` URL of the repo at `repo`, or empty when it has none git will say.
+fn origin_of(repo: &Path) -> String {
     use crate::worktree::git;
-    let url = git::run(repo, &["remote", "get-url", "origin"], git::READ)
+    git::run(repo, &["remote", "get-url", "origin"], git::READ)
         .ok()
         .filter(|answer| answer.ok())
         .map(|answer| answer.line().trim().to_owned())
-        .unwrap_or_default();
+        .unwrap_or_default()
+}
+
+/// What the `origin` of the repo at `repo` names, or why it names nothing charter can use: the
+/// sentence the caller asks the operator with.
+pub fn forge_of_repo(repo: &Path) -> Result<FromRemote, String> {
+    let url = origin_of(repo);
     if url.is_empty() {
         return Err(format!("{} has no `origin` remote", repo.display()));
     }
@@ -192,6 +243,72 @@ mod tests {
             forge_of_url("https://oauth2@gitlab.com/group/widget.git"),
             named(Kind::GitLab, "group")
         );
+    }
+
+    fn hosted(host: &str, owner: &str) -> Option<Hosted> {
+        Some(Hosted {
+            host: host.to_owned(),
+            owner: owner.to_owned(),
+        })
+    }
+
+    /// #881: once the operator names a self-managed remote's kind, its host is carried over,
+    /// with the owner when the path reads as one for that kind.
+    #[test]
+    fn a_self_managed_remote_named_as_a_kind_carries_its_host_and_owner() {
+        for (url, kind, expected) in [
+            (
+                "git@gitlab.example.com:group/sub/widget.git",
+                Kind::GitLab,
+                hosted("gitlab.example.com", "group/sub"),
+            ),
+            (
+                "https://Git.Example.com/group/widget",
+                Kind::GitLab,
+                hosted("git.example.com", "group"),
+            ),
+            (
+                "ssh://git@git.example.com:2222/group/widget.git",
+                Kind::GitLab,
+                hosted("git.example.com", "group"),
+            ),
+            (
+                "https://github.example.com/acme/widget.git",
+                Kind::GitHub,
+                hosted("github.example.com", "acme"),
+            ),
+            // A path that names no owner for the kind still carries the host.
+            (
+                "https://github.example.com/acme/sub/widget",
+                Kind::GitHub,
+                hosted("github.example.com", ""),
+            ),
+            (
+                "https://git.example.com/widget",
+                Kind::GitLab,
+                hosted("git.example.com", ""),
+            ),
+        ] {
+            assert_eq!(hosted_as(url, kind), expected, "{url}");
+        }
+    }
+
+    /// #881: a host that does not read as one, a kind's own host, and a remote that hides
+    /// another host carry nothing over, as before.
+    #[test]
+    fn a_remote_whose_host_cannot_be_carried_over_carries_nothing() {
+        for url in [
+            "https://github.com/acme/widget",
+            "git@gitlab.com:group/widget.git",
+            "/srv/git/widget.git",
+            "file:///srv/git/widget.git",
+            "",
+            "https://bad_host.example.com/group/widget",
+            "https://evil.example.com#@git.example.com/group/widget",
+            "evil.example.com:x@git.example.com:group/widget",
+        ] {
+            assert_eq!(hosted_as(url, Kind::GitLab), None, "{url}");
+        }
     }
 
     fn git(dir: &Path, args: &[&str]) {
