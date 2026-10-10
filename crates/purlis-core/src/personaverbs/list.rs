@@ -30,8 +30,10 @@ pub fn exists(root: &Path, name: &str) -> bool {
 }
 
 /// `commands_persona._vault_status`: `no vault`, `not set up (local)` when the registry does
-/// not name it, else the registered vault's provider's own health line — a plain-file
-/// vault's count and mode, a 1Password item's field count — or the registry's refusal.
+/// not name it, else the registered vault's health line as a listing draws it
+/// ([`crate::secrets::cmd::listed_health`]: a plain-file vault's count and mode, a 1Password
+/// item's field count, and never a read of a token kept in the keyring, #1654), or the
+/// registry's refusal.
 pub fn vault_status(root: &Path, state: &Path, vault: Option<&str>) -> String {
     use crate::secrets::{cmd, registry};
     let Some(vault) = vault.filter(|v| !v.is_empty() && *v != "—") else {
@@ -46,7 +48,7 @@ pub fn vault_status(root: &Path, state: &Path, vault: Option<&str>) -> String {
         return "not set up (local)".into();
     }
     match registry::vault_in(&doc, vault) {
-        Ok(v) => cmd::health(&ctx, &v).1,
+        Ok(v) => cmd::listed_health(&ctx, &v).1,
         Err(e) => e.to_string(),
     }
 }

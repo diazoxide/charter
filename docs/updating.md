@@ -255,6 +255,31 @@ replica of the updater's own install code, running inside an ad-hoc-signed app i
 Management permission was requested, and the replaced bundle launched and updated again. ADR
 0042 §3 has the table and the limits.
 
+## macOS privacy questions, and why purlis needs no Full Disk Access
+
+macOS remembers what you allowed an app by the app's code identity. An ad-hoc signed build has
+a new identity at every update, so macOS treats each update as a new app (#1654):
+
+- **The Keychain asks again** for each item purlis keeps there, such as a 1Password vault's
+  service-account token. The app reads each item at most once per run, when a chat or a
+  vault's tab needs it (a vault tab the app reopens at launch reads its vault), never to draw
+  the Vaults panel. *Allow* answers for that run. *Always
+  Allow* answers for that build of the app, until the next update.
+- **App Data protection** ("would like to access data from other apps") should not ask about
+  purlis's own work. The 1Password CLI read the 1Password app's settings, which macOS keeps in
+  that app's container, on every run. purlis now tells it not to when it signs in with a
+  service-account token, which never uses that app. A vault that signs in through the
+  1Password app still reads that app's data, because you chose that app.
+
+**purlis needs no Full Disk Access, and you should not grant it.** macOS counts what a program
+the app starts does as the app's own doing, so a grant to purlis reaches every chat it starts,
+and a chat started without the sandbox reads with it. If **System Settings → Privacy &
+Security → Full Disk Access** lists purlis (or its old name, charter), turn it off, and remove
+the entries of builds you no longer run with **−**.
+
+A stable code-signing identity (a Developer ID, step 3 above) is what stops both questions
+coming back after every update.
+
 ## The `purlis` command in a terminal
 
 The app ships its own command line as `purlis`, with `charter` beside it as an alias that runs
