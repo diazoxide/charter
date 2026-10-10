@@ -348,10 +348,9 @@ rule while one who reads a bare refusal files an issue.
   the saved memory read *"appending to  each pass"* with the word silently gone — into
   `personas/_shared/memory/`, which is committed and pushed.
 
-  **The rows:** `persona remember`, `workspace remember|note|todo|vision` (and the `ws`
-  alias). The list also holds the spellings of text-taking commands this version does not
-  have yet — `persona log`, `worktree abandon` (`wt`), `change create|drop` and
-  `report bug|gap` — so the rule is already in place when those commands arrive.
+  **The rows:** `persona remember` and `persona log`, `workspace remember|note|todo|vision`
+  (and the `ws` alias), `worktree abandon` (and `wt`), `change create|drop`, and
+  `report bug|feature` (`gap` is `feature`'s alias).
   The line for inclusion is the one that keeps `gh pr merge --body` out above: the free text
   has to be required or the primary operand, and what holds it has to be read back as prose.
   So `workspace create --vision` and `workspace snapshot --description` are outside it, where
