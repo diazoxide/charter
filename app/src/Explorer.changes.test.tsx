@@ -112,7 +112,6 @@ function draw() {
         chats={[]}
         spot={undefined}
         onPick={() => {}}
-        onShowChat={() => {}}
         offers={new Map()}
         onPress={() => {}}
         onReadAgain={() => {}}

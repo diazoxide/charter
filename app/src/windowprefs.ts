@@ -148,6 +148,16 @@ export function usingTheBuiltIn() {
 export function usingTheDefaultLayout() {
   sayAboutThisMachine("layout", undefined);
   sayAboutThisMachine("dismissed", undefined);
+  for (const listener of layoutMovedAside) listener();
+}
+
+const layoutMovedAside = new Set<() => void>();
+
+/** Told when the layout file is moved aside (`regions.ts` forgets what it read from it, so a
+ *  project opened afterwards starts from the default). Answers the way to stop being told. */
+export function onLayoutMovedAside(listener: () => void): () => void {
+  layoutMovedAside.add(listener);
+  return () => layoutMovedAside.delete(listener);
 }
 
 /**

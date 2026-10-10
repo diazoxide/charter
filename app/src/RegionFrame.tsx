@@ -1,10 +1,12 @@
-import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { Group, Panel, Separator, usePanelRef, type Layout } from "react-resizable-panels";
-import { Activity, BellRing, FolderTree } from "lucide-react";
+import { Activity, BellRing, Compass } from "lucide-react";
+import { ActivityBar } from "./ActivityBar";
 import {
   CATALOGUE,
   inSlots,
   leastOf,
+  openView,
   shownIn,
   SIDES,
   slotSize,
@@ -14,6 +16,7 @@ import {
   type Placement,
   type RegionId,
   type Side,
+  type ViewId,
 } from "./regions";
 import { useArrived } from "./lib/arrived";
 
@@ -34,18 +37,62 @@ import { useArrived } from "./lib/arrived";
 export function RegionFrame({
   arrangement,
   content,
+  views,
+  badges,
+  keys,
+  onPick,
   centre,
   onResized,
 }: {
   arrangement: Arrangement;
   /** What each region draws. Kept out of the arrangement because a React component is not
-   *  something a stored document can hold. */
-  content: Record<RegionId, ReactNode>;
+   *  something a stored document can hold. A region with views draws {@link views} instead,
+   *  when they are given. */
+  content: Partial<Record<RegionId, ReactNode>>;
+  /**
+   * **What each view draws** (#1673). A region whose catalogue entry has views, given them
+   * here, is drawn as an activity bar at its side's edge and its views in its slot: the open
+   * one shown, the others mounted and hidden, and all of them mounted and hidden while the
+   * region is put away — collapsing hides and never unmounts, so a view keeps its scroll, its
+   * folds and its filter. The right-hand side's views (#1678) arrive the same way.
+   */
+  views?: Partial<Record<ViewId, ReactNode>>;
+  /** What each view's tab carries beside its icon: a count, drawn while the side is away too. */
+  badges?: Partial<Record<ViewId, ReactNode>>;
+  /** How each view's key is spelled, for its tab's tooltip. */
+  keys?: Partial<Record<ViewId, string>>;
+  /** A view's tab was pressed: the window answers with the arrangement (`regions.picked`). */
+  onPick?: (view: ViewId) => void;
   centre: ReactNode;
   /** Told how big each slot was left, once a drag has settled. */
   onResized: (sizes: Partial<Record<Side, number>>) => void;
 }) {
   const slots = inSlots(arrangement);
+  const base = useId();
+  const ids = {
+    panelOf: (view: ViewId) => `${base}view-${view}`,
+    tabOf: (view: ViewId) => `${base}tab-${view}`,
+  };
+  const withViews = (one: Placement) =>
+    views !== undefined && CATALOGUE[one.id].views !== undefined;
+  /** The bars at one edge: one per region with views placed in that side's slot. */
+  const bars = (side: "left" | "right") =>
+    slots[side]
+      .filter(withViews)
+      .map((one) => (
+        <ActivityBar
+          key={one.id}
+          side={side}
+          name={CATALOGUE[one.id].name}
+          views={CATALOGUE[one.id].views ?? []}
+          open={one.collapsed ? undefined : openView(one)}
+          keys={keys}
+          badges={badges}
+          {...ids}
+          onPick={(view) => onPick?.(view)}
+        />
+      ));
+  const drawn: SlotContent = { content, views, ids, withViews };
 
   // **How big each slot starts, read once.** `defaultSize` is a constraint, and a constraint
   // that changes re-registers the panel — charter-app#141 again. The arrangement the window
@@ -67,22 +114,63 @@ export function RegionFrame({
     onResized(sizes);
   };
 
+  // **The bars are outside the group**, at the window's edges as VS Code has them, so a side
+  // put away leaves its bar — and the bar's badges — on screen. They are not panels: nothing
+  // here adds to or takes from the group's panel list (charter-app#141).
   return (
-    <Group className="regions" orientation="vertical" onLayoutChanged={settled}>
-      <Panel id="region-upper" className="region-upper" minSize="30%">
-        <Group className="region-row" orientation="horizontal" onLayoutChanged={settled}>
-          <Slot side="left" placed={slots.left} started={started.left} content={content} />
-          <Edge open={shownIn(slots.left).length > 0} />
-          <Panel id="region-centre" className="region-centre" minSize="20%">
-            {centre}
-          </Panel>
-          <Edge open={shownIn(slots.right).length > 0} />
-          <Slot side="right" placed={slots.right} started={started.right} content={content} />
-        </Group>
-      </Panel>
-      <Edge open={shownIn(slots.bottom).length > 0} />
-      <Slot side="bottom" placed={slots.bottom} started={started.bottom} content={content} />
-    </Group>
+    <div className="region-frame">
+      {bars("left")}
+      <Group className="regions" orientation="vertical" onLayoutChanged={settled}>
+        <Panel id="region-upper" className="region-upper" minSize="30%">
+          <Group className="region-row" orientation="horizontal" onLayoutChanged={settled}>
+            <Slot side="left" placed={slots.left} started={started.left} drawn={drawn} />
+            <Edge open={shownIn(slots.left).length > 0} />
+            <Panel id="region-centre" className="region-centre" minSize="20%">
+              {centre}
+            </Panel>
+            <Edge open={shownIn(slots.right).length > 0} />
+            <Slot side="right" placed={slots.right} started={started.right} drawn={drawn} />
+          </Group>
+        </Panel>
+        <Edge open={shownIn(slots.bottom).length > 0} />
+        <Slot side="bottom" placed={slots.bottom} started={started.bottom} drawn={drawn} />
+      </Group>
+      {bars("right")}
+    </div>
+  );
+}
+
+/** What a slot draws its regions from. */
+type SlotContent = {
+  content: Partial<Record<RegionId, ReactNode>>;
+  views?: Partial<Record<ViewId, ReactNode>>;
+  ids: { panelOf: (view: ViewId) => string; tabOf: (view: ViewId) => string };
+  withViews: (one: Placement) => boolean;
+};
+
+/**
+ * A region with views, in its slot: each view a tab panel, the open one shown and the rest
+ * mounted and `hidden` — out of the tab order and the accessibility tree, and still holding
+ * what the person did in it. Put away, every one of them is hidden.
+ */
+function RegionViews({ placed, drawn }: { placed: Placement; drawn: SlotContent }) {
+  const open = placed.collapsed ? undefined : openView(placed);
+  return (
+    <div className="region-views" hidden={placed.collapsed}>
+      {(CATALOGUE[placed.id].views ?? []).map((view) => (
+        <div
+          key={view}
+          role="tabpanel"
+          id={drawn.ids.panelOf(view)}
+          aria-labelledby={drawn.ids.tabOf(view)}
+          data-view={view}
+          className="region-view"
+          hidden={view !== open}
+        >
+          {drawn.views?.[view]}
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -128,14 +216,14 @@ function Slot({
   side,
   placed,
   started,
-  content,
+  drawn,
 }: {
   side: Side;
   /** What is in this slot now. */
   placed: Placement[];
   /** What was in it when the window launched, which is what sized it. */
   started: Placement[];
-  content: Record<RegionId, ReactNode>;
+  drawn: SlotContent;
 }) {
   const shown = shownIn(placed);
   const open = shown.length > 0;
@@ -190,9 +278,15 @@ function Slot({
       minSize={leastOf(side)}
       maxSize={`${SLOTS[side].most}%`}
     >
-      {shown.map((one) => (
-        <Fragment key={one.id}>{content[one.id]}</Fragment>
-      ))}
+      {/* A region without views put away is unmounted (above); one with views is kept,
+          hidden, because its views are where the person's folds and scroll are (#1673). */}
+      {placed.map((one) =>
+        drawn.withViews(one) ? (
+          <RegionViews key={one.id} placed={one} drawn={drawn} />
+        ) : one.collapsed ? null : (
+          <Fragment key={one.id}>{drawn.content[one.id]}</Fragment>
+        ),
+      )}
     </Panel>
   );
 }
@@ -280,8 +374,10 @@ export function RegionToggle({
  * A `Record` over `RegionId`, so a region added to the catalogue without a mark here is a type
  * error rather than a toggle with a hole in it.
  */
-const REGION_MARKS: Record<RegionId, typeof FolderTree> = {
-  explorer: FolderTree,
+const REGION_MARKS: Record<RegionId, typeof Compass> = {
+  // The region the Chats and Explorer views are in: a way to somewhere, as ADR 0038 reads it.
+  // The explorer's folder tree is the Explorer view's own mark now (`ActivityBar.tsx`).
+  navigation: Compass,
   aside: BellRing,
   bottom: Activity,
 };

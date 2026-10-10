@@ -20,10 +20,9 @@ import {
   ListFilter,
   GitBranch,
   LoaderCircle,
-  SquareTerminal,
   TriangleAlert,
 } from "lucide-react";
-import type { FinishedTask, FolderEntry, OpenChat, Piece, PlaneId } from "./bindings";
+import type { FolderEntry, OpenChat, Piece, PlaneId } from "./bindings";
 import { FileIcon } from "./FileIcon";
 import { useFileIcons } from "./projectTheme";
 import { iconFor, type IconTheme } from "./theme/icons";
@@ -43,25 +42,9 @@ import {
   type StatusRead,
 } from "./branchStatus";
 import type { Place } from "./pieceViews";
-import { WRAPPING_UP, WrappingUp } from "./NeedsYou";
-import { PersonaMark } from "./PersonaMark";
 import { Menued } from "./Menus";
 import { NotClonedHere, type Cloning } from "./NotCloned";
 import { WorktreeMark } from "./Worktree";
-import { isShell, useChatsHere, useChatsSelect } from "./chatState";
-import { ChatShownState } from "./ChatRows";
-import { rowFactsOf } from "./shownState";
-import { listedChat, type ListedChat } from "./chatsTree";
-import {
-  HelperRow,
-  HelpersCount,
-  TasksLine,
-  TasksNeedYou,
-  helpersId,
-  tasksNeedId,
-} from "./ExplorerChats";
-import { belowOf, helpersOf, housed, sameHelpers, shortIds, type Housed } from "./explorerTasks";
-import { tasksBelowOf, type TasksBelow } from "./sessionTasks";
 import type { BranchPath, Catalogued, FileOn, Offer } from "./actions";
 import type { WorkspaceState } from "./workspaceState";
 import { useTabStop } from "./roving";
@@ -69,24 +52,6 @@ import { Breadcrumb, CockpitHeader, focusStands, useAheadBehind } from "./Cockpi
 import { dragReference } from "./references";
 import { useLastRead } from "./editor/lastRead";
 import { touchingIn, touchSaid, useTouching, type Touching } from "./touching";
-
-/** No finished tasks, for a window that has not said. */
-const NONE_FINISHED: ReadonlyMap<number, readonly FinishedTask[]> = new Map();
-
-/** No tasks: what a chat with none, and a workspace no other asked of, is counted over. */
-const NO_TASKS: readonly ListedChat[] = [];
-
-/** Nothing is asked to be revealed, for an explorer drawn on its own. */
-const NOT_REVEALED = () => undefined;
-
-/** What a press on a line for the tasks working at a place does, in words. */
-const SHOWS_THEM = "Show them in the Chats list";
-
-/** No chat is named: what an explorer drawn on its own, in a test, is given. */
-const NO_NAME = () => undefined;
-
-/** No chat wrapping up, for a window that has not said. */
-const NONE_WRAPPING: ReadonlySet<number> = new Set();
 
 /**
  * The left region: the repo and worktree **explorer** (ADR 0038).
@@ -147,8 +112,8 @@ const NONE_WRAPPING: ReadonlySet<number> = new Set();
  *   nesting a screen reader would otherwise infer runs through lists, `<details>` and wrappers
  *   that are there for the guides. {@link treeOf} is the one place the shape is decided.
  * - **`aria-expanded` on every row with children**, as the pattern asks of a parent: a clone
- *   says whether it is open, and the workspace row and a worktree with chats working in it say
- *   `true`, because they are parents that are always open. A leaf says nothing.
+ *   says whether it is open, and the workspace row and a branch say `true`, because they are
+ *   parents that are always open. A leaf says nothing.
  * - **Right** opens a closed clone, or moves to a row's first child. **Left** closes an open
  *   clone, or moves to the row's parent — which is also what it does on a parent that cannot
  *   close. The fold is the same state a click on the clone's heading changes.
@@ -158,7 +123,7 @@ const NONE_WRAPPING: ReadonlySet<number> = new Set();
  * - **Type-ahead**: a printable key moves to the next row whose name starts with it, wrapping.
  *   One key and not a typed prefix — the names are short and few, and cycling on a repeated
  *   key finds any of them.
- * - **Enter** does what a click does: it picks a worktree, brings a chat forward, and on a
+ * - **Enter** does what a click does: it picks a worktree, opens a file, and on a
  *   clone's heading opens or closes it, which `<summary>` does natively.
  *
  * Left and Right are taken from the region's sideways scroll while a row has the keyboard. A
@@ -173,7 +138,7 @@ const NONE_WRAPPING: ReadonlySet<number> = new Set();
  * files* is pressed, and then drawn dimmed and never opened; a file charter will not open — a
  * link out of the branch, git's own folder, a FIFO — is drawn with the reason. The *Files* row
  * is a child of the branch rather than the branch row folding itself, because a click on a
- * branch picks where the next chat starts and the chats working in it stay drawn under it.
+ * branch picks where the next chat starts.
  *
  * **What a branch changed is marked on it** (FM-4, #1107): each file it changed, added,
  * deleted or renamed against the branch it was cut from, committed or not, and each folder
@@ -191,38 +156,16 @@ const NONE_WRAPPING: ReadonlySet<number> = new Set();
  *
  * **Focused on one branch, it is that branch's cockpit** (FM-5, #1108; V86 F2): a breadcrumb
  * back out, the branch's state — how far it is from its base, how many files it changed, and
- * Merge and Done — then the chats working in it and its files, as rows of a tree of their own
+ * Merge and Done — then its files, as rows of a tree of their own
  * with the same keys. Esc, or the breadcrumb, steps back out to the whole workspace, and the
  * keyboard lands on the branch's row. Which branch is the window's (`PlaneView.tsx`), and it is
  * remembered with the window's views.
  *
- * **It lists the workspace's chats that have a tab of their own, and counts the rest** (#1490,
- * V100-4, V100-14). A session, a handoff, a shell and a task the person gave a tab are rows, at
- * the place each works. A task that lives inside its session's tab (#1486) is not: the Chats
- * section above this region's explorer (`ChatsSection.tsx`) is the one tree of who asked whom,
- * and listing the same tasks here was reading them twice. In their place:
- *
- * - **one line under the session**, `5 tasks · 3 working · 1 waiting · 1 done`: the tasks
- *   below it, wherever each works, and the finished ones until they are cleared, counted and
- *   said as its row in the Chats list and its tab count and say them (`taskBuckets.ts`). A
- *   press goes to that session's row in the Chats list and unfolds it;
- * - **one line under a branch**, `1 task in this branch · 1 working`, for the tasks working in
- *   it whose session has no row under it: a task on a branch of its own is the common case,
- *   and the branch's row must still answer "is anything already running here". The branch's
- *   cockpit says the same line;
- * - **one line under the workspace**, `2 tasks from other places`, for the tasks working here
- *   that a chat with no row here asked for (another workspace's, or the project root's),
- *   which no session's line here counts;
- * - **the hand on the session's row** while a task of it needs you, which goes to that task:
- *   the roll-up the Chats list's rows have (#1448), since the task has no row here to wear it.
- *
- * **A chat's harness helpers are a count on its row**, `3 helpers · 1 working`, folded until
- * pressed, and then a row each, `helper <short id>` with its state as the harness reports it. The fold is
- * each chat's own and lasts as long as the window does.
- *
- * All of these are rows of the tree, with their levels and set sizes, and each reads its own
- * share of what the chats are doing (`ExplorerChats.tsx`, SC-3): a task changing state draws
- * its line's counts again and nothing else here.
+ * **It draws no chats** (#1673, B-12). It drew a workspace's chats where each worked (#1490),
+ * and the Chats view drew them again; with the two now views of one side, one at a time, the
+ * Chats view is the one place a chat is listed and this is the place: workspace, repos,
+ * branches and files. A branch still answers "is anything already running here" in the chats'
+ * own words, in the Chats view, and by the live marks below.
  *
  * **What a chat is touching right now is marked live** (FM-6, #1109; V86 F6): a file a chat's
  * tool reads or edits, and every folder above it up to the branch's *Files* row, carry a dot
@@ -238,8 +181,6 @@ export function Explorer({
   chats,
   spot,
   onPick,
-  onShowChat,
-  wrapping = NONE_WRAPPING,
   offers,
   onPress,
   onOpenFile,
@@ -247,11 +188,6 @@ export function Explorer({
   onFocus,
   cloning,
   onReadAgain,
-  listed,
-  finished = NONE_FINISHED,
-  below,
-  onRevealChats = NOT_REVEALED,
-  nameOf = NO_NAME,
 }: {
   /** The project, for reading a branch's folders. Without one no folder is read. */
   plane?: PlaneId;
@@ -260,14 +196,12 @@ export function Explorer({
   /** Whether that workspace is LIVE (charter-app#301): its row carries the mark. */
   live?: boolean;
   state: WorkspaceState;
-  /** The chats working in this workspace, so a piece can say what is already running in it. */
+  /** The chats working in this workspace, for what each is touching right now. They are not
+   *  rows here: the Chats view lists them (#1673). */
   chats: readonly OpenChat[];
   /** The piece picked, or nothing for the workspace's own directory. */
   spot: Spot | undefined;
   onPick: (spot: Spot | undefined) => void;
-  onShowChat: (session: number) => void;
-  /** The chats wrapping up — being smart-closed (ADR 0064) — whose rows say so. */
-  wrapping?: ReadonlySet<number>;
   /** The catalogue by id, which is what a piece row's menu is drawn out of. */
   offers: Catalogued;
   onPress: (offer: Offer) => void;
@@ -284,25 +218,6 @@ export function Explorer({
   /** Asks the workspace's reads again: the way out of a refused one (NO-4). It is this
    *  region's to offer, for the bottom bar's lines too, since that region is not pressed. */
   onReadAgain: () => void;
-  /** Every running chat of the project, as the Chats section lists it (#1490): which are
-   *  tasks, of whom, and whether each has a tab of its own in this window. What decides which
-   *  of `chats` are rows and which are counted on a line. Left out, it is read off `chats`
-   *  with the core's own word for whether a chat has a tab. */
-  listed?: readonly ListedChat[];
-  /** Each chat's finished tasks, by its number (#1485): counted on its line with the tasks
-   *  still running. */
-  finished?: ReadonlyMap<number, readonly FinishedTask[]>;
-  /** Each chat's tasks as its row in the Chats list counts them (`tasksBelowOf`), by its
-   *  number: what a session's line here counts, so the two say the same. Left out, it is
-   *  worked out from `listed` and `finished` by the same function. */
-  below?: ReadonlyMap<number, TasksBelow>;
-  /** A tasks line was pressed: show these chats' rows in the Chats list, each unfolded, with
-   *  the keyboard on the first. */
-  onRevealChats?: (sessions: readonly number[]) => void;
-  /** What a chat of the project is called now, by its number, whichever workspace it works
-   *  in (#1484): a task that is asking the chat that dispatched it names that chat as its own
-   *  row does. Nothing for a chat that has closed. */
-  nameOf?: (session: number) => string | undefined;
 }) {
   /** The clones the operator folded, by workspace and name: a row inside one is not drawn, so
    *  it cannot be where the keyboard comes back in. */
@@ -317,38 +232,6 @@ export function Explorer({
   const [filter, setFilter] = useState("");
   /** The cockpit's *Files* rows the operator closed: open until they do (FM-5). */
   const [shut, setShut] = useState<ReadonlySet<string>>(new Set());
-  /** The chats whose helpers are unfolded, by number: folded until pressed, and each chat's
-   *  own for as long as the window draws this explorer, whichever workspace it is on. */
-  const [unfolded, setUnfolded] = useState<ReadonlySet<number>>(new Set());
-  // Which chats are rows here and which live inside another chat's tab (#1490), read off the
-  // project's list: the same list the Chats section draws, so the two cannot disagree.
-  const project = useMemo(
-    () =>
-      listed ??
-      chats.map((chat) => listedChat(chat, workspace ?? "", chat.name, chat.from?.tab ?? true)),
-    [chats, listed, workspace],
-  );
-  const house = useMemo(() => housed(project), [project]);
-  const counted = useMemo(
-    () => below ?? tasksBelowOf(project, finished),
-    [below, project, finished],
-  );
-  const rows = useMemo(
-    () => chats.filter((chat) => !house.hostOf.has(chat.session)),
-    [chats, house],
-  );
-  // The helpers the tree has rows for: that a chat has some, and which once unfolded. Read
-  // here because they are rows; how many a folded chat has is read by its count alone.
-  const helpers = useChatsSelect(
-    useChatsHere(),
-    (states) =>
-      helpersOf(
-        states,
-        rows.map((chat) => chat.session),
-        unfolded,
-      ),
-    sameHelpers,
-  );
   const cockpit = cockpitOf(workspace, state, focus);
   const cockpitFiles =
     cockpit === undefined || workspace === undefined
@@ -405,25 +288,10 @@ export function Explorer({
     levels: new Map(),
     touching,
   };
-  // What is drawn of the chats: the rows, each one's helpers and tasks, and the tasks working
-  // in this tree whose session has no row in it.
-  const within = cockpit === undefined ? undefined : cockpit.path;
-  const scope =
-    cockpit === undefined ? chats : within === undefined ? [] : chats.filter(underOf(within));
-  const drawnChats = cockpit === undefined ? rows : rows.filter((chat) => scope.includes(chat));
-  const of = chatsOf(
-    scope,
-    drawnChats,
-    project,
-    house,
-    counted,
-    helpers,
-    cockpit === undefined && workspace !== undefined ? piecesOf(state) : [],
-  );
   const tree =
     cockpit === undefined || workspace === undefined
-      ? treeOf(workspace, state, drawnChats, folded, files, of)
-      : cockpitTreeOf(workspace, cockpit, drawnChats, files, of);
+      ? treeOf(workspace, state, folded, files)
+      : cockpitTreeOf(workspace, cockpit, files);
   const drawn = tree.filter((row) => row.drawn);
   const picked =
     cockpit !== undefined
@@ -451,32 +319,22 @@ export function Explorer({
       });
     foldHeld(key, open);
   };
-  const foldHelpers = (session: number, open: boolean) =>
-    setUnfolded((was) => {
-      if (open === was.has(session)) return was;
-      const now = new Set(was);
-      if (open) now.add(session);
-      else now.delete(session);
-      return now;
-    });
   const foldHeld = (key: string, open: boolean) =>
-    key.startsWith(HELPERS_FOLD)
-      ? foldHelpers(Number(key.slice(HELPERS_FOLD.length)), open)
-      : key.startsWith(FILE_FOLD)
-        ? setExpanded((was) => {
-            if (open === was.has(key)) return was;
-            const now = new Set(was);
-            if (open) now.add(key);
-            else now.delete(key);
-            return now;
-          })
-        : setFolded((was) => {
-            if (open === !was.has(key)) return was;
-            const now = new Set(was);
-            if (open) now.delete(key);
-            else now.add(key);
-            return now;
-          });
+    key.startsWith(FILE_FOLD)
+      ? setExpanded((was) => {
+          if (open === was.has(key)) return was;
+          const now = new Set(was);
+          if (open) now.add(key);
+          else now.delete(key);
+          return now;
+        })
+      : setFolded((was) => {
+          if (open === !was.has(key)) return was;
+          const now = new Set(was);
+          if (open) now.delete(key);
+          else now.add(key);
+          return now;
+        });
 
   /** Whether a row is drawn. One inside a folded clone is still in the document, and the
    *  roving focus is told to pass it by: jsdom focuses it, and the arrows would stop on it. */
@@ -576,39 +434,6 @@ export function Explorer({
       }}
     />
   );
-  // The chats that are in no piece of this workspace: they work in the workspace itself or
-  // in a clone, and they are listed under the workspace row rather than dropped. `treeOf`
-  // decided which they are, and the render reads it rather than deciding a second time.
-  const atTheRoot = drawnChats.filter((chat) => byId.get(chatRow(chat.session))?.parent === ROOT);
-  /** What every list of chats here is drawn with. */
-  const chatRows = {
-    of,
-    nameOf,
-    wrapping,
-    onShow: onShowChat,
-    onReveal: onRevealChats,
-    onFoldHelpers: foldHelpers,
-    treeitem,
-    isDrawn,
-  };
-  /** One line for a set of tasks working at a place whose session has no row there. */
-  const placeLine = (id: string, tasks: readonly ListedChat[] | undefined, where: string) =>
-    tasks !== undefined &&
-    tasks.length > 0 && (
-      <ul className="here" role="group">
-        <li role="none">
-          <TasksLine
-            below={belowOf(tasks)}
-            where={where}
-            title={SHOWS_THEM}
-            focusable={isDrawn(id)}
-            item={treeitem(id)}
-            onPress={() => onRevealChats(tasks.map((task) => task.session))}
-          />
-        </li>
-      </ul>
-    );
-
   const filterBox = open.length > 0 && (
     // Only while some branch's files are open: it narrows the file rows and nothing else.
     <div className="files-filter">
@@ -690,9 +515,7 @@ export function Explorer({
             </ReadRefused>
           )}
           {filterBox}
-          <div role="tree" aria-label={`Chats and files of ${name}`} onKeyDown={onTreeKey}>
-            <ChatList chats={drawnChats} {...chatRows} />
-            {placeLine(ELSEWHERE_ROW, of.elsewhere, IN_THIS_BRANCH)}
+          <div role="tree" aria-label={`Files of ${name}`} onKeyDown={onTreeKey}>
             <ul className="files" role="group">
               <li role="none" data-testid={`files-${ref.repo}-${ref.piece}`}>
                 {filesOf(ref.repo, ref.piece)}
@@ -740,11 +563,6 @@ export function Explorer({
               <span className="spot-what">the workspace itself</span>
             </button>
           </RovingFocusGroup.Item>
-          <ChatList chats={atTheRoot} {...chatRows} />
-          {/* The tasks working here that a chat with no row here asked for (#1490): another
-              workspace's, or the project root's. No session's line in this workspace counts
-              them, so the workspace says them once. */}
-          {placeLine(ELSEWHERE_ROW, of.elsewhere, "from other places")}
 
           {clones.length > 0 && (
             // The clones are the workspace row's children, and the wrapper is what lets them be
@@ -811,7 +629,6 @@ export function Explorer({
                   ) : (
                     <ul className="pieces" role="group">
                       {pieces[repo].map((piece) => {
-                        const working = drawnChats.filter(underOf(piece.path));
                         const isPicked = spot?.repo === repo && spot.piece === piece.piece;
                         return (
                           <li
@@ -826,8 +643,8 @@ export function Explorer({
                             rows mean; `Menus.tsx` draws whatever `actions.ts` has.
 
                             On the button and not on the `<li>`: the `<li>` also holds the
-                            chats running in this piece, and each of those is its own row with
-                            its own identity. `asChild`, so the row gains no element. */}
+                            branch's files, and each of those is its own row with its own
+                            identity. `asChild`, so the row gains no element. */}
                             <Menued
                               on={{ on: "worktree", repo, piece: piece.piece }}
                               offers={offers}
@@ -897,14 +714,6 @@ export function Explorer({
                                 {filesOf(repo, piece.piece)}
                               </li>
                             </ul>
-                            <ChatList chats={working} {...chatRows} />
-                            {/* The tasks working in this branch whose session has no row
-                                under it (#1490): the branch still says something runs here. */}
-                            {placeLine(
-                              inBranchRow(repo, piece.piece),
-                              of.inBranch.get(inBranchRow(repo, piece.piece)),
-                              IN_THIS_BRANCH,
-                            )}
                           </li>
                         );
                       })}
@@ -1009,238 +818,6 @@ function PieceCount({ pieces, refused }: { pieces?: readonly unknown[]; refused?
     <span className="piece-count" aria-label={`${pieces.length} branches`}>
       {pieces.length}
     </span>
-  );
-}
-
-/**
- * What the explorer draws of the chats beside their rows (#1490): each drawn chat's tasks and
- * helpers, and the tasks working in the tree whose session has no row in it. The one answer
- * the render and {@link treeOf} both read, so a line drawn is a row the keyboard knows.
- */
-type ChatsOf = {
-  /** The running tasks living inside each drawn chat's tab: what its row's hand answers for. */
-  tasks: ReadonlyMap<number, readonly ListedChat[]>;
-  /** Each drawn chat's tasks as the one count takes them: what its line counts. */
-  below: ReadonlyMap<number, TasksBelow>;
-  /** Each drawn chat that has helpers: their ids while unfolded, nothing while folded. */
-  helpers: ReadonlyMap<number, readonly string[] | null>;
-  /** The tasks working in this tree that a chat with no row in it asked for. */
-  elsewhere: readonly ListedChat[];
-  /** The tasks working in each branch whose session has no row under that branch, by the
-   *  branch's line ({@link inBranchRow}). */
-  inBranch: ReadonlyMap<string, readonly ListedChat[]>;
-};
-
-/** A branch of the workspace, as the lines for the tasks working in it need it. */
-type InBranch = { id: string; path: string };
-
-/** Every branch the workspace lists, with the id of its line. */
-function piecesOf(state: WorkspaceState): InBranch[] {
-  return (state.panels?.repos ?? []).flatMap((repo) =>
-    (state.pieces[repo] ?? []).map((piece) => ({
-      id: inBranchRow(repo, piece.piece),
-      path: piece.path,
-    })),
-  );
-}
-
-/** {@link ChatsOf} for the chats `drawn`, of the chats `scope` that work in the tree. */
-function chatsOf(
-  scope: readonly OpenChat[],
-  drawn: readonly OpenChat[],
-  project: readonly ListedChat[],
-  house: Housed,
-  counted: ReadonlyMap<number, TasksBelow>,
-  helpers: readonly { session: number; agents: readonly string[] | null }[],
-  branches: readonly InBranch[],
-): ChatsOf {
-  const rows = new Set(drawn.map((chat) => chat.session));
-  const tasks = new Map<number, readonly ListedChat[]>();
-  const below = new Map<number, TasksBelow>();
-  for (const session of rows) {
-    const mine = house.tasksOf.get(session);
-    if (mine !== undefined) tasks.set(session, mine);
-    const count = counted.get(session);
-    if (count !== undefined) below.set(session, count);
-  }
-  const byNumber = new Map(project.map((chat) => [chat.session, chat]));
-  /** The tasks among `working` that live in a tab whose chat is not one of `here`. */
-  const hostless = (working: readonly OpenChat[], here: ReadonlySet<number>) =>
-    working.flatMap((chat) => {
-      const host = house.hostOf.get(chat.session);
-      const task = byNumber.get(chat.session);
-      return host === undefined || here.has(host) || task === undefined ? [] : [task];
-    });
-  const inBranch = new Map<string, readonly ListedChat[]>();
-  for (const { id, path } of branches) {
-    const working = scope.filter(underOf(path));
-    const there = hostless(working, new Set(drawn.filter(underOf(path)).map((c) => c.session)));
-    if (there.length > 0) inBranch.set(id, there);
-  }
-  return {
-    tasks,
-    below,
-    helpers: new Map(
-      helpers.filter((one) => rows.has(one.session)).map((one) => [one.session, one.agents]),
-    ),
-    elsewhere: hostless(scope, rows),
-    inBranch,
-  };
-}
-
-/** Whether a drawn chat has a line for its tasks: any running below it, or any finished and
- *  not yet cleared. */
-function hasTasks(of: ChatsOf, session: number): boolean {
-  return of.below.has(session);
-}
-
-/** The chats with a tab of their own working at a spot, each a button that brings its tab to
- *  the front, with its helpers as a count on its row and its tasks as one line under it.
- *
- *  This is not the sidebar's old listing coming back: it is every chat in ONE place, under
- *  the place, which is what answers "is anything already running in this worktree" before
- *  the operator starts a second one in it. */
-function ChatList({
-  chats,
-  of,
-  nameOf,
-  wrapping,
-  onShow,
-  onReveal,
-  onFoldHelpers,
-  treeitem,
-  isDrawn,
-}: {
-  chats: readonly OpenChat[];
-  /** Their tasks and helpers. */
-  of: ChatsOf;
-  /** What a chat of the project is called now, by its number. */
-  nameOf: (session: number) => string | undefined;
-  wrapping: ReadonlySet<number>;
-  onShow: (session: number) => void;
-  /** A tasks line was pressed: these chats' rows in the Chats list. */
-  onReveal: (sessions: readonly number[]) => void;
-  onFoldHelpers: (session: number, open: boolean) => void;
-  /** What a row says about its place in the tree. */
-  treeitem: (id: string) => TreeItem;
-  /** Whether a row is drawn, and so whether the arrows stop on it. */
-  isDrawn: (id: string) => boolean;
-}) {
-  if (chats.length === 0) return null;
-  return (
-    <ul className="here" role="group">
-      {chats.map((chat) => {
-        const agents = of.helpers.get(chat.session);
-        const tasks = of.tasks.get(chat.session) ?? NO_TASKS;
-        const below = of.below.get(chat.session);
-        const short = agents == null ? undefined : shortIds(agents);
-        return (
-          <li key={chat.session} role="none">
-            <RovingFocusGroup.Item
-              asChild
-              tabStopId={chatRow(chat.session)}
-              focusable={isDrawn(chatRow(chat.session))}
-            >
-              <button
-                type="button"
-                className="chat"
-                data-wrapping-up={wrapping.has(chat.session) || undefined}
-                title={wrapping.has(chat.session) ? WRAPPING_UP : undefined}
-                // How many helpers it has, and the task of it that needs you, read as its
-                // description: an id that names no element describes it with nothing.
-                aria-describedby={`${helpersId(chat.session)} ${tasksNeedId(chat.session)}`}
-                {...treeitem(chatRow(chat.session))}
-                onClick={() => onShow(chat.session)}
-              >
-                {/* What tells a chat leaf from a worktree leaf at a glance. The tree has two
-                kinds of leaf under one kind of parent, and at fifty chats the indent alone
-                stopped being enough to tell them apart. */}
-                {/* Its persona's mark where it runs as one (#1449): which persona, read before
-                the name is. A chat with none keeps the terminal. */}
-                {chat.persona ? (
-                  <PersonaMark persona={chat.persona} className="node-icon" />
-                ) : (
-                  <SquareTerminal className="node-icon" />
-                )}
-                <span className="session">{chat.name}</span>
-                {/* Its own chat's state, a mark and a word, read by the mark itself (SC-3): the
-                value the Chats list's row draws (#1484). */}
-                <ChatShownState
-                  session={chat.session}
-                  shell={isShell(chat)}
-                  {...rowFactsOf(chat, nameOf)}
-                />
-                <WrappingUp held={wrapping.has(chat.session)} />
-                {/* The PROFILE where there is one, and the harness otherwise. A profile is what
-                the operator picked and what a relaunch looks up again; the kind is what the
-                plane calls the harness. Showing the profile alone would hide which harness
-                it runs, and showing the kind alone would hide which account. */}
-                {chat.profile ? (
-                  <span className="harness">
-                    {chat.profile}
-                    {chat.harness && <span className="kind"> ({chat.harness})</span>}
-                  </span>
-                ) : (
-                  chat.harness && <span className="harness">{chat.harness}</span>
-                )}
-                {chat.persona && <span className="persona">{chat.persona}</span>}
-              </button>
-            </RovingFocusGroup.Item>
-            {/* Its helpers, as a count on its row (V100-4): the row's first child in the tree,
-                drawn on the row's own line. */}
-            {agents !== undefined && (
-              <HelpersCount
-                session={chat.session}
-                name={chat.name}
-                open={agents !== null}
-                focusable={isDrawn(helpersRow(chat.session))}
-                item={treeitem(helpersRow(chat.session))}
-                onFold={onFoldHelpers}
-              />
-            )}
-            {/* The hand for a task of it that needs you: the task has no row here. */}
-            {tasks.length > 0 && (
-              <TasksNeedYou session={chat.session} name={chat.name} tasks={tasks} onShow={onShow} />
-            )}
-            {/* What its harness cannot tell charter, on the chat itself (#27). A Codex chat
-              reads `unknown` until its first prompt and never says it is waiting on an
-              approval; without this it looks like purlis is broken. */}
-            {chat.unreported && <p className="unreported">{chat.unreported}</p>}
-            {/* Its helpers, once unfolded (FD-18): a row each, by a short id, with its state. */}
-            {agents != null && agents.length > 0 && (
-              <ul className="here helpers" role="group" aria-label={`Helpers of ${chat.name}`}>
-                {agents.map((agent) => (
-                  <li key={agent} role="none">
-                    <HelperRow
-                      session={chat.session}
-                      agent={agent}
-                      shown={short?.get(agent) ?? agent}
-                      focusable={isDrawn(helperRow(chat.session, agent))}
-                      item={treeitem(helperRow(chat.session, agent))}
-                    />
-                  </li>
-                ))}
-              </ul>
-            )}
-            {/* Its tasks, as one line (V100-14): they are listed in the Chats list, which a
-                press goes to. */}
-            {below !== undefined && (
-              <ul className="here" role="group">
-                <li role="none">
-                  <TasksLine
-                    below={below}
-                    title={`Show ${chat.name} and its tasks in the Chats list`}
-                    focusable={isDrawn(tasksRow(chat.session))}
-                    item={treeitem(tasksRow(chat.session))}
-                    onPress={() => onReveal([chat.session])}
-                  />
-                </li>
-              </ul>
-            )}
-          </li>
-        );
-      })}
-    </ul>
   );
 }
 
@@ -1682,34 +1259,8 @@ export function childOf(
   return { ...parent, folder: joined(parent.folder, rest) };
 }
 
-/** Whether a chat's directory is this piece's, or inside it.
- *
- *  By path components and never by string prefix: `…/piece-two` starts with `…/piece` and is
- *  a different tree. */
-function under(cwd: string | null, path: string): boolean {
-  if (cwd === null) return false;
-  if (cwd === path) return true;
-  return cwd.startsWith(`${path}/`) || cwd.startsWith(`${path}\\`);
-}
-
-/** {@link under}, as a test of a chat: whether it works in the piece at `path`. */
-const underOf = (path: string) => (chat: OpenChat) => under(chat.cwd, path);
-
 /** The workspace's own row, as a stop in the explorer's roving focus. */
 const ROOT = "root";
-const chatRow = (session: number) => `chat:${session}`;
-/** A chat's count of helpers, one of them, and the one line for its tasks, as rows. */
-const helpersRow = (session: number) => `helpers:${session}`;
-const helperRow = (session: number, agent: string) => `helper:${session}/${agent}`;
-const tasksRow = (session: number) => `tasks:${session}`;
-/** The one line for the tasks working in the tree whose session has no row in it. */
-const ELSEWHERE_ROW = "tasks-elsewhere";
-/** The line for the tasks working in a branch whose session has no row under it. */
-const inBranchRow = (repo: string, piece: string) => `tasks-in:${repo}/${piece}`;
-/** What that line says after how many, in the workspace's tree and in the branch's cockpit. */
-const IN_THIS_BRANCH = "in this branch";
-/** What starts the fold key of a chat's helpers, so `fold` knows it from a clone's. */
-const HELPERS_FOLD = "helpers:";
 const cloneRow = (repo: string) => `clone:${repo}`;
 const pieceRow = (repo: string, piece: string) => `piece:${repo}/${piece}`;
 /** A folded clone, by workspace as well as name: two workspaces can each clone `svc`. */
@@ -1778,18 +1329,8 @@ function BranchLabel({ repo, piece }: { repo: string; piece: Piece }) {
 /** The cockpit's rows (FM-5): the chats with a tab working in the branch, the line for the
  *  tasks there no row here counts, then its *Files* row and what it holds, each a top-level
  *  row of the cockpit's own tree. */
-function cockpitTreeOf(
-  workspace: string,
-  cockpit: Cockpit,
-  working: readonly OpenChat[],
-  files: FilesOf,
-  of: ChatsOf,
-): Row[] {
-  const kids: TreeNode[] = [
-    ...chatNodes(working, of),
-    ...elsewhereNode(of),
-    folderNode(workspace, { ...cockpit.ref, folder: "" }, "Files", files),
-  ];
+function cockpitTreeOf(workspace: string, cockpit: Cockpit, files: FilesOf): Row[] {
+  const kids: TreeNode[] = [folderNode(workspace, { ...cockpit.ref, folder: "" }, "Files", files)];
   const rows: Row[] = [];
   kids.forEach((kid, i) => walkRows(kid, undefined, true, i, kids.length, rows));
   return rows;
@@ -1846,32 +1387,19 @@ export type TreeItem = {
 function treeOf(
   workspace: string | undefined,
   state: WorkspaceState,
-  chats: readonly OpenChat[],
   folded: ReadonlySet<string>,
   files: FilesOf,
-  of: ChatsOf,
 ): Row[] {
   if (workspace === undefined) return [];
   const { panels, pieces } = state;
-  const inAPiece = new Set<number>();
   const clones = (panels?.repos ?? []).map((repo): TreeNode => {
-    const branches = (pieces[repo] ?? []).map((piece): TreeNode => {
-      const working = chats.filter((chat) => under(chat.cwd, piece.path));
-      for (const chat of working) inAPiece.add(chat.session);
-      return {
-        id: pieceRow(repo, piece.piece),
-        // What the row reads first, so a typed letter finds it by its branch (#1102).
-        name: branchOf(piece),
-        kids: [
-          folderNode(workspace, { repo, piece: piece.piece, folder: "" }, "Files", files),
-          ...chatNodes(working, of),
-          ...(of.inBranch.has(inBranchRow(repo, piece.piece))
-            ? [tasksNode(inBranchRow(repo, piece.piece))]
-            : []),
-        ],
-        shows: true,
-      };
-    });
+    const branches = (pieces[repo] ?? []).map((piece): TreeNode => ({
+      id: pieceRow(repo, piece.piece),
+      // What the row reads first, so a typed letter finds it by its branch (#1102).
+      name: branchOf(piece),
+      kids: [folderNode(workspace, { repo, piece: piece.piece, folder: "" }, "Files", files)],
+      shows: true,
+    }));
     const kids = [
       folderNode(workspace, { repo, piece: null, folder: "" }, "Files", files),
       ...branches,
@@ -1889,62 +1417,13 @@ function treeOf(
   const root: TreeNode = {
     id: ROOT,
     name: workspace,
-    kids: [
-      ...chatNodes(
-        chats.filter((chat) => !inAPiece.has(chat.session)),
-        of,
-      ),
-      ...elsewhereNode(of),
-      ...clones,
-    ],
+    kids: clones,
     shows: true,
   };
 
   const rows: Row[] = [];
   walkRows(root, undefined, true, 0, 1, rows);
   return rows;
-}
-
-/**
- * **The chats at one spot as nodes**: each a row, beside the others whoever asked for it (who
- * asked whom is the Chats list's), with its count of helpers and the line for its tasks as its
- * children, where it has them.
- */
-function chatNodes(here: readonly OpenChat[], of: ChatsOf): TreeNode[] {
-  return here.map((chat): TreeNode => {
-    const agents = of.helpers.get(chat.session);
-    const kids: TreeNode[] = [];
-    if (agents !== undefined)
-      kids.push({
-        id: helpersRow(chat.session),
-        name: "helpers",
-        fold: { key: `${HELPERS_FOLD}${chat.session}`, open: agents !== null },
-        kids: (agents ?? []).map((agent) => ({
-          id: helperRow(chat.session, agent),
-          name: `helper ${agent}`,
-          kids: [],
-          shows: true,
-        })),
-        shows: agents !== null,
-      });
-    if (hasTasks(of, chat.session)) kids.push(tasksNode(tasksRow(chat.session)));
-    return { id: chatRow(chat.session), name: chat.name, kids, shows: true };
-  });
-}
-
-/**
- * A line for a set of tasks, as a row. **Named `tasks`, and a count of helpers `helpers`, for
- * type-ahead**: what the row says first is a number that changes under the eye, so the letter
- * that finds it is its word's, whatever the count is.
- */
-function tasksNode(id: string): TreeNode {
-  return { id, name: "tasks", kids: [], shows: true };
-}
-
-/** The line for the tasks working in the tree whose session has no row in it, where there
- *  are any. */
-function elsewhereNode(of: ChatsOf): TreeNode[] {
-  return of.elsewhere.length === 0 ? [] : [tasksNode(ELSEWHERE_ROW)];
 }
 
 /** `shows` is whether its children are drawn when it is: not in a folded clone or a closed

@@ -74,7 +74,7 @@ async function draw(html: string, width: string, text?: number): Promise<boolean
   return browser.execute(
     (markup: string, wide: string, px: number | null) => {
       const real = document.querySelector<HTMLElement>(
-        '.left-region > [data-testid="chats-section"]',
+        '.region-view > [data-testid="chats-section"]',
       );
       if (!real) return false;
       for (const one of document.querySelectorAll('[data-raised="chats-list.e2e"]')) one.remove();
@@ -104,7 +104,7 @@ async function lower(): Promise<void> {
     for (const one of document.querySelectorAll('[data-raised="chats-list.e2e"]')) one.remove();
     document.documentElement.style.fontSize = "";
     const real = document.querySelector<HTMLElement>(
-      '.left-region > [data-testid="chats-section"]',
+      '.region-view > [data-testid="chats-section"]',
     );
     if (real) real.style.display = "";
   });
@@ -208,7 +208,7 @@ describe("the Chats list in a narrow sidebar", () => {
       async () => (await $('[data-testid="pane"] .xterm-rows').getText()).includes(READY),
       { timeout: 30_000, interval: 250, timeoutMsg: "the chat never started" },
     );
-    await $('.left-region > [data-testid="chats-section"]').waitForExist({ timeout: 10_000 });
+    await $('.region-view > [data-testid="chats-section"]').waitForExist({ timeout: 10_000 });
   });
 
   afterEach(lower);

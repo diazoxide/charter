@@ -247,19 +247,6 @@ describe("a persona with an icon and a colour is drawn with them", () => {
     expect(plain?.querySelector(".persona-mark")).toBeNull();
   });
 
-  it("on that chat's row in the explorer, in place of the terminal a chat with none keeps", async () => {
-    await opened();
-
-    const explorer = await screen.findByTestId("explorer");
-    const rows = [...explorer.querySelectorAll<HTMLElement>("button.chat")];
-    const mine = rows.find((one) => one.textContent?.includes("devops 1"));
-    const plain = rows.find((one) => one.textContent?.includes("claude 2"));
-    expect(mine && marksIn(mine, "devops")).toEqual([ROCKET_ON_TEAL]);
-    expect(mine?.querySelector("svg.lucide-square-terminal")).toBeNull();
-    expect(plain?.querySelector(".persona-mark")).toBeNull();
-    expect(plain?.querySelector("svg.lucide-square-terminal")).not.toBeNull();
-  });
-
   it("on its row in the Personas panel, beside a persona that is its initials", async () => {
     await opened();
 

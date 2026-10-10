@@ -7,6 +7,7 @@ import {
   forgetThisLaunch,
   inSlots,
   LEGACY_KEY,
+  openView,
   REGION_IDS,
   remembered,
   settleLayout,
@@ -17,7 +18,13 @@ import {
   useArrangement,
 } from "./regions";
 import { setYourEditor } from "./yourEditor";
-import { aboutThisMachine, GLOBAL, sayAboutThisMachine, type Reading } from "./windowprefs";
+import {
+  aboutThisMachine,
+  GLOBAL,
+  sayAboutThisMachine,
+  usingTheDefaultLayout,
+  type Reading,
+} from "./windowprefs";
 
 const PATH = "/home/op/.config/charter/layout.json";
 
@@ -32,6 +39,12 @@ const handed = (layout: Partial<Reading>) => {
 const put = (document: unknown) => handed({ found: true, document });
 const placed = (arrangement: ReturnType<typeof remembered>, id: string) =>
   arrangement.find((one) => one.id === id);
+/** The navigation region's placement, which every arrangement has. */
+const navigationOf = (arrangement: ReturnType<typeof remembered>) => {
+  const found = placed(arrangement, "navigation");
+  if (found === undefined) throw new Error("no navigation region");
+  return found;
+};
 
 /** Every command the window sent the core, in order, and what the core answers. */
 let sent: { cmd: string; args: unknown }[] = [];
@@ -56,9 +69,9 @@ afterEach(() => {
 });
 
 describe("the arrangement a window has never been told about", () => {
-  it("is ADR 0038's four regions: explorer left, attention right, state along the bottom", () => {
+  it("is ADR 0038's four regions: navigation left, attention right, state along the bottom", () => {
     expect(remembered()).toEqual([
-      { id: "explorer", side: "left", order: 0, collapsed: false },
+      { id: "navigation", side: "left", order: 0, collapsed: false },
       { id: "aside", side: "right", order: 0, collapsed: false },
       { id: "bottom", side: "bottom", order: 0, collapsed: false },
     ]);
@@ -83,20 +96,20 @@ describe("putting a region away", () => {
   it("puts it away and brings it back", () => {
     const { result } = renderHook(() => useArrangement());
 
-    act(() => result.current.toggle("explorer"));
-    expect(placed(result.current.arrangement, "explorer")?.collapsed).toBe(true);
+    act(() => result.current.toggle("navigation"));
+    expect(placed(result.current.arrangement, "navigation")?.collapsed).toBe(true);
 
-    act(() => result.current.toggle("explorer"));
-    expect(placed(result.current.arrangement, "explorer")?.collapsed).toBe(false);
+    act(() => result.current.toggle("navigation"));
+    expect(placed(result.current.arrangement, "navigation")?.collapsed).toBe(false);
   });
 
   it("leaves every other region where it was", () => {
     const { result } = renderHook(() => useArrangement());
 
-    act(() => result.current.toggle("explorer"));
+    act(() => result.current.toggle("navigation"));
 
     expect(result.current.arrangement.filter((one) => one.collapsed).map((one) => one.id)).toEqual([
-      "explorer",
+      "navigation",
     ]);
   });
 
@@ -140,7 +153,7 @@ describe("how big each slot was left", () => {
 
     act(() => result.current.resized({ left: 31 }));
 
-    expect(placed(remembered(), "explorer")?.size).toBe(31);
+    expect(placed(remembered(), "navigation")?.size).toBe(31);
     expect(slotSize("left", inSlots(remembered()).left)).toBe(31);
   });
 
@@ -150,7 +163,7 @@ describe("how big each slot was left", () => {
 
     act(() => result.current.resized({ left: 33 }));
 
-    expect(placed(result.current.arrangement, "explorer")?.size).toBe(33);
+    expect(placed(result.current.arrangement, "navigation")?.size).toBe(33);
     expect(placed(result.current.arrangement, "bottom")?.size).toBe(33);
   });
 
@@ -172,7 +185,7 @@ describe("how big each slot was left", () => {
 
     act(() => result.current.resized({ left: 0 }));
 
-    expect(placed(result.current.arrangement, "explorer")?.size).toBe(28);
+    expect(placed(result.current.arrangement, "navigation")?.size).toBe(28);
   });
 
   it("falls back on the catalogue until something has been dragged", () => {
@@ -184,7 +197,7 @@ describe("how big each slot was left", () => {
     // the operator can see. Asking the first placed region would size the slot from something
     // that is not on screen, and the width would jump when it came back.
     const slots = inSlots([
-      { id: "explorer", side: "left", order: 0, collapsed: true, size: 40 },
+      { id: "navigation", side: "left", order: 0, collapsed: true, size: 40 },
       { id: "bottom", side: "left", order: 1, collapsed: false, size: 12 },
       { id: "aside", side: "right", order: 0, collapsed: false },
     ]);
@@ -197,9 +210,9 @@ describe("a stored arrangement that is not what this build writes", () => {
   it("draws a region the document does not mention", () => {
     // A document written by an older build, or by hand. Losing a region with no way to notice
     // it went is worse than ignoring half a preference.
-    put({ regions: [{ id: "explorer", side: "left", order: 0, collapsed: true }] });
+    put({ regions: [{ id: "navigation", side: "left", order: 0, collapsed: true }] });
 
-    expect(placed(remembered(), "explorer")?.collapsed).toBe(true);
+    expect(placed(remembered(), "navigation")?.collapsed).toBe(true);
     expect(placed(remembered(), "aside")).toEqual({
       id: "aside",
       side: "right",
@@ -216,7 +229,7 @@ describe("a stored arrangement that is not what this build writes", () => {
       ],
     });
 
-    expect(remembered().map((one) => one.id)).toEqual(["explorer", "aside", "bottom"]);
+    expect(remembered().map((one) => one.id)).toEqual(["navigation", "aside", "bottom"]);
     expect(placed(remembered(), "bottom")).toMatchObject({ side: "right", order: 2 });
   });
 
@@ -243,16 +256,16 @@ describe("a stored arrangement that is not what this build writes", () => {
   it("ignores a size that is not a percentage a panel could be given", () => {
     for (const size of [-5, 0, 140, "20%", null, Number.NaN]) {
       globalThis.localStorage.clear();
-      put({ regions: [{ id: "explorer", side: "left", order: 0, collapsed: false, size }] });
+      put({ regions: [{ id: "navigation", side: "left", order: 0, collapsed: false, size }] });
 
-      expect(placed(remembered(), "explorer")?.size).toBeUndefined();
+      expect(placed(remembered(), "navigation")?.size).toBeUndefined();
     }
   });
 
   it("keeps a size that is one", () => {
-    put({ regions: [{ id: "explorer", side: "left", order: 0, collapsed: false, size: 12.5 }] });
+    put({ regions: [{ id: "navigation", side: "left", order: 0, collapsed: false, size: 12.5 }] });
 
-    expect(placed(remembered(), "explorer")?.size).toBe(12.5);
+    expect(placed(remembered(), "navigation")?.size).toBe(12.5);
   });
 
   it("draws the default arrangement when the document is not one", () => {
@@ -264,9 +277,9 @@ describe("a stored arrangement that is not what this build writes", () => {
   });
 
   it("skips an entry that is not an object at all", () => {
-    put({ regions: [null, "explorer", ["aside"], { id: "bottom", side: "left", order: 3 }] });
+    put({ regions: [null, "navigation", ["aside"], { id: "bottom", side: "left", order: 3 }] });
 
-    expect(remembered().map((one) => one.id)).toEqual(["explorer", "aside", "bottom"]);
+    expect(remembered().map((one) => one.id)).toEqual(["navigation", "aside", "bottom"]);
     expect(placed(remembered(), "bottom")).toMatchObject({ side: "left", order: 3 });
   });
 });
@@ -274,12 +287,12 @@ describe("a stored arrangement that is not what this build writes", () => {
 describe("the layout file", () => {
   it("is what the first frame is drawn from, with nothing fetched", () => {
     put({
-      version: 1,
-      regions: [{ id: "explorer", side: "right", order: 1, collapsed: false, size: 22 }],
+      version: 2,
+      regions: [{ id: "navigation", side: "right", order: 1, collapsed: false, size: 22 }],
     });
 
-    expect(placed(remembered(), "explorer")).toEqual({
-      id: "explorer",
+    expect(placed(remembered(), "navigation")).toEqual({
+      id: "navigation",
       side: "right",
       order: 1,
       collapsed: false,
@@ -291,16 +304,16 @@ describe("the layout file", () => {
   it("is where every change goes, in the order the window made them", async () => {
     const { result } = renderHook(() => useArrangement());
 
-    act(() => result.current.toggle("explorer"));
+    act(() => result.current.toggle("navigation"));
     act(() => result.current.move("bottom", "right", 1));
 
     await vi.waitFor(() => expect(sent).toHaveLength(2));
     expect(sent.map((one) => one.cmd)).toEqual(["write_layout", "write_layout"]);
     const last = JSON.parse((sent[1].args as { text: string }).text);
     expect(last).toEqual({
-      version: 1,
+      version: 2,
       regions: [
-        { id: "explorer", side: "left", order: 0, collapsed: true },
+        { id: "navigation", side: "left", order: 0, collapsed: true },
         { id: "aside", side: "right", order: 0, collapsed: false },
         { id: "bottom", side: "right", order: 1, collapsed: false },
       ],
@@ -311,7 +324,7 @@ describe("the layout file", () => {
   });
 
   it("keeps the text sizes the file held when the arrangement changes", async () => {
-    put({ version: 1, regions: [], text: { window: 18, terminal: 11 } });
+    put({ version: 2, regions: [], text: { window: 18, terminal: 11 } });
     const { result } = renderHook(() => useArrangement());
 
     act(() => result.current.toggle("aside"));
@@ -322,7 +335,7 @@ describe("the layout file", () => {
   });
 
   it("keeps your editor (RC-20) when the arrangement changes", async () => {
-    put({ version: 1, regions: [], editor: "zed" });
+    put({ version: 2, regions: [], editor: "zed" });
     const { result } = renderHook(() => useArrangement());
 
     act(() => result.current.toggle("aside"));
@@ -353,7 +366,7 @@ describe("the layout file", () => {
   });
 
   it("naming a region this build does not have is drawn without it, and says so", async () => {
-    put({ version: 1, regions: [{ id: "minimap", side: "left", order: 0 }] });
+    put({ version: 2, regions: [{ id: "minimap", side: "left", order: 0 }] });
 
     expect(remembered()).toEqual(DEFAULT_ARRANGEMENT);
     await settleLayout();
@@ -363,7 +376,7 @@ describe("the layout file", () => {
   });
 
   it("says nothing when there is nothing wrong with it", async () => {
-    put({ version: 1, regions: DEFAULT_ARRANGEMENT });
+    put({ version: 2, regions: DEFAULT_ARRANGEMENT });
 
     await settleLayout();
 
@@ -397,24 +410,24 @@ describe("the layout file", () => {
 });
 
 describe("the arrangement web storage held before the file", () => {
-  const legacy = [{ id: "explorer", side: "left", order: 0, collapsed: true }];
+  const legacy = [{ id: "navigation", side: "left", order: 0, collapsed: true }];
 
   it("is drawn on the first launch that finds no file, and moved into it", async () => {
     globalThis.localStorage.setItem(LEGACY_KEY, JSON.stringify({ regions: legacy }));
     handed({ found: false });
 
-    expect(placed(remembered(), "explorer")?.collapsed).toBe(true);
+    expect(placed(remembered(), "navigation")?.collapsed).toBe(true);
     await settleLayout();
 
     expect(sent.map((one) => one.cmd)).toEqual(["adopt_layout"]);
     expect(JSON.parse((sent[0].args as { text: string }).text)).toMatchObject({
-      version: 1,
-      regions: [{ id: "explorer", collapsed: true }, { id: "aside" }, { id: "bottom" }],
+      version: 2,
+      regions: [{ id: "navigation", collapsed: true }, { id: "aside" }, { id: "bottom" }],
     });
     // Moved, so never read again.
     expect(globalThis.localStorage.getItem(LEGACY_KEY)).toBeNull();
     // And a project opened after the move still gets it, with the key gone.
-    expect(placed(remembered(), "explorer")?.collapsed).toBe(true);
+    expect(placed(remembered(), "navigation")?.collapsed).toBe(true);
   });
 
   it("is kept where it is when the move fails, so the next launch tries again", async () => {
@@ -432,9 +445,9 @@ describe("the arrangement web storage held before the file", () => {
   it("is not read at all once there is a file", async () => {
     globalThis.localStorage.setItem(LEGACY_KEY, JSON.stringify({ regions: legacy }));
     const read = vi.spyOn(globalThis.Storage.prototype, "getItem");
-    put({ version: 1, regions: [] });
+    put({ version: 2, regions: [] });
 
-    expect(placed(remembered(), "explorer")?.collapsed).toBe(false);
+    expect(placed(remembered(), "navigation")?.collapsed).toBe(false);
     await settleLayout();
 
     expect(read).not.toHaveBeenCalled();
@@ -453,19 +466,19 @@ describe("the arrangement web storage held before the file", () => {
 describe("the arrangement as the slots it draws", () => {
   it("gives every side a list, including one nothing is placed in", () => {
     expect(Object.keys(inSlots(DEFAULT_ARRANGEMENT)).sort()).toEqual([...SIDES].sort());
-    expect(inSlots([{ id: "explorer", side: "left", order: 0, collapsed: false }]).right).toEqual(
+    expect(inSlots([{ id: "navigation", side: "left", order: 0, collapsed: false }]).right).toEqual(
       [],
     );
   });
 
   it("sorts a side by order", () => {
     const slots = inSlots([
-      { id: "explorer", side: "left", order: 5, collapsed: false },
+      { id: "navigation", side: "left", order: 5, collapsed: false },
       { id: "bottom", side: "left", order: 1, collapsed: false },
       { id: "aside", side: "left", order: 3, collapsed: false },
     ]);
 
-    expect(slots.left.map((one) => one.id)).toEqual(["bottom", "aside", "explorer"]);
+    expect(slots.left.map((one) => one.id)).toEqual(["bottom", "aside", "navigation"]);
   });
 
   it("breaks a tie the same way every launch", () => {
@@ -473,18 +486,286 @@ describe("the arrangement as the slots it draws", () => {
     // whatever order the array happened to be in would move the window between launches.
     const slots = inSlots([
       { id: "aside", side: "left", order: 0, collapsed: false },
-      { id: "explorer", side: "left", order: 0, collapsed: false },
+      { id: "navigation", side: "left", order: 0, collapsed: false },
     ]);
 
-    expect(slots.left.map((one) => one.id)).toEqual(["explorer", "aside"]);
+    expect(slots.left.map((one) => one.id)).toEqual(["navigation", "aside"]);
   });
 
   it("counts what is drawn in a slot and not what is placed there", () => {
     const placedThere = [
-      { id: "explorer" as const, side: "left" as const, order: 0, collapsed: true },
+      { id: "navigation" as const, side: "left" as const, order: 0, collapsed: true },
       { id: "bottom" as const, side: "left" as const, order: 1, collapsed: false },
     ];
 
     expect(shownIn(placedThere).map((one) => one.id)).toEqual(["bottom"]);
+  });
+});
+
+/** What the window wrote last, as the file would hold it. */
+const lastWritten = () => {
+  const writes = sent.filter((one) => one.cmd === "write_layout");
+  return JSON.parse((writes[writes.length - 1].args as { text: string }).text);
+};
+
+describe("a version 1 layout file, as every purlis before #1673 wrote it", () => {
+  // `docs/design-system.md`'s own example, as it stood for version 1: a person who moved the
+  // explorer right, swapped the attention region left and put the bottom bar away.
+  const DOCUMENTED = {
+    version: 1,
+    regions: [
+      { id: "explorer", side: "right", order: 0, collapsed: false, size: 22 },
+      { id: "aside", side: "left", order: 0, collapsed: false },
+      { id: "bottom", side: "bottom", order: 0, collapsed: true },
+    ],
+    text: { window: 15, terminal: 14 },
+    editor: "zed",
+    chats: { lines: 1, grouped: true, tabbed: true, away: false },
+    dismissed: { "/home/me/project": ["pin-dormant:ide"] },
+  };
+
+  it("keeps every region where the person put it, the explorer's now the navigation region's", () => {
+    put(DOCUMENTED);
+
+    expect(remembered("/home/me/project")).toEqual([
+      { id: "navigation", side: "right", order: 0, collapsed: false, size: 22 },
+      { id: "aside", side: "left", order: 0, collapsed: false },
+      { id: "bottom", side: "bottom", order: 0, collapsed: true },
+    ]);
+  });
+
+  it("is moved forward without a word in the alerts drawer", async () => {
+    put(DOCUMENTED);
+
+    await settleLayout();
+
+    expect(aboutThisMachine()).toEqual([]);
+  });
+
+  it("is where every project starts, since version 1 had one arrangement for all of them", () => {
+    put(DOCUMENTED);
+
+    expect(remembered("/one")).toEqual(remembered("/two"));
+    expect(placed(remembered("/two"), "navigation")).toMatchObject({ side: "right", size: 22 });
+  });
+
+  it("opens the left side on Chats, which sat above the explorer in version 1", () => {
+    put(DOCUMENTED);
+
+    expect(openView(navigationOf(remembered("/one")))).toBe("chats");
+  });
+
+  it("keeps a region the person had put away put away", () => {
+    put({
+      version: 1,
+      regions: [
+        { id: "explorer", side: "left", order: 0, collapsed: true, size: 31.5 },
+        { id: "aside", side: "right", order: 0, collapsed: false, size: 24 },
+        { id: "bottom", side: "bottom", order: 0, collapsed: false },
+      ],
+    });
+
+    expect(placed(remembered("/one"), "navigation")).toEqual({
+      id: "navigation",
+      side: "left",
+      order: 0,
+      collapsed: true,
+      size: 31.5,
+    });
+    expect(placed(remembered("/one"), "aside")?.size).toBe(24);
+  });
+
+  it("is written back as version 2 at the first change, keeping what else the file held", async () => {
+    put(DOCUMENTED);
+    const { result } = renderHook(() => useArrangement("/home/me/project"));
+
+    act(() => result.current.toggle("aside"));
+
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    const written = lastWritten();
+    expect(written.version).toBe(2);
+    expect(written.regions.map((one: { id: string }) => one.id)).toEqual([
+      "navigation",
+      "aside",
+      "bottom",
+    ]);
+    expect(written.text).toEqual({ window: 15, terminal: 14 });
+    expect(written.editor).toBe("zed");
+    // The dismissals are the core's to keep (NO-2): a window's write never carries them.
+    expect(written.dismissed).toBeUndefined();
+  });
+
+  it("is moved forward from web storage too, where the oldest builds kept it", () => {
+    globalThis.localStorage.setItem(
+      LEGACY_KEY,
+      JSON.stringify({ regions: [{ id: "explorer", side: "right", order: 0, collapsed: true }] }),
+    );
+
+    expect(placed(remembered(), "navigation")).toMatchObject({ side: "right", collapsed: true });
+  });
+});
+
+describe("each project's own arrangement", () => {
+  it("is drawn from the file, and a project the file does not name starts from the machine's", () => {
+    put({
+      version: 2,
+      regions: DEFAULT_ARRANGEMENT,
+      projects: {
+        "/one": {
+          regions: [
+            { id: "navigation", side: "left", order: 0, collapsed: true, view: "explorer" },
+          ],
+        },
+      },
+    });
+
+    expect(placed(remembered("/one"), "navigation")).toMatchObject({
+      collapsed: true,
+      view: "explorer",
+    });
+    expect(remembered("/two")).toEqual(DEFAULT_ARRANGEMENT);
+  });
+
+  it("is written under the project, and only the projects this window arranged are sent", async () => {
+    put({
+      version: 2,
+      regions: DEFAULT_ARRANGEMENT,
+      projects: { "/other": { regions: DEFAULT_ARRANGEMENT } },
+    });
+    const { result } = renderHook(() => useArrangement("/one"));
+
+    act(() => result.current.toggle("navigation"));
+
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    const written = lastWritten();
+    // The core keeps `/other` from the file (`purlis_core::windowprefs::write_layout`), so a
+    // second window arranging it meanwhile keeps what it did.
+    expect(Object.keys(written.projects)).toEqual(["/one"]);
+    expect(written.projects["/one"].regions[0]).toMatchObject({
+      id: "navigation",
+      collapsed: true,
+    });
+  });
+
+  it("is the project's, so arranging one leaves an open project's alone", () => {
+    const one = renderHook(() => useArrangement("/one"));
+    const two = renderHook(() => useArrangement("/two"));
+
+    act(() => one.result.current.toggle("navigation"));
+
+    expect(placed(two.result.current.arrangement, "navigation")?.collapsed).toBe(false);
+    expect(placed(remembered("/one"), "navigation")?.collapsed).toBe(true);
+  });
+
+  it("skips a project's entry that is not an arrangement, and says so", async () => {
+    put({ version: 2, regions: DEFAULT_ARRANGEMENT, projects: { "/one": "left", "/two": null } });
+
+    expect(remembered("/one")).toEqual(DEFAULT_ARRANGEMENT);
+    await settleLayout();
+
+    expect(aboutThisMachine()[0].detail).toContain('"/one"');
+  });
+
+  it("cannot reach a prototype through a project's name", () => {
+    put(JSON.parse('{"version":2,"regions":[],"projects":{"__proto__":{"regions":[]}}}'));
+
+    expect(remembered("__proto__")).toEqual(DEFAULT_ARRANGEMENT);
+    expect(({} as Record<string, unknown>).regions).toBeUndefined();
+  });
+});
+
+describe("the open view of a side (#1673)", () => {
+  const navigation = navigationOf;
+
+  it("is Chats until the person picks another", () => {
+    const { result } = renderHook(() => useArrangement("/one"));
+
+    expect(openView(navigation(result.current.arrangement))).toBe("chats");
+  });
+
+  it("switches on a pick of another view, and the side stays open", () => {
+    const { result } = renderHook(() => useArrangement("/one"));
+
+    act(() => result.current.pick("explorer"));
+
+    expect(navigation(result.current.arrangement)).toMatchObject({
+      view: "explorer",
+      collapsed: false,
+    });
+  });
+
+  it("puts the side away on a pick of the view already open, and brings it back on the next", () => {
+    const { result } = renderHook(() => useArrangement("/one"));
+
+    act(() => result.current.pick("chats"));
+    expect(navigation(result.current.arrangement).collapsed).toBe(true);
+
+    act(() => result.current.pick("chats"));
+    expect(navigation(result.current.arrangement)).toMatchObject({ collapsed: false });
+    expect(openView(navigation(result.current.arrangement))).toBe("chats");
+  });
+
+  it("brings a side that is away back on the view picked", () => {
+    const { result } = renderHook(() => useArrangement("/one"));
+    act(() => result.current.toggle("navigation"));
+
+    act(() => result.current.pick("explorer"));
+
+    expect(navigation(result.current.arrangement)).toMatchObject({
+      view: "explorer",
+      collapsed: false,
+    });
+  });
+
+  it("is shown, never put away, when a key or the palette asks for it", () => {
+    const { result } = renderHook(() => useArrangement("/one"));
+
+    act(() => result.current.show("chats"));
+    expect(navigation(result.current.arrangement).collapsed).toBe(false);
+
+    act(() => result.current.toggle("navigation"));
+    act(() => result.current.show("explorer"));
+    expect(navigation(result.current.arrangement)).toMatchObject({
+      view: "explorer",
+      collapsed: false,
+    });
+  });
+
+  it("is remembered in the file", async () => {
+    const { result } = renderHook(() => useArrangement("/one"));
+
+    act(() => result.current.pick("explorer"));
+
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    expect(lastWritten().projects["/one"].regions[0].view).toBe("explorer");
+  });
+
+  it("falls back on Chats for a view the side does not have, and says so", async () => {
+    put({
+      version: 2,
+      regions: [{ id: "navigation", side: "left", order: 0, collapsed: false, view: "minimap" }],
+    });
+
+    expect(openView(navigation(remembered()))).toBe("chats");
+    await settleLayout();
+    expect(aboutThisMachine()[0].detail).toContain('"minimap"');
+  });
+});
+
+describe("Use the default layout (#1289), with each project's own (#1673)", () => {
+  it("starts every project opened afterwards from the default, the file's and this launch's gone", async () => {
+    put({
+      version: 2,
+      regions: [{ id: "navigation", side: "right", order: 0, collapsed: true }],
+      projects: { "/one": { regions: [{ id: "navigation", side: "left", collapsed: true }] } },
+    });
+    const { result } = renderHook(() => useArrangement("/two"));
+    act(() => result.current.pick("explorer"));
+
+    act(() => usingTheDefaultLayout());
+
+    expect(remembered("/one")).toEqual(DEFAULT_ARRANGEMENT);
+    expect(remembered("/two")).toEqual(DEFAULT_ARRANGEMENT);
+    expect(remembered("/three")).toEqual(DEFAULT_ARRANGEMENT);
   });
 });

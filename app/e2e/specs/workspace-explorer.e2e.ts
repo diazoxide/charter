@@ -3,7 +3,7 @@ import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:
 import { join } from "node:path";
 import { browser, expect, $, $$ } from "@wdio/globals";
 import { built, READY, singleQuoted } from "../harness.js";
-import { harnessRowsDrawn, pressAndStart, pressOnly } from "../opening.js";
+import { harnessRowsDrawn, pressAndStart, pressOnly, showView } from "../opening.js";
 import { textOfEach } from "../reading.js";
 import { ask } from "../switching.js";
 
@@ -111,6 +111,10 @@ async function sendContextMenu(selector: string): Promise<boolean> {
 }
 
 describe("the explorer", () => {
+  // The left side opens on Chats (#1673): these are about the Explorer view's rows.
+  before(async () => await showView("Explorer"));
+  after(async () => await showView("Chats"));
+
   it("lists the focused workspace's clones", async () => {
     await onAlpha();
 
@@ -776,19 +780,24 @@ describe("the explorer", () => {
     await $('[data-testid="clone-svc"]').waitForExist({ timeout: 20_000 });
   });
 
-  it("files a chat under the workspace it was started in", async () => {
+  it("lists a chat started in the workspace in the Chats view, and not in the explorer", async () => {
     await onAlpha();
     await $('[data-testid="clone-svc"]').waitForExist({ timeout: 20_000 });
+    await showView("Chats");
+    const rows = async () =>
+      (await $$('[data-testid="chats-section"] [role="treeitem"]').getElements()).length;
+    const before = await rows();
 
     await pressAndStart("New tab");
 
-    // Nothing in the explorer is picked, so the chat starts in the workspace's own directory
-    // and the explorer lists it there — under the workspace row, not under a piece.
-    const explorer = await $('[data-testid="explorer"]');
-    await browser.waitUntil(async () => (await explorer.getText()).includes("1"), {
+    // The Chats view is the one list of chats (#1673): the new chat is a row there, and the
+    // explorer, which drew it under the workspace row until then, draws no chat.
+    await browser.waitUntil(async () => (await rows()) > before, {
       timeout: 20_000,
-      timeoutMsg: "the chat never appeared under the workspace it was started in",
+      timeoutMsg: "the chat never appeared in the Chats view",
     });
+    await showView("Explorer");
+    expect(await $$('[data-testid="explorer"] [data-row^="chat:"]').getElements()).toHaveLength(0);
   });
 
   it("shows one workspace's chats on the strip, and keeps the others running", async () => {
@@ -974,6 +983,9 @@ describe("the explorer", () => {
  * CSS and nothing goes red. A rule that never took would show up here as a row two lines tall.
  */
 describe("the explorer's rows, in a region too narrow for them", () => {
+  before(async () => await showView("Explorer"));
+  after(async () => await showView("Chats"));
+
   /**
    * Narrows the explorer, measures, and puts it back.
    *

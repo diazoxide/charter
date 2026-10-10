@@ -149,11 +149,12 @@ describe("changing a text size", () => {
 
     const last = kept.at(-1);
     expect(last?.text).toEqual({ window: 14, terminal: 14 });
-    expect(last?.version).toBe(1);
-    const explorer = (last?.regions as { id: string; side: string }[]).find(
-      (one) => one.id === "explorer",
+    // Written as version 2 (#1673), the explorer's region by its name now: moved, not lost.
+    expect(last?.version).toBe(2);
+    const navigation = (last?.regions as { id: string; side: string }[]).find(
+      (one) => one.id === "navigation",
     );
-    expect(explorer?.side).toBe("right");
+    expect(navigation?.side).toBe("right");
   });
 
   it("is written once the sizes settle, not once per step of a drag", async () => {

@@ -80,7 +80,7 @@ vi.mock("react-resizable-panels", () => ({
 }));
 
 const CONTENT: Record<RegionId, ReactNode> = {
-  explorer: <div data-testid="c-explorer">explorer</div>,
+  navigation: <div data-testid="c-navigation">navigation</div>,
   aside: <div data-testid="c-aside">aside</div>,
   bottom: <div data-testid="c-bottom">bottom</div>,
 };
@@ -113,7 +113,7 @@ const on = (id: RegionId, side: Side, order = 0, collapsed = false, size?: numbe
 });
 
 const AWAY: Arrangement = [
-  on("explorer", "left", 0, true),
+  on("navigation", "left", 0, true),
   on("aside", "right"),
   on("bottom", "bottom"),
 ];
@@ -140,7 +140,7 @@ describe("how big a slot starts", () => {
     render(
       <Harness
         from={[
-          on("explorer", "left", 0, false, 31.5),
+          on("navigation", "left", 0, false, 31.5),
           on("aside", "right"),
           on("bottom", "bottom"),
         ]}
@@ -165,7 +165,9 @@ describe("how big a slot starts", () => {
 
   it("is nothing at all when every region has moved off that side", () => {
     render(
-      <Harness from={[on("explorer", "right", 1), on("aside", "right"), on("bottom", "bottom")]} />,
+      <Harness
+        from={[on("navigation", "right", 1), on("aside", "right"), on("bottom", "bottom")]}
+      />,
     );
 
     expect(given.get("region-left")?.defaultSize).toBe("0%");
@@ -181,7 +183,7 @@ describe("the constraints the group is registered with", () => {
       <Harness
         from={DEFAULT_ARRANGEMENT}
         to={[
-          on("explorer", "bottom", 1, true),
+          on("navigation", "bottom", 1, true),
           on("aside", "left", 0, false, 40),
           on("bottom", "bottom", 2),
         ]}
@@ -252,8 +254,16 @@ describe("putting a region away while the window is up", () => {
     // it back at `minSize`. The remembered size is what it should come back to.
     render(
       <Harness
-        from={[on("explorer", "left", 0, true, 31.5), on("aside", "right"), on("bottom", "bottom")]}
-        to={[on("explorer", "left", 0, false, 31.5), on("aside", "right"), on("bottom", "bottom")]}
+        from={[
+          on("navigation", "left", 0, true, 31.5),
+          on("aside", "right"),
+          on("bottom", "bottom"),
+        ]}
+        to={[
+          on("navigation", "left", 0, false, 31.5),
+          on("aside", "right"),
+          on("bottom", "bottom"),
+        ]}
       />,
     );
 

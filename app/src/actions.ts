@@ -69,6 +69,9 @@ import { neighbour } from "./tabTasks";
 import { taskKeyNote, taskKeySaid } from "./taskKeys";
 import { todoOpenId, todoView } from "./todos";
 import { onAMac } from "./tabKeys";
+import type { RegionId } from "./regions";
+import { VIEWS, type ViewId } from "./sideViews";
+import { SIDE_KEYS_SAID } from "./sideKeys";
 import { SETTINGS_GROUPS } from "./settings/catalogue";
 import { askSettingsLink, linkToGroup, settingsPlace, type SettingsLink } from "./settings/links";
 import {
@@ -426,6 +429,10 @@ export type Does =
    *  It puts nothing in force by itself — an extension contributes only once it is approved,
    *  and the approval is the dialog's. */
   | { verb: "showExtensions" }
+  /** Shows a view of a side and gives it the keyboard (#1673): what its key does. */
+  | { verb: "showSideView"; view: ViewId }
+  /** Puts a region away or brings it back, as its status-line toggle and ⌘B do. */
+  | { verb: "toggleRegion"; region: RegionId }
   /** Puts the app's own `charter` on a terminal's `PATH` — VS Code's "Install 'code' command
    *  in PATH". Only ever on this row: nothing links a command anywhere behind the operator's
    *  back (spec decision 21, `purlis_core::clipath`). A refusal comes back as the core's
@@ -768,6 +775,9 @@ export type Now = {
   /** The project's memory stores (`memory_scopes`): an open memory tab's Move rows, one per
    *  store but its own (#1190). None while unread, and then there are no Move rows. */
   memoryStores?: readonly MemoryScope[];
+  /** The regions put away (#1673): the navigation region's row says whether it brings it back
+   *  or puts it away. */
+  away?: readonly RegionId[];
 };
 
 /** What the window does when a row is run. One function per verb, whichever surface asked. */
@@ -905,6 +915,8 @@ export type Doing = {
    *  answered, and the open it ends in is the gated one. */
   createProject: () => void;
   showExtensions: () => void;
+  showSideView: (view: ViewId) => void;
+  toggleRegion: (region: RegionId) => void;
   installCli: () => Promise<Ran>;
   selectProject: (plane: string) => void;
   /** Opens the project switcher. Nothing is switched until a row in it is run. */
@@ -1251,6 +1263,16 @@ export function noteOf(offer: Offer, unknown: boolean): string | undefined {
 /** *Search in files*'s row (#1137). */
 export const SEARCH_ID = "search.files";
 
+/** The palette's row that shows a side's view (#1673). */
+export const sideViewId = (view: ViewId) => `view.show:${view}`;
+/** The palette's row that puts the navigation region away or brings it back (#1673). */
+export const TOGGLE_NAVIGATION_ID = "view.toggle:navigation";
+/** What each view is, on its palette row. */
+const VIEW_NOTES: Record<ViewId, string> = {
+  chats: "The project's chats and their tasks, on the left.",
+  explorer: "The focused workspace's repos, branches and files, on the left.",
+};
+
 /** The row that opens `harness`'s card (#1134). */
 export function harnessCardId(harness: string): string {
   return `harness.card:${harness}`;
@@ -1386,6 +1408,25 @@ export function catalogue(now: Now): Offer[] {
           },
     );
   }
+
+  // **The left side's views, and the side itself** (#1673, B-10): every view is a row, with its
+  // key said, so the palette is where the keys are learned — as Search's is.
+  for (const view of Object.keys(VIEWS) as ViewId[]) {
+    offers.push({
+      ...can(sideViewId(view), `Show the ${VIEWS[view].name} view`, { verb: "showSideView", view }),
+      note: `${VIEW_NOTES[view]} ${SIDE_KEYS_SAID[view]}.`,
+    });
+  }
+  offers.push({
+    ...can(
+      TOGGLE_NAVIGATION_ID,
+      now.away?.includes("navigation")
+        ? "Bring the Navigation region back"
+        : "Put the Navigation region away",
+      { verb: "toggleRegion", region: "navigation" },
+    ),
+    note: `The Chats and Explorer views on the left. ${SIDE_KEYS_SAID.navigation}.`,
+  });
 
   // **A harness's card with no chat open** (HP-19, #1134): one row per harness the project
   // has, opening its card tab as a chat's header button does.
@@ -2769,6 +2810,12 @@ export function perform(offer: Offer, doing: Doing): Ran | Promise<Ran> {
       return DID;
     case "showExtensions":
       doing.showExtensions();
+      return DID;
+    case "showSideView":
+      doing.showSideView(does.view);
+      return DID;
+    case "toggleRegion":
+      doing.toggleRegion(does.region);
       return DID;
     case "installCli":
       return doing.installCli();

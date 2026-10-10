@@ -494,10 +494,8 @@ beside a mark with a shape of its own, the same in every list: working, needs yo
 `asking <chat>`, done, failed, cancelled, or ended without a report. A chat at rest that is
 not asking for the person reads idle, and one whose harness sends nothing reads
 `running (no detail from <harness>)`.
-The Chats list is where tasks are listed. The explorer lists a workspace's chats that have a
-tab of their own, and says a session's tasks in one line under it
-(`5 tasks · 3 working · 1 waiting · 1 done`, the count its row and its tab say) that goes to the
-Chats list.
+The Chats list is where tasks are listed, and where every chat is: the explorer lists none
+(#1673).
 _Avoid_: job, todo (that is the workspace's), work item, task chat, sub-chat, persona chat (in a
 shown sentence, where a task is meant)
 
@@ -523,9 +521,8 @@ _Avoid_: killed, aborted, cancelled (for a stop by the person: a cancel is the a
 **Helper** (of a chat):
 A sub-agent or child its harness spawns inside a chat: the harness's own, a **child run** of the
 chat's run. It carries the chat's persona, sandbox and asks, is never a chat or a persona, and
-may not dispatch. "Helper" is the word the app shows for it: a chat's row in the explorer says
-how many it has and how they stand (`3 helpers · 1 working`) and unfolds to one row each,
-`helper <short id>`. A task with no row there says the same count on its row in the Chats list.
+may not dispatch. "Helper" is the word the app shows for it: a chat's row in the Chats list says
+how many it has and how they stand (`3 helpers · 1 working`).
 _Avoid_: sub-agent (in a shown sentence: that is the harness's word), child agent, sub-chat, task
 (that is a chat a dispatch started)
 

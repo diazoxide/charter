@@ -83,11 +83,12 @@ afterEach(() => {
   clearMocks();
 });
 
-/** Puts the explorer away, as its toggle does. */
+/** Puts the explorer away, as the navigation region's toggle does (#1673: the explorer is one
+ *  of that region's views). */
 async function hideTheExplorer() {
-  await screen.findByRole("navigation", { name: "Explorer" });
-  await userEvent.click(screen.getByRole("button", { name: "Explorer", pressed: true }));
-  await waitFor(() => expect(screen.queryByRole("navigation", { name: "Explorer" })).toBeNull());
+  await screen.findByRole("tabpanel", { name: "Chats" });
+  await userEvent.click(screen.getByRole("button", { name: "Navigation", pressed: true }));
+  await waitFor(() => expect(screen.queryByRole("tabpanel")).toBeNull());
 }
 
 /** The bottom region's line saying the refusal. */

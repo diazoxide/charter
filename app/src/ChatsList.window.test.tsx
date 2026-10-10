@@ -995,9 +995,10 @@ describe("a row of the Chats list (V100-19, V100-50)", () => {
     act(() => setChatsListPrefs({ lines: 1 }));
 
     expect(theTree().querySelector(".line.two")).toBeNull();
-    expect(row("devops 3")).toHaveAttribute("title", "beta");
-    expect(row("devops 4")).toHaveAttribute("title", "own branch fix-login");
-    expect(row("devops 2")).not.toHaveAttribute("title");
+    // Its first line; what the chat runs on follows it on every row (#1673).
+    expect(row("devops 3")).toHaveAttribute("title", "beta\nruns on claude");
+    expect(row("devops 4")).toHaveAttribute("title", "own branch fix-login\nruns on claude");
+    expect(row("devops 2")).toHaveAttribute("title", "runs on claude");
     // The first line is as it was.
     expect(row("devops 3").querySelector(".line.one .session")?.textContent).toBe("devops 3");
   });

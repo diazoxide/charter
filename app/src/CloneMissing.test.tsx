@@ -13,6 +13,7 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
 import { forgetRepoClones } from "./repoClones";
 import { forgetThisLaunch } from "./regions";
+import { showTheExplorer } from "./test-strips";
 
 /**
  * **A repo the workspace names and this machine has not cloned, cloned from the window**
@@ -147,7 +148,11 @@ afterEach(() => {
   forgetRepoClones();
 });
 
-const absent = async () => await screen.findByTestId("absent");
+/** The explorer's list of repos not cloned here, with the Explorer view open (#1673). */
+const absent = async () => {
+  await showTheExplorer();
+  return await screen.findByTestId("absent");
+};
 const absentRow = (repo: string) => screen.getByTestId(`absent-${repo}`);
 
 describe("a repo that is not cloned here", () => {

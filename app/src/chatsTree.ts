@@ -65,6 +65,11 @@ export type ListedChat = {
   /** Whether its harness is one purlis types a line of its own into (`typedInto`). Not said
    *  for a chat nothing was read of: only a plain `false` takes an offer away. */
   typed?: boolean;
+  /** What it runs on: its profile and the harness kind the profile declares, `work (claude)`,
+   *  or the harness alone where it has no profile (#1673). A profile is what the person picked
+   *  and what a relaunch looks up again; the kind is what the project calls the harness. The
+   *  explorer's row said it until the explorer stopped listing chats; the row's hover does. */
+  runsOn?: string | null;
   // And what its state is derived from beside the board's word (`RowFacts`): its record as a
   // task and its harness's name.
 } & RowFacts;
@@ -145,6 +150,11 @@ export function listedChat(
     waitingOnMemory: chat.waiting_on_memory ?? null,
     byYou: chat.from?.task === true && chat.from.by_person === true,
     typed: typedInto(chat.harness),
+    runsOn: chat.profile
+      ? chat.harness
+        ? `${chat.profile} (${chat.harness})`
+        : chat.profile
+      : chat.harness,
     ...rowFactsOf(chat, nameOf),
   };
 }

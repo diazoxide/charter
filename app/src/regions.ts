@@ -1,4 +1,5 @@
 import { useCallback, useState } from "react";
+import type { ViewId } from "./sideViews";
 import { commands } from "./bindings";
 import { forgetTextSizes, onTextSizes, textSizes, type TextSizes } from "./textSize";
 import {
@@ -13,7 +14,7 @@ import { forgetGroups } from "./settings/links";
 import { forgetEntering } from "./settings/entering";
 import { forgetDismissals } from "./dismissals";
 import type { YourEditor } from "./bindings";
-import { atCreation, sayAboutThisMachine, type Reading } from "./windowprefs";
+import { atCreation, onLayoutMovedAside, sayAboutThisMachine, type Reading } from "./windowprefs";
 
 /**
  * **The window's layout is data** (ADR 0038, charter-app#141 for the four regions
@@ -69,8 +70,15 @@ import { atCreation, sayAboutThisMachine, type Reading } from "./windowprefs";
 
 /** A region. Data, but a closed set in this build: nothing outside the app contributes one
  *  until ADR 0041's plugin runtime exists, and a `Record` keyed on it is what makes
- *  the catalogue exhaustive at compile time. */
-export type RegionId = "explorer" | "aside" | "bottom";
+ *  the catalogue exhaustive at compile time.
+ *
+ *  **`navigation` was `explorer` in version 1 of the file** (#1673): the left region holds
+ *  the Chats and Explorer views now, so the explorer is one of its views and no longer its
+ *  name. {@link load} reads the old id as the new one. */
+export type RegionId = "navigation" | "aside" | "bottom";
+
+// A view (`sideViews.ts`): what a region with an activity bar shows, one at a time.
+export { VIEWS, type ViewId } from "./sideViews";
 
 /** Where a region can be put. These are the slots `RegionFrame` draws, and the centre is not
  *  one of them: the terminal panes are the product, and a window with no centre is not a state
@@ -111,6 +119,9 @@ export type Definition = {
   name: string;
   /** How big its slot is when nothing has been dragged, as a percentage of the group. */
   size: number;
+  /** The views it switches between with an activity bar, in the bar's order, the first open
+   *  by default. A region without them draws its content alone. */
+  views?: readonly ViewId[];
 };
 
 /**
@@ -122,13 +133,27 @@ export type Definition = {
  * what "the window is four regions" means.
  */
 export const CATALOGUE: Record<RegionId, Definition> = {
-  explorer: { name: "Explorer", size: 16 },
+  // ADR 0038's own reading: the left is navigation, the right is attention, the bottom is state.
+  navigation: { name: "Navigation", size: 16, views: ["chats", "explorer"] },
   aside: { name: "Attention", size: 20 },
   bottom: { name: "State", size: 16 },
 };
 
 /** Every region there is, in a fixed order, so anything iterating them is deterministic. */
 export const REGION_IDS = Object.keys(CATALOGUE) as RegionId[];
+
+/** The region whose activity bar holds `view`. */
+export function regionOf(view: ViewId): RegionId {
+  const holds = REGION_IDS.find((id) => CATALOGUE[id].views?.includes(view));
+  if (holds === undefined) throw new Error(`no region holds the ${view} view`);
+  return holds;
+}
+
+/** The view a region with views shows: the one picked last, else its first. Nothing for a
+ *  region without views. */
+export function openView(placement: Placement): ViewId | undefined {
+  return placement.view ?? CATALOGUE[placement.id].views?.[0];
+}
 
 /**
  * Where one region is, and how big. **The whole of what is stored**, which is why the
@@ -146,6 +171,8 @@ export type Placement = {
   /** How big its slot was left, as a percentage of the group (0..100). Absent until something
    *  has been dragged, in which case the catalogue's default is used. */
   size?: number;
+  /** The view open in a region with views, once one was picked (#1673). Absent, its first. */
+  view?: ViewId;
 };
 
 export type Arrangement = Placement[];
@@ -153,7 +180,7 @@ export type Arrangement = Placement[];
 /** Today's four-region window (ADR 0038), as the default *value* of the arrangement
  *  rather than as a shape in `PlaneView`. */
 export const DEFAULT_ARRANGEMENT: Arrangement = [
-  { id: "explorer", side: "left", order: 0, collapsed: false },
+  { id: "navigation", side: "left", order: 0, collapsed: false },
   { id: "aside", side: "right", order: 0, collapsed: false },
   { id: "bottom", side: "bottom", order: 0, collapsed: false },
 ];
@@ -161,16 +188,29 @@ export const DEFAULT_ARRANGEMENT: Arrangement = [
 /** Where web storage held the arrangement before it was a file. Read once, to move it. */
 export const LEGACY_KEY = "charter.layout";
 
-/** The one version of the file's format this build writes. `purlis_core::windowprefs` refuses
- *  any other before the window sees it. */
-export const VERSION = 1;
+/** The version of the file's format this build writes (#1673): each project's arrangement of
+ *  its own, and the open view. `purlis_core::windowprefs` hands the window version 1 too, which
+ *  {@link load} moves forward, and refuses any other before the window sees it. */
+export const VERSION = 2;
+
+/** The most projects whose arrangements are kept, read or sent: the core's own bound
+ *  (`purlis_core::windowprefs::MOST_PROJECTS`), so the file stays inside its size. */
+export const MOST_PROJECTS = 32;
+
+/** A region id version 1 wrote, by the id it has now. */
+const RENAMED: Record<string, RegionId> = { explorer: "navigation" };
 
 /** The document, as it is written to the file. `text` is the two text sizes (`textSize.ts`,
  *  charter-app#283), kept here because they are the same kind of preference — how one operator
  *  likes their window — and this is the one writer of the file. */
 type Document = {
   version: typeof VERSION;
+  /** The machine's arrangement: what a project with none of its own starts from, and the one
+   *  arrangement version 1 had. */
   regions: Arrangement;
+  /** Each project's own (#1673), by its path: only the projects this window arranged, since
+   *  the core keeps the file's others. */
+  projects?: Record<string, { regions: Arrangement }>;
   text: TextSizes;
   /** Your editor (`yourEditor.ts`, RC-20), when one is chosen. */
   editor?: YourEditor;
@@ -179,7 +219,13 @@ type Document = {
 };
 
 /** A document read field by field, and what had to be put right to read it. */
-export type Loaded = { regions: Arrangement; said: string[] };
+export type Loaded = {
+  regions: Arrangement;
+  /** Each project's own arrangement the file holds, by path. A `Map`, so no path can be a key
+   *  that reaches a prototype. */
+  projects: ReadonlyMap<string, Arrangement>;
+  said: string[];
+};
 
 /**
  * The arrangement, and the two things that change it while the window is up.
@@ -189,7 +235,7 @@ export type Loaded = { regions: Arrangement; said: string[] };
  * shaped around, it is safe against charter-app#141's throw because the slots are fixed, and it
  * is tested. A feature that has to rewrite this module to arrive was not made cheap by it.
  */
-export function useArrangement(): {
+export function useArrangement(project?: string): {
   arrangement: Arrangement;
   /** Put a region away, or bring it back. */
   toggle: (id: RegionId) => void;
@@ -197,16 +243,26 @@ export function useArrangement(): {
   move: (id: RegionId, side: Side, order: number) => void;
   /** Remember how big each slot was left. Called with the group's settled layout. */
   resized: (sizes: Partial<Record<Side, number>>) => void;
+  /** A press of a view's icon on its activity bar: {@link picked}. */
+  pick: (view: ViewId) => void;
+  /** A view asked for by a key or the palette: {@link showing}. */
+  show: (view: ViewId) => void;
 } {
-  const [arrangement, setArrangement] = useState<Arrangement>(remembered);
+  const [arrangement, setArrangement] = useState<Arrangement>(() => remembered(project));
 
-  const change = useCallback((how: (was: Arrangement) => Arrangement) => {
-    setArrangement((was) => {
-      const next = how(was);
-      remember(next);
-      return next;
-    });
-  }, []);
+  const change = useCallback(
+    (how: (was: Arrangement) => Arrangement) => {
+      setArrangement((was) => {
+        const next = how(was);
+        remember(next, project);
+        return next;
+      });
+    },
+    [project],
+  );
+
+  const pick = useCallback((view: ViewId) => change((was) => picked(was, view)), [change]);
+  const show = useCallback((view: ViewId) => change((was) => showing(was, view)), [change]);
 
   const toggle = useCallback(
     (id: RegionId) =>
@@ -237,7 +293,28 @@ export function useArrangement(): {
     [change],
   );
 
-  return { arrangement, toggle, move, resized };
+  return { arrangement, toggle, move, resized, pick, show };
+}
+
+/**
+ * **A press of a view's icon, as VS Code's activity bar answers it** (B-1, #1673): the open view
+ * of a side that is out puts the side away; any other view opens, and a side that was away comes
+ * back on it. The view stays mounted either way (`RegionFrame`).
+ */
+export function picked(arrangement: Arrangement, view: ViewId): Arrangement {
+  const region = regionOf(view);
+  const was = arrangement.find((one) => one.id === region);
+  if (was !== undefined && !was.collapsed && openView(was) === view) {
+    return arrangement.map((one) => (one.id === region ? { ...one, collapsed: true } : one));
+  }
+  return showing(arrangement, view);
+}
+
+/** `view` open and its side out, whatever was there: what a key or a palette row asks for,
+ *  which never puts a side away. */
+export function showing(arrangement: Arrangement, view: ViewId): Arrangement {
+  const region = regionOf(view);
+  return arrangement.map((one) => (one.id === region ? { ...one, view, collapsed: false } : one));
 }
 
 /**
@@ -254,8 +331,7 @@ export function startingLayout(
   layout: Reading = atCreation().layout,
 ): Loaded & { trouble?: string; legacy?: boolean } {
   if (layout.found) {
-    if (layout.trouble !== null)
-      return { regions: DEFAULT_ARRANGEMENT, said: [], trouble: layout.trouble };
+    if (layout.trouble !== null) return { ...nothingHeld(), trouble: layout.trouble };
     return load(layout.document);
   }
   let held: string | null = null;
@@ -264,30 +340,55 @@ export function startingLayout(
   } catch {
     // A webview that refuses storage has nothing to move.
   }
-  if (held === null) return { regions: DEFAULT_ARRANGEMENT, said: [] };
+  if (held === null) return nothingHeld();
   try {
     return { ...load(JSON.parse(held)), legacy: true };
   } catch {
     // Not JSON: there is nothing in it worth moving, and the next change writes the file.
-    return { regions: DEFAULT_ARRANGEMENT, said: [] };
+    return nothingHeld();
   }
 }
 
+const nothingHeld = (): Loaded => ({ regions: DEFAULT_ARRANGEMENT, projects: new Map(), said: [] });
+
 /**
- * The arrangement as the window last left it: what it changed this launch, or what the launch
- * started from. A project opened after the operator moved something gets what they moved.
+ * The arrangement as the window last left it, for `project`: what this launch changed in it,
+ * else what the file kept for it, else the machine's — the last one changed in any project this
+ * launch, or the file's. So a project opened after the person moved something elsewhere gets
+ * what they moved, and a project they arranged gets its own back (#1673).
  */
-export function remembered(): Arrangement {
-  return changed ?? startingLayout().regions;
+export function remembered(project?: string): Arrangement {
+  if (project !== undefined) {
+    const own = changedIn.get(project);
+    if (own !== undefined) return own;
+  }
+  const started = movedAside ? nothingHeld() : startingLayout();
+  return (
+    (project !== undefined ? started.projects.get(project) : undefined) ??
+    changed ??
+    started.regions
+  );
 }
 
-/** What the window has changed the arrangement to this launch, if anything. */
+/** What the window has changed the machine's arrangement to this launch, if anything. */
 let changed: Arrangement | undefined;
+/** What it changed each project's to, by path, oldest first. */
+const changedIn = new Map<string, Arrangement>();
+/** Whether the file was moved aside this launch (Use the default layout, #1289): what it held
+ *  is no project's starting point any more. */
+let movedAside = false;
+onLayoutMovedAside(() => {
+  movedAside = true;
+  changed = undefined;
+  changedIn.clear();
+});
 
 /** Forgets what this launch changed, as a new launch would. For tests, which are many launches
  *  in one module. */
 export function forgetThisLaunch(): void {
   changed = undefined;
+  changedIn.clear();
+  movedAside = false;
   writing = Promise.resolve();
   forgetTextSizes();
   forgetYourEditor();
@@ -357,6 +458,13 @@ const asDocument = (regions: Arrangement): Document => {
   return {
     version: VERSION,
     regions,
+    ...(changedIn.size > 0
+      ? {
+          projects: Object.fromEntries(
+            [...changedIn].map(([project, own]) => [project, { regions: own }]),
+          ),
+        }
+      : {}),
     text: textSizes(),
     ...(editor !== undefined ? { editor } : {}),
     ...(isDefaultChatsList(chats) ? {} : { chats }),
@@ -396,65 +504,111 @@ let writing: Promise<void> = Promise.resolve();
  * default, and a field that is not what it should be is the default's.
  */
 export function load(raw: unknown): Loaded {
+  const said: string[] = [];
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    said.push("it is not a layout, so every region is where it starts");
+    return { regions: DEFAULT_ARRANGEMENT, projects: new Map(), said };
+  }
+  const regions = placements((raw as { regions?: unknown }).regions, said);
+  const projects = new Map<string, Arrangement>();
+  const theirs = (raw as { projects?: unknown }).projects;
+  if (
+    theirs !== undefined &&
+    theirs !== null &&
+    typeof theirs === "object" &&
+    !Array.isArray(theirs)
+  ) {
+    for (const [project, own] of Object.entries(theirs).slice(0, MOST_PROJECTS)) {
+      const list =
+        own !== null && typeof own === "object"
+          ? (own as { regions?: unknown }).regions
+          : undefined;
+      if (!Array.isArray(list)) {
+        said.push(
+          `${JSON.stringify(project)} has no "regions" list, so it starts from the machine's`,
+        );
+        continue;
+      }
+      const ownSaid: string[] = [];
+      projects.set(project, placements(list, ownSaid));
+      said.push(...ownSaid.map((one) => `in ${JSON.stringify(project)}, ${one}`));
+    }
+  } else if (theirs !== undefined) {
+    said.push(
+      '"projects" is not a list of projects by path, so every project starts from the machine\'s',
+    );
+  }
+  return { regions, projects, said };
+}
+
+/** One list of placements, read field by field. */
+function placements(regions: unknown, said: string[]): Arrangement {
   // A `Map`, and the result is built by walking the DEFAULT arrangement and asking it — never
   // by walking the document. That is what makes an id this build does not have cost nothing:
   // it is simply never asked for, so there is no unknown region to draw and no unknown key to
   // reach a prototype through.
-  const said: string[] = [];
   const held = new Map<string, Record<string, unknown>>();
-  if (raw !== null && typeof raw === "object" && !Array.isArray(raw)) {
-    const regions = (raw as { regions?: unknown }).regions;
-    if (Array.isArray(regions)) {
-      for (const one of regions) {
-        if (one === null || typeof one !== "object" || Array.isArray(one)) {
-          said.push(`${JSON.stringify(one)} is not a region's placement, so it was skipped`);
-          continue;
-        }
-        const placement = one as Record<string, unknown>;
-        if (typeof placement.id !== "string") {
-          said.push("a placement with no id was skipped");
-        } else if (!(REGION_IDS as string[]).includes(placement.id)) {
-          said.push(
-            `${JSON.stringify(placement.id)} is not a region this purlis has (${REGION_IDS.join(", ")}), so it was left out`,
-          );
-        } else {
-          held.set(placement.id, placement);
-        }
+  if (Array.isArray(regions)) {
+    for (const one of regions) {
+      if (one === null || typeof one !== "object" || Array.isArray(one)) {
+        said.push(`${JSON.stringify(one)} is not a region's placement, so it was skipped`);
+        continue;
       }
-    } else {
-      said.push('there is no "regions" list, so every region is where it starts');
+      const placement = one as Record<string, unknown>;
+      // Version 1's id, read as the one it has now; a file naming both keeps the new one.
+      const id =
+        typeof placement.id === "string" &&
+        Object.prototype.hasOwnProperty.call(RENAMED, placement.id)
+          ? RENAMED[placement.id]
+          : placement.id;
+      if (typeof id !== "string") {
+        said.push("a placement with no id was skipped");
+      } else if (!(REGION_IDS as string[]).includes(id)) {
+        said.push(
+          `${JSON.stringify(id)} is not a region this purlis has (${REGION_IDS.join(", ")}), so it was left out`,
+        );
+      } else if (!(held.has(id) && id !== placement.id)) {
+        held.set(id, placement);
+      }
     }
   } else {
-    said.push("it is not a layout, so every region is where it starts");
+    said.push('there is no "regions" list, so every region is where it starts');
   }
 
-  return {
-    said,
-    regions: DEFAULT_ARRANGEMENT.map((fallback) => {
-      const one = held.get(fallback.id);
-      if (one === undefined) return fallback;
-      if (one.side !== undefined && !isSide(one.side)) {
-        said.push(
-          `${fallback.id}'s side ${JSON.stringify(one.side)} is not left, right or bottom, so it is on the ${fallback.side}`,
-        );
-      }
-      if (one.order !== undefined && !Number.isFinite(one.order)) {
-        said.push(`${fallback.id}'s order ${JSON.stringify(one.order)} is not a number`);
-      }
-      if (one.size !== undefined && !usable(one.size)) {
-        said.push(`${fallback.id}'s size ${JSON.stringify(one.size)} is not a percentage above 0`);
-      }
-      return {
-        id: fallback.id,
-        side: isSide(one.side) ? one.side : fallback.side,
-        order: Number.isFinite(one.order) ? (one.order as number) : fallback.order,
-        // Only `true` puts a region away. Anything else — missing, a string, a number — is a
-        // region charter cannot read the answer for, and it is SHOWN.
-        collapsed: one.collapsed === true,
-        ...(usable(one.size) ? { size: one.size } : {}),
-      };
-    }),
-  };
+  return DEFAULT_ARRANGEMENT.map((fallback) => {
+    const one = held.get(fallback.id);
+    if (one === undefined) return fallback;
+    if (one.side !== undefined && !isSide(one.side)) {
+      said.push(
+        `${fallback.id}'s side ${JSON.stringify(one.side)} is not left, right or bottom, so it is on the ${fallback.side}`,
+      );
+    }
+    if (one.order !== undefined && !Number.isFinite(one.order)) {
+      said.push(`${fallback.id}'s order ${JSON.stringify(one.order)} is not a number`);
+    }
+    if (one.size !== undefined && !usable(one.size)) {
+      said.push(`${fallback.id}'s size ${JSON.stringify(one.size)} is not a percentage above 0`);
+    }
+    const views = CATALOGUE[fallback.id].views;
+    const view = views?.find((known) => known === one.view);
+    if (one.view !== undefined && view === undefined) {
+      said.push(
+        views === undefined
+          ? `${fallback.id} has no views, so its view ${JSON.stringify(one.view)} was left out`
+          : `${JSON.stringify(one.view)} is not a view of ${fallback.id} (${views.join(", ")}), so it opens on ${views[0]}`,
+      );
+    }
+    return {
+      id: fallback.id,
+      side: isSide(one.side) ? one.side : fallback.side,
+      order: Number.isFinite(one.order) ? (one.order as number) : fallback.order,
+      // Only `true` puts a region away. Anything else — missing, a string, a number — is a
+      // region charter cannot read the answer for, and it is SHOWN.
+      collapsed: one.collapsed === true,
+      ...(usable(one.size) ? { size: one.size } : {}),
+      ...(view !== undefined ? { view } : {}),
+    };
+  });
 }
 
 /**
@@ -465,8 +619,14 @@ export function load(raw: unknown): Loaded {
  * takes back whatever the drawer was saying about the file, because the file is now one this
  * window wrote.
  */
-function remember(arrangement: Arrangement): void {
+function remember(arrangement: Arrangement, project?: string): void {
   changed = arrangement;
+  if (project !== undefined) {
+    // Last changed last, so the bound lets go of the project arranged longest ago.
+    changedIn.delete(project);
+    changedIn.set(project, arrangement);
+    if (changedIn.size > MOST_PROJECTS) changedIn.delete(changedIn.keys().next().value as string);
+  }
   const text = JSON.stringify(asDocument(arrangement));
   writing = writing.then(async () => {
     const kept = await commands
