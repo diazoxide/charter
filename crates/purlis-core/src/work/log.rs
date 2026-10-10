@@ -442,6 +442,58 @@ pub fn append_alias_over(
     write(root, ws, device, ts, &Op::Alias { from, to, cause })
 }
 
+/// What [`follow_rename`] did.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Followed {
+    /// How many `renamed` aliases it wrote.
+    pub written: usize,
+    /// The old keys it wrote no alias for, because the alias would close a cycle: a workspace
+    /// renamed back to a name it had, whose old keys already alias to this one.
+    pub refused: Vec<TrackerKey>,
+}
+
+/// Follow workspace `old`'s rename to `new` in the work link log (ADR 0088 §2): one `renamed`
+/// alias `todo:<old>/<stem> → todo:<new>/<stem>` for each todo key of `old` that a line of any
+/// workspace's log names, appended to this device's log of `new`, which is where the workspace
+/// is by then. All of them are decided against one fold.
+///
+/// **It can run twice.** A key that already has an alias, from an earlier run or from a promote,
+/// is left as it is, so a rename finished after a crash writes each alias once, and a promoted
+/// todo keeps resolving to its issue. `device` is asked only when there is a line to write, so a
+/// rename with no todo link names no device.
+pub fn follow_rename(
+    root: &Path,
+    old: &str,
+    new: &str,
+    device: &dyn Fn() -> io::Result<String>,
+    ts: DateTime<Utc>,
+) -> io::Result<Followed> {
+    let folded = fold(root);
+    let mut followed = Followed::default();
+    let mut this_device = None;
+    for from in folded.todos_named_of(old) {
+        if folded.is_aliased(&from) {
+            continue;
+        }
+        let Some((_, stem)) = from.todo_parts() else {
+            continue;
+        };
+        let to = TrackerKey::todo(new, stem)
+            .map_err(|why| io::Error::new(io::ErrorKind::InvalidInput, why))?;
+        if folded.passes(&to, &from) {
+            followed.refused.push(from);
+            continue;
+        }
+        let device = match &this_device {
+            Some(device) => device,
+            None => this_device.insert(device()?),
+        };
+        append_alias_over(&folded, root, new, device, ts, from, to, Cause::Renamed)?;
+        followed.written += 1;
+    }
+    Ok(followed)
+}
+
 /// Everything [`append`] would check before it writes a line to device `device`'s log in
 /// workspace `ws`, asked before anything else is done: the device id, the workspace's name and
 /// containment of the file. A caller about to do something it cannot undo, such as opening an
@@ -510,6 +562,9 @@ pub struct Fold {
     /// Each workspace's own links, resolved.
     held: BTreeMap<String, BTreeSet<TrackerKey>>,
     aliases: BTreeMap<TrackerKey, TrackerKey>,
+    /// Every key a line names as it is written, before any alias: a link's or unlink's item, and
+    /// both sides of an alias.
+    named: BTreeSet<TrackerKey>,
     /// The `ts` of the last chat link or unlink line naming each chat, whatever it did.
     last_for: BTreeMap<String, DateTime<Utc>>,
     /// Lines skipped, by `<workspace>/<file>`.
@@ -603,6 +658,15 @@ impl Fold {
         out.into_iter().collect()
     }
 
+    /// Every `todo:` key of workspace `ws` that a line names, as it is written.
+    fn todos_named_of(&self, ws: &str) -> Vec<TrackerKey> {
+        self.named
+            .iter()
+            .filter(|key| key.todo_parts().is_some_and(|(of, _)| of == ws))
+            .cloned()
+            .collect()
+    }
+
     /// Every key an alias cycle holds, which a merge of two devices' logs can make and
     /// `doctor` reports.
     pub fn cycles(&self) -> Vec<TrackerKey> {
@@ -675,8 +739,14 @@ pub fn fold(root: &Path) -> Fold {
     }
     lines.sort_by(|a, b| (&a.0, &a.1, a.2, &a.3).cmp(&(&b.0, &b.1, b.2, &b.3)));
     for (_, _, _, _, op) in &lines {
-        if let Op::Alias { from, to, .. } = op {
-            out.aliases.insert(from.clone(), to.clone());
+        match op {
+            Op::Alias { from, to, .. } => {
+                out.aliases.insert(from.clone(), to.clone());
+                out.named.extend([from.clone(), to.clone()]);
+            }
+            Op::Link { item, .. } | Op::Unlink { item, .. } => {
+                out.named.insert(item.clone());
+            }
         }
     }
     for (ts, _, _, ws, op) in lines {

@@ -822,3 +822,132 @@ fn an_alias_to_a_todo_that_does_not_exist_is_refused_naming_both() {
     );
     assert_eq!(fold(root).chat_link(CHAT), None);
 }
+
+/// Workspace `from` of the project at `root` is renamed `to` on disk, as `workspace rename`'s
+/// commit point does, before the log follows it.
+fn move_workspace(root: &Path, from: &str, to: &str) {
+    std::fs::rename(
+        root.join("workspaces").join(from),
+        root.join("workspaces").join(to),
+    )
+    .unwrap();
+}
+
+fn renamed_todo() -> TrackerKey {
+    key("todo:gamma/20261002-080000-port-the-picker")
+}
+
+fn device() -> io::Result<String> {
+    Ok(DEVICE.to_string())
+}
+
+#[test]
+fn a_renamed_workspace_aliases_each_todo_key_a_log_names_so_every_link_still_reaches_it() {
+    let p = project();
+    let root = p.path();
+    link_chat(root, Place::Workspace("alpha"), DEVICE, at(1), todo(), CHAT).unwrap();
+    append(root, "alpha", DEVICE, at(2), &Op::link(todo())).unwrap();
+    // A chat in another workspace, linked to the same todo.
+    link_chat(
+        root,
+        Place::Workspace("beta"),
+        OTHER_DEVICE,
+        at(3),
+        todo(),
+        OTHER_CHAT,
+    )
+    .unwrap();
+
+    move_workspace(root, "alpha", "gamma");
+    let followed = follow_rename(root, "alpha", "gamma", &device, at(4)).unwrap();
+
+    assert_eq!(followed.written, 1);
+    assert!(followed.refused.is_empty());
+    let folded = fold(root);
+    assert_eq!(folded.chat_link(CHAT), Some(renamed_todo()));
+    assert_eq!(folded.chat_link(OTHER_CHAT), Some(renamed_todo()));
+    assert_eq!(folded.items_of("gamma"), [renamed_todo()]);
+    let alias = lines_of(root, "gamma", DEVICE).pop().unwrap();
+    assert_eq!(alias["op"], "alias");
+    assert_eq!(alias["from"], todo().as_str());
+    assert_eq!(alias["to"], renamed_todo().as_str());
+    assert_eq!(alias["cause"], "renamed");
+    // The todo the link names is open under its new key, so the chat can be linked to it again.
+    link_chat(
+        root,
+        Place::Workspace("gamma"),
+        DEVICE,
+        at(5),
+        renamed_todo(),
+        CHAT,
+    )
+    .unwrap();
+}
+
+#[test]
+fn following_a_rename_twice_writes_each_alias_once() {
+    let p = project();
+    let root = p.path();
+    link_chat(root, Place::Workspace("alpha"), DEVICE, at(1), todo(), CHAT).unwrap();
+    move_workspace(root, "alpha", "gamma");
+    follow_rename(root, "alpha", "gamma", &device, at(2)).unwrap();
+    let again = follow_rename(root, "alpha", "gamma", &device, at(3)).unwrap();
+    assert_eq!(again.written, 0);
+    let aliases = lines_of(root, "gamma", DEVICE)
+        .into_iter()
+        .filter(|line| line["op"] == "alias")
+        .count();
+    assert_eq!(aliases, 1);
+}
+
+#[test]
+fn a_rename_with_no_todo_key_in_any_log_writes_nothing_and_asks_for_no_device() {
+    let p = project();
+    let root = p.path();
+    append(root, "alpha", DEVICE, at(1), &Op::link(issue())).unwrap();
+    move_workspace(root, "alpha", "gamma");
+    let no_device =
+        || -> io::Result<String> { panic!("no line is written, so no device is asked") };
+    let followed = follow_rename(root, "alpha", "gamma", &no_device, at(2)).unwrap();
+    assert_eq!(followed.written, 0);
+    assert_eq!(
+        lines_of(root, "gamma", DEVICE).len(),
+        1,
+        "the link line it had, and no alias"
+    );
+}
+
+#[test]
+fn a_promoted_todo_keeps_the_alias_to_its_issue_through_a_rename() {
+    let p = project();
+    let root = p.path();
+    link_chat(root, Place::Workspace("alpha"), DEVICE, at(1), todo(), CHAT).unwrap();
+    append_alias(
+        root,
+        "alpha",
+        DEVICE,
+        at(2),
+        todo(),
+        issue(),
+        Cause::Promoted,
+    )
+    .unwrap();
+    move_workspace(root, "alpha", "gamma");
+    let followed = follow_rename(root, "alpha", "gamma", &device, at(3)).unwrap();
+    assert_eq!(followed.written, 0);
+    assert_eq!(fold(root).chat_link(CHAT), Some(issue()));
+}
+
+#[test]
+fn renaming_back_to_the_old_name_is_said_and_writes_no_cycle() {
+    let p = project();
+    let root = p.path();
+    link_chat(root, Place::Workspace("alpha"), DEVICE, at(1), todo(), CHAT).unwrap();
+    move_workspace(root, "alpha", "gamma");
+    follow_rename(root, "alpha", "gamma", &device, at(2)).unwrap();
+    move_workspace(root, "gamma", "alpha");
+    let back = follow_rename(root, "gamma", "alpha", &device, at(3)).unwrap();
+    assert_eq!(back.written, 0);
+    assert_eq!(back.refused, [renamed_todo()]);
+    assert!(fold(root).cycles().is_empty());
+}
