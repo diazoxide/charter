@@ -1806,7 +1806,7 @@ export function catalogue(now: Now): Offer[] {
   // that worked on a branch purlis cut for it. Each opens the task's Changes tab's own
   // question, which reads what the core says now; nothing is merged or discarded until it is
   // answered, and a merge the core would refuse is said instead. In the row's menu only
-  // (D-1534-8): the Changes tab and the Dispatches row are where the palette's keyboard has them.
+  // (D-1534-5): the Changes tab and the Dispatches row are where the palette's keyboard has them.
   for (const tasks of now.finished?.values() ?? [])
     for (const task of tasks) {
       if (task.branch === null || task.waits !== null) continue;
