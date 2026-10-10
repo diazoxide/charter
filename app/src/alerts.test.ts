@@ -3,6 +3,7 @@ import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import type { AlertRow, PlaneAlerts } from "./bindings";
 import { REREAD_EVERY_MS, countOf, useAlerts } from "./alerts";
+import { forgetShown, windowShown } from "./test-shown";
 
 /**
  * **What the status line may count**, and how the reading is kept fresh.
@@ -125,6 +126,28 @@ describe("the reading", () => {
       vi.advanceTimersByTime(REREAD_EVERY_MS);
     });
     await waitFor(() => expect(asked).toBe(3));
+  });
+
+  it("reads nothing on its beat while the window is hidden, and once when it is shown (#1392)", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    let asked = 0;
+    mockIPC((cmd) => {
+      if (cmd === "alerts_everywhere") asked += 1;
+      return [];
+    });
+    try {
+      renderHook(() => useAlerts([A]));
+      await waitFor(() => expect(asked).toBe(1));
+
+      act(() => windowShown(false));
+      await act(async () => void vi.advanceTimersByTime(REREAD_EVERY_MS * 10));
+      expect(asked).toBe(1);
+
+      await act(async () => windowShown(true));
+      await waitFor(() => expect(asked).toBe(2));
+    } finally {
+      forgetShown();
+    }
   });
 
   it("says the core's words when the ask fails, and never makes up an empty reading", async () => {

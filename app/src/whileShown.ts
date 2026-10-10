@@ -5,8 +5,9 @@ import { useEffect, useRef } from "react";
  * SC-18's window half).
  *
  * Some of what the window draws is read again on a beat, because nothing tells the window it
- * changed: the save standing (`saving.ts`), a running chat's gauge (`ChatGauge.tsx`), a running
- * dispatch (`DispatchesTab.tsx`), the minutes a row has spent in its state (`stateClock.ts`).
+ * changed: the save standing (`saving.ts`), the alerts reading (`alerts.ts`), a running chat's
+ * gauge (`ChatGauge.tsx`), a running dispatch (`DispatchesTab.tsx`), the minutes a row has spent
+ * in its state (`stateClock.ts`).
  * Each read is cheap, but each is a wake-up, and a window nobody can see has no reason to wake.
  *
  * So every beat runs here:
