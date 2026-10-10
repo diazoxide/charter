@@ -404,6 +404,7 @@ fn a_rename_killed_at_any_step_leaves_one_name_working_and_the_same_command_fini
         Step::Live,
         Step::Pointers,
         Step::State,
+        Step::Links,
         Step::Reopen,
         Step::Pins,
     ] {
@@ -959,4 +960,104 @@ fn kept_reports_are_moved_only_for_a_rename_whose_workspace_really_moved() {
             "left where it was"
         );
     }
+}
+
+/// A plane with no git in it, workspace `alpha` holding one open todo, and a chat in it linked
+/// to that todo: the todo's key, and the chat's id.
+fn a_plane_with_a_chat_on_a_todo() -> (Plane, crate::work::TrackerKey, &'static str) {
+    const CHAT: &str = "01K6H10000AAAAAAAAAAAAAAAA";
+    let dir = tempfile::tempdir().unwrap();
+    let root = std::fs::canonicalize(dir.path()).unwrap().join("plane");
+    let config = root.parent().unwrap().join("config");
+    std::fs::create_dir_all(root.join("workspaces/alpha")).unwrap();
+    std::fs::create_dir_all(&config).unwrap();
+    let written = crate::workspaces::Plane::open(&root)
+        .workspace("alpha")
+        .unwrap()
+        .add_todo("finish it", chrono::NaiveDateTime::default())
+        .unwrap();
+    let stem = written.file_stem().unwrap().to_str().unwrap();
+    let todo = crate::work::TrackerKey::todo("alpha", stem).unwrap();
+    let device = crate::machine::device_id(&config).unwrap();
+    crate::work::log::link_chat(
+        &root,
+        crate::work::log::Place::Workspace("alpha"),
+        &device,
+        chrono::Utc::now(),
+        todo.clone(),
+        CHAT,
+    )
+    .unwrap();
+    (
+        Plane {
+            _dir: dir,
+            root,
+            config,
+        },
+        todo,
+        CHAT,
+    )
+}
+
+/// The `renamed` alias lines in every log of workspace `ws`.
+fn renamed_aliases(root: &Path, ws: &str) -> Vec<serde_json::Value> {
+    let dir = crate::work::log::dir_for(root, ws);
+    let mut out = Vec::new();
+    for file in std::fs::read_dir(dir).unwrap().flatten() {
+        for line in read(&file.path()).lines() {
+            let line: serde_json::Value = serde_json::from_str(line).unwrap();
+            if line["cause"] == "renamed" {
+                out.push(line);
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn a_chat_linked_to_a_todo_still_reaches_it_after_the_workspace_is_renamed() {
+    let (plane, todo, chat) = a_plane_with_a_chat_on_a_todo();
+    let (code, said) = run(&plane, "alpha", "beta");
+    assert_eq!(code, 0, "{said:?}");
+
+    let (_, stem) = todo.todo_parts().unwrap();
+    let renamed = crate::work::TrackerKey::todo("beta", stem).unwrap();
+    let folded = crate::work::log::fold(&plane.root);
+    assert_eq!(folded.chat_link(chat), Some(renamed.clone()));
+    assert_eq!(folded.chats_on(&todo), [chat]);
+    let aliases = renamed_aliases(&plane.root, "beta");
+    assert_eq!(aliases.len(), 1, "{aliases:?}");
+    assert_eq!(aliases[0]["from"], todo.as_str());
+    assert_eq!(aliases[0]["to"], renamed.as_str());
+}
+
+#[test]
+fn a_rename_interrupted_around_its_links_and_finished_writes_each_alias_once() {
+    for step in [Step::Move, Step::State, Step::Links, Step::Pins] {
+        let (plane, _, _) = a_plane_with_a_chat_on_a_todo();
+        CRASH_AFTER.with(|at| at.set(Some(step)));
+        let (code, _) = run(&plane, "alpha", "beta");
+        CRASH_AFTER.with(|at| at.set(None));
+        assert_eq!(code, 1, "{step:?}");
+
+        let (code, said) = run(&plane, "alpha", "beta");
+        assert_eq!(code, 0, "{step:?}: {said:?}");
+        assert_eq!(renamed_aliases(&plane.root, "beta").len(), 1, "{step:?}");
+    }
+}
+
+#[test]
+fn a_workspace_renamed_back_says_its_todo_links_stay_under_the_name_it_left() {
+    let (plane, todo, chat) = a_plane_with_a_chat_on_a_todo();
+    assert_eq!(run(&plane, "alpha", "beta").0, 0);
+    let (code, said) = run(&plane, "beta", "alpha");
+    assert_eq!(code, 0, "{said:?}");
+    assert!(
+        said.iter()
+            .any(|line| line.contains("1 todo(s) of 'alpha'") && line.contains("under 'beta'")),
+        "{said:?}"
+    );
+    let folded = crate::work::log::fold(&plane.root);
+    assert!(folded.cycles().is_empty());
+    assert_eq!(folded.chats_on(&todo), [chat]);
 }
