@@ -2580,9 +2580,16 @@ button.show-more:focus-visible {
   min-height: 0;
 }
 
+/* **A view is bounded by its region and scrolls inside itself.** Nothing in it may make the
+   window taller or wider: a box that hangs out of a view, or a visually hidden word placed
+   absolutely with no positioned box between it and the page, adds to the page's own scroll
+   height, and a click on the status line then scrolls the whole window up (train 36). The view
+   is the containing block of what is placed in it, and clips what would hang out. */
 .region-view {
+  position: relative;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
 /* `hidden` is the browser's `display: none`, and the `display: flex` above outranks it, so a
@@ -3426,6 +3433,9 @@ h2.sidebar-title .node-icon {
   flex: 1 1 0;
   min-height: 0;
   overflow: auto;
+  /* The containing block of the rows' visually hidden words (below), so they scroll with
+     their rows and are clipped with them rather than hanging below the window. */
+  position: relative;
   padding: 0 0.5rem 0.5rem;
   font-size: 0.85rem;
 }
