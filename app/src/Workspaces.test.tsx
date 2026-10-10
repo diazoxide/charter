@@ -634,7 +634,7 @@ describe("the plane root's tab (SI-1)", () => {
     const tab = await waitFor(rootTab);
     expect(tab.querySelector(".workspace-name")).toBeNull();
     expect(tab.querySelector("svg")).not.toBeNull();
-    expect(tab.getAttribute("title")).toBe("Plane — chats here start at the plane root");
+    expect(tab.getAttribute("title")).toBe("Project — chats here start at the project root");
   });
 
   it("cannot be dragged: it carries none of a sortable tab's instructions", async () => {

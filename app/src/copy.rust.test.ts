@@ -315,14 +315,6 @@ const DISPATCH_PLACE =
   "the CLI's copy, or given a sentence of its own in in_window";
 
 /**
- * The app's own error text, read since a command's error is followed into the functions of its
- * file it calls (#1156): the window's words only, so reworded by the file's next owner.
- */
-const APP_ERROR =
-  "a command's error built in a function the command calls (#1156); the window's words alone, " +
-  "reworded when the file's owner next touches it";
-
-/**
  * **Retired terms in the window's Rust copy, kept for now** (FR-3, #602), as `path: "text"`,
  * each with why: the Rust half of `copy.test.ts`'s `RETIRED_TERM_DEBT`, exactly, so paying one
  * off or adding one is a visible change. Empty is the goal. What is left is the core's sentences
@@ -355,13 +347,6 @@ const RETIRED_TERM_DEBT: Readonly<Record<string, string>> = {
     DISPATCH_PLACE,
   'crates/purlis-core/src/dispatchplace.rs: "purlis could not cut a worktree for this task: \u2026."':
     DISPATCH_PLACE,
-  'app/src-tauri/src/handoff.rs: "\u2026 Its worktree\'s folder was taken back, and git kept the branch \u2026 in \u2026."':
-    APP_ERROR,
-  'app/src-tauri/src/handoff.rs: "\u2026 The worktree cut for it, on the branch \u2026 in \u2026, could not be taken back: \u2026"':
-    APP_ERROR,
-  'app/src-tauri/src/opener.rs: "\u2026 is inside the project \u2026. A project is a plane of its own, and a plane inside another one is a workspace\'s clone \u2014 purlis wrote nothing. Pick a directory outside it."':
-    APP_ERROR,
-  "app/src-tauri/src/personas.rs: \"no persona '\u2026' on this plane\"": APP_ERROR,
 };
 
 /**
