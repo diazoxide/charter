@@ -31,7 +31,8 @@ words purlis uses.
 A good pull request:
 
 - **comes with a test** that fails without the change and passes with it, named for the
-  behaviour it checks;
+  behaviour it checks. When the pull request meets an issue's acceptance lines, it names the
+  test behind each one;
 - **passes what CI runs**: formatting, clippy with `-D warnings`, and the Rust and app tests;
 - **is looked at, when it changes the window.** A change to what the window draws is done only
   once someone has looked at a screenshot of the real window, in the light and the dark theme,
@@ -69,6 +70,19 @@ ticket:
 - **A train is one pull request, `train/<date>-<n>`** (for example `train/2026-10-03-1`), that
   stacks the tickets' commits on `main`. CI runs on it once, and it is merged **by rebase**, so
   each ticket stays one commit on `main` and its `Closes #<n>` closes its issue.
+
+## Releases
+
+The maintainer cuts every release and is the only one who pushes a `v*` tag. Before a version
+is promoted from the dev channel to stable, the maintainer opens a
+[release checklist](https://github.com/purlis/purlis/issues/new?template=release.yml), one
+issue per release, and checks every box: the technical gate (CI, the nightly, signing,
+provenance and the SBOM), at least 3 days of the maintainer running it as their daily app on
+the dev channel, the user signal, the test behind each acceptance line the release meets, the
+outcome bars of the features it ships, the folded changelog and its news entry. Each box names
+where its evidence is read. The form is
+[`.github/ISSUE_TEMPLATE/release.yml`](.github/ISSUE_TEMPLATE/release.yml), and
+`node tools/release-form.mjs` fails when it loses a gate.
 
 ## Sign your commits off (DCO)
 
