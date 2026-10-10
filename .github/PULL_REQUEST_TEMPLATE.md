@@ -13,4 +13,5 @@
 
 - [ ] Every commit is signed off (`Signed-off-by`, `git commit -s`), per the DCO in CONTRIBUTING.md (not needed when a maintainer opens the pull request).
 - [ ] What CI runs passes locally (README.md, "Develop").
+- [ ] A change to the window: a screenshot of the real window was looked at before calling it done (light and dark, narrow and wide where it matters), and is attached or described here. The app's tests draw no pixels.
 - [ ] A changelog fragment, `changes/<slug>.md` (see `changes/README.md`), if people using purlis would notice. CHANGELOG.md itself is not edited.
