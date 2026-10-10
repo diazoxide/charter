@@ -5,8 +5,8 @@ import { standingIn } from "./standing";
 
 /**
  * **Where a standing refusal is fixed** (NO-7, #1232), by the key the core hands with it
- * (#1292): the window never reads the sentence for it. Which key each reader's sentence is about
- * is the core's to test (`settings::key_said`, `extension::project::keyed_in`).
+ * (#1292): the window never reads the sentence for it. Which key each reader gives is the core's
+ * to test (`settings::tests`, each reader's `keyed`).
  */
 
 const said = (why: string, key: string[] | null): SettingsRefusal => ({ why, key });
@@ -56,6 +56,37 @@ const GROUPS: SettingsGroup[] = [
 ];
 
 describe("where a refusal is fixed", () => {
+  it("is a refused profile's own page, at the field it is about (#1292)", () => {
+    const page: SettingsGroup = {
+      id: "project.profile.bad",
+      label: "bad",
+      help: "",
+      settings: [
+        at("project.profile.bad.kind", "bad: kind", ["harness", "bad", "kind"], { file: "local" }),
+        at("project.profile.bad.command", "bad: command", ["harness", "bad", "command"], {
+          file: "local",
+        }),
+      ],
+    };
+    const why = "profile 'bad' has kind nope, which is not a harness purlis can launch";
+    expect(standingIn([said(why, ["harness", "bad", "kind"])], "local", [...GROUPS, page])).toEqual(
+      [
+        {
+          why,
+          to: {
+            group: "project.profile.bad",
+            label: "bad › bad: kind",
+            setting: "project.profile.bad.kind",
+          },
+        },
+      ],
+    );
+    // One about the profile's table as a whole goes to its page.
+    expect(standingIn([said(why, ["harness", "bad"])], "local", [...GROUPS, page])).toEqual([
+      { why, to: { group: "project.profile.bad", label: "bad" } },
+    ]);
+  });
+
   it("is the setting it names, in its group", () => {
     expect(
       standingIn(

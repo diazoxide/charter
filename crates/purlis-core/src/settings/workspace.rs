@@ -138,19 +138,10 @@ pub fn standing(text: &str, workspace: &str) -> Vec<Refusal> {
         toml::Value::Table(table) => Some(table),
         _ => None,
     }) {
-        let said = |whys: Vec<String>| {
-            whys.into_iter()
-                .map(|why| Refusal::said(why, &file, Some(KEY)))
-                .collect::<Vec<_>>()
-        };
         out.extend(project::keyed_in(&table, &file, "settings."));
-        out.extend(said(crate::harness_plugin::refusals_in(
-            &table,
-            &file,
-            "settings.",
-        )));
+        out.extend(crate::harness_plugin::keyed_in(&table, &file, "settings."));
         // And `theme` (charter-app#281), by the one reader of a theme.
-        out.extend(said(project::theme::refusals_in_workspace(&table, &file)));
+        out.extend(project::theme::keyed_in_workspace(&table, &file));
     }
     out
 }

@@ -868,3 +868,33 @@ fn a_workspace_refusal_carries_its_key_under_settings() {
         "{refusals:?}"
     );
 }
+
+/// **The theme and harness-plugin readers hand a workspace's keys over too** (#1292), each under
+/// `settings`, with a plugin id as one step.
+#[test]
+fn a_workspaces_theme_and_harness_plugin_refusals_carry_their_keys() {
+    let manifest = r#"{"name": "alpha", "settings": {
+        "theme": {"use": 3, "shade": "x"},
+        "harness_plugins": {"nope": {}, "codex": {"a.b": 1}}
+    }}"#;
+    let refusals = standing(manifest, "alpha");
+    let key_of = |said: &str| {
+        let found: Vec<_> = refusals
+            .iter()
+            .filter(|one| one.why.contains(said))
+            .collect();
+        assert_eq!(found.len(), 1, "{said:?} in {refusals:#?}");
+        found[0].key.clone()
+    };
+    let keys = |k: &[&str]| Some(k.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>());
+    assert_eq!(key_of("settings.theme.use in"), keys(&["theme", "use"]));
+    assert_eq!(key_of("settings.theme.shade in"), keys(&["theme", "shade"]));
+    assert_eq!(
+        key_of("[settings.harness_plugins.nope]"),
+        keys(&["harness_plugins", "nope"])
+    );
+    assert_eq!(
+        key_of("is not true or false"),
+        keys(&["harness_plugins", "codex", "a.b"])
+    );
+}

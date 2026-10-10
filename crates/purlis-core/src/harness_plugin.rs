@@ -45,6 +45,7 @@ use std::path::{Path, PathBuf};
 
 use crate::extension::project::{Source, toml_key};
 use crate::profiles::{COMMITTED_FILE, LOCAL_FILE};
+use crate::settings::Refusal;
 
 /// The table both files hold choices in: `[harness_plugins.<harness>]`, `"<id>" = true|false`.
 pub const TABLE: &str = "harness_plugins";
@@ -890,52 +891,80 @@ pub fn survey(choices: &Choices, env: &Env<'_>) -> Vec<Group> {
 /// Everything in `text`'s `[harness_plugins]` that charter would not read or would not honour,
 /// as `file` holds it, one sentence each, in the file's order.
 pub fn refusals(text: &str, file: &str) -> Vec<String> {
+    keyed(text, file).into_iter().map(|one| one.why).collect()
+}
+
+/// [`refusals`], each with the key it is about (#1292).
+pub fn keyed(text: &str, file: &str) -> Vec<Refusal> {
     let Ok(top) = text.parse::<toml::Table>() else {
         return Vec::new();
     };
-    refusals_in(&top, file, "")
+    keyed_in(&top, file, "")
 }
 
 /// [`refusals`], of a table already read — a whole TOML file, or a workspace's `settings` read as
 /// one (charter-app#282) — whose `[harness_plugins]` sits at `at` in `file` (`"settings."` in a
 /// `workspace.json`), so each sentence names the key where it is written.
 pub fn refusals_in(top: &toml::Table, file: &str, at: &str) -> Vec<String> {
+    keyed_in(top, file, at)
+        .into_iter()
+        .map(|one| one.why)
+        .collect()
+}
+
+/// [`refusals_in`], each with the key it is about **in `top`** (#1292): `at` is left out, so a
+/// workspace's is the key under its `settings`. A plugin id is one step, dots and all.
+pub fn keyed_in(top: &toml::Table, file: &str, at: &str) -> Vec<Refusal> {
     let Some(table) = top.get(TABLE) else {
         return Vec::new();
     };
     let shape = "each harness is [harness_plugins.<harness>], holding \"<plugin id>\" = true or \
                  false";
     let Some(table) = table.as_table() else {
-        return vec![format!("{at}{TABLE} in {file} is not a table — {shape}")];
+        return vec![Refusal::at(
+            format!("{at}{TABLE} in {file} is not a table — {shape}"),
+            &[TABLE],
+        )];
     };
     let mut out = Vec::new();
     for (harness, plugins) in table {
         let Some(adapter) = adapter(harness) else {
             let known: Vec<&str> = adapters().map(|it| it.harness()).collect();
-            out.push(format!(
-                "[{at}{TABLE}.{}] in {file} is not a harness purlis knows — one of: {}",
-                toml_key(harness),
-                known.join(", ")
+            out.push(Refusal::at(
+                format!(
+                    "[{at}{TABLE}.{}] in {file} is not a harness purlis knows — one of: {}",
+                    toml_key(harness),
+                    known.join(", ")
+                ),
+                &[TABLE, harness.as_str()],
             ));
             continue;
         };
         let Some(plugins) = plugins.as_table() else {
-            out.push(format!(
-                "{at}{TABLE}.{harness} in {file} is not a table — {shape}"
+            out.push(Refusal::at(
+                format!("{at}{TABLE}.{harness} in {file} is not a table — {shape}"),
+                &[TABLE, harness.as_str()],
             ));
             continue;
         };
         for (id, on) in plugins {
             let key = format!("{at}{TABLE}.{harness}.{}", toml_key(id));
+            let keyed = [TABLE, harness.as_str(), id.as_str()];
             if !id_ok(id) {
-                out.push(format!(
-                    "{key} in {file} is not a plugin id — one line of at most {MOST_ID_BYTES} \
-                     bytes, with nothing invisible in it"
+                out.push(Refusal::at(
+                    format!(
+                        "{key} in {file} is not a plugin id — one line of at most \
+                         {MOST_ID_BYTES} bytes, with nothing invisible in it"
+                    ),
+                    &keyed,
                 ));
                 continue;
             }
             let Some(on) = on.as_bool() else {
-                out.push(format!("{key} in {file} is not true or false"));
+                out.push(Refusal::at(
+                    format!("{key} in {file} is not true or false"),
+                    &keyed,
+                ));
                 continue;
             };
             if let Some(pin) = adapter
@@ -943,7 +972,10 @@ pub fn refusals_in(top: &toml::Table, file: &str, at: &str) -> Vec<String> {
                 .iter()
                 .find(|pin| pin.id == id && pin.on != on)
             {
-                out.push(format!("{key} in {file} cannot be {on}: {}", pin.why));
+                out.push(Refusal::at(
+                    format!("{key} in {file} cannot be {on}: {}", pin.why),
+                    &keyed,
+                ));
             }
         }
     }

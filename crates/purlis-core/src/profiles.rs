@@ -241,6 +241,24 @@ pub struct Refused {
     pub source: String,
     /// The rule, then the fix, in one sentence.
     pub reason: String,
+    /// The key in `source` it is about, one step per table or key (#1292): a profile's own
+    /// table (`harness`, `<name>`), or the field of it the rule is about, so the Settings tab
+    /// links it to that profile's page. `None` for one about the whole file.
+    pub key: Option<Vec<String>>,
+}
+
+/// A key of the profile loader's, as [`Refused::key`] holds it.
+fn key_of(steps: &[&str]) -> Option<Vec<String>> {
+    Some(steps.iter().map(|step| (*step).to_owned()).collect())
+}
+
+/// The key a rule of [`refusals_of`] about `name`'s `field` is at: the field, or the profile's
+/// table for a rule about the whole table or its name.
+fn profile_key(name: &str, field: &str) -> Option<Vec<String>> {
+    match field {
+        "" | "name" => key_of(&["harness", name]),
+        field => key_of(&["harness", name, field]),
+    }
 }
 
 /// Every profile a plane has, every declared one refused, and the default.
@@ -392,6 +410,7 @@ pub fn derive_declared(
             name: String::new(),
             source: refused.file.clone(),
             reason: refused.reason.clone(),
+            key: None,
         });
     }
 
@@ -412,6 +431,7 @@ pub fn derive_declared(
                     ),
                     name,
                     source: COMMITTED_FILE.to_owned(),
+                    key: key_of(&["harness", key.as_str()]),
                 });
             } else if key == DEFAULT {
                 set.default = value.as_str().map(str::to_owned);
@@ -440,6 +460,7 @@ pub fn derive_declared(
                          purlis harness list.",
                         shown::short(&e.to_string())
                     ),
+                    key: None,
                 });
                 None
             }
@@ -458,6 +479,7 @@ pub fn derive_declared(
                      harness list.",
                     shown::short(&e.to_string())
                 ),
+                key: None,
             });
             None
         }
@@ -494,11 +516,12 @@ pub fn derive_declared(
         // push decide which of this machine's variables every chat is handed.
         if key == crate::chatenv::TABLE {
             if let Some(value) = top.get(key) {
-                for reason in crate::chatenv::refusals(value) {
+                for one in crate::chatenv::keyed(value) {
                     set.refused.push(Refused {
                         name: crate::chatenv::TABLE.to_owned(),
                         source: LOCAL_FILE.to_owned(),
-                        reason,
+                        reason: one.why,
+                        key: one.key,
                     });
                 }
             }
@@ -523,6 +546,7 @@ pub fn derive_declared(
                 ),
                 name,
                 source: LOCAL_FILE.to_owned(),
+                key: key_of(&[key.as_str()]),
             });
         }
     }
@@ -539,6 +563,7 @@ pub fn derive_declared(
                          profile was read — the file holds a [harness] table with one \
                          [harness.<name>] table per profile. Write it that way."
                     .to_owned(),
+                key: key_of(&["harness"]),
             });
             toml::Table::new()
         }
@@ -579,6 +604,7 @@ pub fn derive_declared(
                     ),
                     name: dotted,
                     source: LOCAL_FILE.to_owned(),
+                    key: key_of(&["harness", name.as_str(), key.as_str()]),
                 });
             }
             // A parent holding nothing but sub-tables declares nothing, and the built-in of
@@ -591,7 +617,7 @@ pub fn derive_declared(
             }
         }
         match refusal(name, table, declared) {
-            Some(reason) => {
+            Some((field, reason)) => {
                 // A declared profile that replaces a built-in and is refused takes the name
                 // down with it (ruling 37): the operator said how that name runs, and the
                 // built-in standing in would run the command they replaced.
@@ -600,6 +626,7 @@ pub fn derive_declared(
                     name: shown::short(name),
                     source: LOCAL_FILE.to_owned(),
                     reason,
+                    key: profile_key(name, field),
                 });
             }
             None => {
@@ -673,7 +700,7 @@ pub fn current(root: &Path) -> ProfileSet {
 pub fn current_of(derived: ProfileSet) -> ProfileSet {
     let mut set = derived;
     for profile in set.profiles.clone() {
-        let Some((_, reason)) = launch_refusals(&profile.name, &profile.command)
+        let Some((field, reason)) = launch_refusals(&profile.name, &profile.command)
             .into_iter()
             .next()
         else {
@@ -684,6 +711,7 @@ pub fn current_of(derived: ProfileSet) -> ProfileSet {
             name: shown::short(&profile.name),
             source: profile.source.as_str().to_owned(),
             reason,
+            key: profile_key(&profile.name, field),
         });
     }
     settle(set)
@@ -733,6 +761,7 @@ pub fn with_ignore_check(mut set: ProfileSet, check: &IgnoreCheck) -> ProfileSet
             name: shown::short(&p.name),
             source: LOCAL_FILE.to_owned(),
             reason: check.reason.clone(),
+            key: profile_key(&p.name, ""),
         })
         .collect();
     set.profiles.retain(|p| p.source != Source::Local);
@@ -796,11 +825,8 @@ fn refusal(
     name: &str,
     table: &toml::Value,
     declared: &crate::harness_declaration::Declarations,
-) -> Option<String> {
-    refusals_of(name, table, declared)
-        .into_iter()
-        .next()
-        .map(|(_, why)| why)
+) -> Option<(&'static str, String)> {
+    refusals_of(name, table, declared).into_iter().next()
 }
 
 /// **Every rule `name`'s table breaks**, in the order the rules are written, each with the
