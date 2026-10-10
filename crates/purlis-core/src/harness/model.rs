@@ -59,6 +59,9 @@ pub enum Turn {
     /// work, and the harness wakes it with what they say (#1626). Its work goes on: the next
     /// move is nobody's yet, and the turn that follows their end is the one that ends.
     AwaitsItsHelpers,
+    /// The harness nudged that the chat sits idle at its prompt, its turn over (#1626): a
+    /// nudge it says is one, never a permission or a question.
+    SitsIdle,
 }
 
 /// One thing done inside a turn.

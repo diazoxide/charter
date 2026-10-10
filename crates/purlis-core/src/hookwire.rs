@@ -217,7 +217,12 @@ impl Report {
                         .is_some_and(|prompt| crate::state::smart_close_typed(&prompt)),
                 unattended: crate::floorguard::unattended(field("permission_mode").as_deref()),
                 // Only a `Stop` of the chat's own can end its turn, so only there is it asked.
-                helpers_at_work: event == Event::Stop && helpers_at_work(read.as_ref()),
+                helpers_at_work: event == Event::Stop
+                    && env(HARNESS_ENV).as_deref() == Some(BACKGROUND_TASKS_HARNESS)
+                    && helpers_at_work(read.as_ref()),
+                // Only a `Notification` is a nudge (#1626).
+                idle: event == Event::Notification
+                    && field("notification_type").as_deref() == Some(IDLE_NUDGE),
                 // The model the session runs on, only where a `SessionStart` names it (#1021):
                 // what a commit's `Assisted-by` then names.
                 model: (event == Event::SessionStart)
@@ -229,6 +234,24 @@ impl Report {
     }
 }
 
+/// The harness whose `Stop` input was read to say what it has in flight: Claude Code, by the
+/// registry name its chats carry in [`HARNESS_ENV`]. Another harness's `background_tasks`, if
+/// it ever sent one, is not read as Claude Code's (#1626).
+const BACKGROUND_TASKS_HARNESS: &str = "claude-code";
+
+/// The kinds of background work, by Claude Code's label for them, that end by themselves and
+/// wake the chat when they do: an agent, and a workflow of agents ([`helpers_at_work`]).
+const HELPER_KINDS: [&str; 2] = ["subagent", "workflow"];
+
+/// The statuses of work still in flight, as Claude Code's schema describes the list: running,
+/// or pending ([`helpers_at_work`]).
+const IN_FLIGHT: [&str; 2] = ["running", "pending"];
+
+/// The `notification_type` of the nudge a harness sends when a chat sits idle at its prompt, as
+/// opposed to a permission or a question: Claude Code's word, which since 2.1.288 it holds back
+/// while background agents still run.
+const IDLE_NUDGE: &str = "idle_prompt";
+
 /// **Whether a `Stop` payload says helpers of the chat's own are still at work in the
 /// background**, and will wake it when they finish (#1626).
 ///
@@ -236,26 +259,25 @@ impl Report {
 /// session, which its own schema says is there to tell "session is done" from "session is
 /// paused waiting for background work to wake it" (read from the hook input schema of
 /// 2.1.296; an empty array when nothing is in flight, absent from older versions). Each entry
-/// has a `type`, Claude Code's friendly label for the kind of work.
+/// has a `type`, Claude Code's label for the kind of work, and a `status`.
 ///
-/// **Only agents count: `subagent` and `workflow`.** They end by themselves and their end
-/// wakes the chat. A background `shell` or `monitor` may run for as long as the chat does (a
-/// dev server, a log tail), so a chat left with only those has stopped and the person has the
-/// next move. An entry whose `status` is a finished word is not in flight, whatever list it is
-/// in. Anything not read as one of these is no helper at work, so a payload this cannot read
-/// hands the end of the turn to the person, as before.
+/// **Only agents count ([`HELPER_KINDS`]), and only while in flight ([`IN_FLIGHT`]).** A
+/// background `shell` or `monitor` may run for as long as the chat does (a dev server, a log
+/// tail), so a chat left with only those has stopped and the person has the next move. Anything
+/// not read as one of these is no helper at work, so a payload this cannot read hands the end
+/// of the turn to the person, as before.
 pub fn helpers_at_work(payload: Option<&serde_json::Value>) -> bool {
     payload
         .and_then(|payload| payload.get("background_tasks"))
         .and_then(serde_json::Value::as_array)
         .is_some_and(|tasks| {
             tasks.iter().any(|task| {
-                let word = |name: &str| task.get(name).and_then(serde_json::Value::as_str);
-                matches!(word("type"), Some("subagent" | "workflow"))
-                    && !matches!(
-                        word("status"),
-                        Some("completed" | "failed" | "killed" | "stopped" | "cancelled")
-                    )
+                let is_one_of = |key: &str, words: &[&str]| {
+                    task.get(key)
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|word| words.contains(&word))
+                };
+                is_one_of("type", &HELPER_KINDS) && is_one_of("status", &IN_FLIGHT)
             })
         })
 }
@@ -3755,7 +3777,11 @@ mod tests {
     #[test]
     fn only_a_stop_naming_an_agent_in_flight_says_its_helpers_are_at_work() {
         // #1626: Claude Code's `background_tasks`, as its 2.1.296 hook input schema shapes it.
-        let env = env_of(&[(SOCKET_ENV, "/tmp/s.sock"), (CHAT_ENV, "7")]);
+        let env = env_of(&[
+            (SOCKET_ENV, "/tmp/s.sock"),
+            (CHAT_ENV, "7"),
+            (HARNESS_ENV, "claude-code"),
+        ]);
         let with = |tasks: serde_json::Value| {
             serde_json::json!({
                 "session_id": "11111111-2222-4333-8444-555555555555",
@@ -3763,7 +3789,12 @@ mod tests {
             })
             .to_string()
         };
-        let task = |kind: &str, status: &str| serde_json::json!({"id": "t1", "type": kind, "status": status, "description": "d"});
+        let task = |kind: &str, status: &str| {
+            let mut task = serde_json::json!({"id": "t1", "description": "d"});
+            task["type"] = kind.into();
+            task["status"] = status.into();
+            task
+        };
         let at_work = |event: Event, payload: &str| {
             Report::read(event, payload, &env)
                 .expect("a report")
@@ -3789,6 +3820,7 @@ mod tests {
                 task("monitor", "running")
             ])),
             with(serde_json::json!([task("subagent", "completed")])),
+            with(serde_json::json!([task("subagent", "a word nobody wrote")])),
             with(serde_json::json!([{"type": 7}])),
             with(serde_json::json!("subagent")),
             CLAUDE_STOP.to_owned(),
@@ -3798,6 +3830,35 @@ mod tests {
                 !at_work(Event::Stop, &not_one),
                 "{not_one} said helpers at work"
             );
+        }
+        // Read on Claude Code only, where it was read from: another harness's is not its.
+        for harness in [None, Some("codex"), Some("opencode")] {
+            let mut pairs = vec![(SOCKET_ENV, "/tmp/s.sock"), (CHAT_ENV, "7")];
+            pairs.extend(harness.map(|harness| (HARNESS_ENV, harness)));
+            let report = Report::read(Event::Stop, &one_agent, &env_of(&pairs)).expect("a report");
+            assert!(!report.detail.helpers_at_work, "read on {harness:?}");
+        }
+    }
+
+    #[test]
+    fn only_the_nudge_a_harness_says_is_one_is_read_as_a_chat_sitting_idle() {
+        // #1626: Claude Code's `notification_type`; a permission or a question is an ask.
+        let env = env_of(&[(SOCKET_ENV, "/tmp/s.sock"), (CHAT_ENV, "7")]);
+        let idle = |event: Event, kind: Option<&str>| {
+            let mut payload =
+                serde_json::json!({"session_id": "11111111-2222-4333-8444-555555555555"});
+            if let Some(kind) = kind {
+                payload["notification_type"] = kind.into();
+            }
+            Report::read(event, &payload.to_string(), &env)
+                .expect("a report")
+                .detail
+                .idle
+        };
+        assert!(idle(Event::Notification, Some("idle_prompt")));
+        assert!(!idle(Event::Stop, Some("idle_prompt")));
+        for kind in [Some("permission_prompt"), Some("elicitation_dialog"), None] {
+            assert!(!idle(Event::Notification, kind), "{kind:?} read as idle");
         }
     }
 
