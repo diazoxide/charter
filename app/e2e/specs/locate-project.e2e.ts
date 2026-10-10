@@ -114,7 +114,11 @@ async function theDialogIsTheSystems(): Promise<void> {
   });
 }
 
-describe("Locate… for a remembered project that moved", function () {
+// Skipped until purlis/purlis#1680: the page cannot stand in for the native folder picker. The
+// IPC does not go through the page's `fetch` (the stand-in below saw no request at all on macOS
+// or Linux), and Tauri's invoke cannot be replaced, so `pick_project` opens the real dialog and
+// nothing answers it. Take the skip off with the e2e-only seam that issue asks for.
+describe.skip("Locate… for a remembered project that moved", function () {
   this.timeout(180_000);
 
   /** The project the launch opened, which this spec never touches. */
