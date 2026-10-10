@@ -188,8 +188,8 @@ async fn answering_an_ask_is_never_served_on_the_link_even_to_the_window() {
     assert!(ui::WINDOW_ONLY.contains(&"acknowledge_project_presets"));
     // And the person's acts named beside them: a task's merge and discard (#1511), the answer
     // to a chat's sandbox block and to several tasks' (#1538, #1508), and the Allow of a
-    // persona's hosts on this machine (#1362), and the delete of a task's merged branch whose
-    // folder is gone (#1472).
+    // persona's hosts on this machine (#1362), the delete of a task's merged branch whose
+    // folder is gone (#1472), and Allow on Settings' Blocked lately (#1662).
     for command in [
         "task_branch_merge",
         "dispatch_worktree_discard",
@@ -198,13 +198,14 @@ async fn answering_an_ask_is_never_served_on_the_link_even_to_the_window() {
         "allow_sandbox_block_for_tasks",
         "keep_sandbox_block_for_tasks",
         "allow_persona_hosts",
+        "allow_blocked_host",
     ] {
         assert!(ui::WINDOW_ONLY.contains(&command), "{command}");
     }
     assert!(ui::WINDOW_ONLY.contains(&"acknowledge_project_hosts"));
     // And the start of the person's editor on this machine's extension record (#1296).
     assert!(ui::WINDOW_ONLY.contains(&"open_extension_record"));
-    assert_eq!(ui::WINDOW_ONLY.len(), 35 + 26 + 3 + 2 + 3 + 1 + 2 + 1);
+    assert_eq!(ui::WINDOW_ONLY.len(), 35 + 26 + 3 + 2 + 3 + 1 + 2 + 1 + 1);
 }
 
 #[tokio::test]
