@@ -12,11 +12,11 @@ use std::path::{Path, PathBuf};
 pub const DIR_NAME: &str = "_skills";
 
 /// `personas/_skills/<YYYY-MM>.<device>.jsonl` — `skilluse.path_for`; `<device>` is
-/// [`crate::dispatch::log_name`]'s (FD-25).
-pub fn path_for(root: &Path, when: chrono::DateTime<chrono::Utc>, host: &str) -> PathBuf {
+/// [`crate::machine::log_name`]'s (FD-25).
+pub fn path_for(root: &Path, when: chrono::DateTime<chrono::Utc>, device: &str) -> PathBuf {
     root.join("personas")
         .join(DIR_NAME)
-        .join(format!("{}.{host}.jsonl", when.format("%Y-%m")))
+        .join(format!("{}.{device}.jsonl", when.format("%Y-%m")))
 }
 
 /// Log one use of `skill` by `persona` — `skilluse.record`.
@@ -25,7 +25,7 @@ pub fn record(
     skill: &str,
     persona: Option<&str>,
     when: chrono::DateTime<chrono::Utc>,
-    host: &str,
+    device: &str,
 ) -> Option<PathBuf> {
     let skill = crate::memstore::py_strip(skill);
     if skill.is_empty() {
@@ -38,7 +38,7 @@ pub fn record(
             serde_json::Value::String(p.to_string())
         });
     crate::dispatch::append(
-        &path_for(root, when, host),
+        &path_for(root, when, device),
         root,
         &serde_json::json!({
             "persona": persona,

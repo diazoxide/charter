@@ -2762,13 +2762,11 @@ fn dispatch_noting(
     if let Some(cut) = &cut {
         // Logged `claimed` once its chat has started, as a writing chat's branch is, and
         // credited to that chat by this app's number for it.
-        let host = purlis_core::dispatch::host();
-        let who = purlis_core::pieces::Who {
-            session: Some(arrived.session.to_string()),
-            persona: arrived.persona.clone(),
-            log: purlis_core::dispatch::log_name(held.config(), &host),
-            host,
-        };
+        let who = purlis_core::pieces::Who::here(
+            held.config(),
+            Some(arrived.session.to_string()),
+            arrived.persona.clone(),
+        );
         if purlis_core::chatpiece::claim(root, cut, &who, chrono::Utc::now()).is_none() {
             tracing::warn!("purlis: a dispatch's worktree was not logged as claimed");
         }
@@ -3824,7 +3822,7 @@ fn handoff_row(
         placement,
         created,
         chrono::Utc::now(),
-        &purlis_core::dispatch::log_name(config, &purlis_core::dispatch::host()),
+        &purlis_core::machine::log_name(config, &purlis_core::dispatch::host()),
     ) {
         Ok(_) => Row::Written,
         Err(why) => Row::Unwritten {

@@ -129,7 +129,7 @@ pub fn land(
         repos,
         how,
         &|repo: &Repo| repo.backend(),
-        &crate::dispatch::this_log_name(),
+        &crate::machine::this_log_name(),
         now,
         say,
     )
@@ -207,7 +207,7 @@ struct Books<'p> {
     plane: &'p Path,
     ws: &'p str,
     slug: &'p str,
-    host: &'p str,
+    device: &'p str,
     now: DateTime<Utc>,
     log: Landings,
     pending: Pendings,
@@ -218,7 +218,7 @@ impl Books<'_> {
     /// found merged, comes to. `false` when the log could not be written.
     fn log(&mut self, repo: &str, req: &Request, commit: &str) -> bool {
         let line = Landing::new(self.slug, repo, req.number, &req.head, commit, self.now);
-        if landing::append(self.plane, self.ws, self.host, &line).is_none() {
+        if landing::append(self.plane, self.ws, self.device, &line).is_none() {
             return false;
         }
         self.log.insert(repo.to_string(), line);
@@ -227,7 +227,7 @@ impl Books<'_> {
 
     /// Append `line` to the pending file. `false` when it could not be written.
     fn pend(&mut self, line: Pending) -> bool {
-        if pending::append(self.plane, self.ws, self.host, &line).is_none() {
+        if pending::append(self.plane, self.ws, self.device, &line).is_none() {
             return false;
         }
         self.pending.insert(line.repo.clone(), line);
@@ -236,7 +236,7 @@ impl Books<'_> {
 }
 
 /// [`land`], asking the backend `backend_of` builds for each member's repo, and logging as
-/// `host`.
+/// `device`.
 #[allow(clippy::too_many_arguments)]
 pub fn land_with(
     plane: &Path,
@@ -245,7 +245,7 @@ pub fn land_with(
     repos: &[String],
     how: How,
     backend_of: &dyn Fn(&Repo) -> Box<dyn ForgeBackend>,
-    host: &str,
+    device: &str,
     now: DateTime<Utc>,
     say: &mut dyn FnMut(Say),
 ) -> u8 {
@@ -256,7 +256,7 @@ pub fn land_with(
         repos,
         how,
         backend_of,
-        host,
+        device,
         now,
         Asked::Land(None),
         &mut None,
@@ -357,13 +357,13 @@ pub fn verify(
         slug,
         repo,
         &|repo: &Repo| repo.backend(),
-        &crate::dispatch::this_log_name(),
+        &crate::machine::this_log_name(),
         now,
         say,
     )
 }
 
-/// [`verify`], through `backend_of` and logging as `host`.
+/// [`verify`], through `backend_of` and logging as `device`.
 #[allow(clippy::too_many_arguments)]
 pub fn verify_with(
     plane: &Path,
@@ -371,7 +371,7 @@ pub fn verify_with(
     slug: &str,
     repo: &str,
     backend_of: &dyn Fn(&Repo) -> Box<dyn ForgeBackend>,
-    host: &str,
+    device: &str,
     now: DateTime<Utc>,
     say: &mut dyn FnMut(Say),
 ) -> Result<Verified, u8> {
@@ -383,7 +383,7 @@ pub fn verify_with(
         &[repo.to_string()],
         How::Merge,
         backend_of,
-        host,
+        device,
         now,
         Asked::Verify,
         &mut found,
@@ -411,13 +411,13 @@ pub fn land_verified(
         confirmed,
         how,
         &|repo: &Repo| repo.backend(),
-        &crate::dispatch::this_log_name(),
+        &crate::machine::this_log_name(),
         now,
         say,
     )
 }
 
-/// [`land_verified`], through `backend_of` and logging as `host`.
+/// [`land_verified`], through `backend_of` and logging as `device`.
 #[allow(clippy::too_many_arguments)]
 pub fn land_verified_with(
     plane: &Path,
@@ -426,7 +426,7 @@ pub fn land_verified_with(
     confirmed: &Verified,
     how: How,
     backend_of: &dyn Fn(&Repo) -> Box<dyn ForgeBackend>,
-    host: &str,
+    device: &str,
     now: DateTime<Utc>,
     say: &mut dyn FnMut(Say),
 ) -> u8 {
@@ -437,7 +437,7 @@ pub fn land_verified_with(
         std::slice::from_ref(&confirmed.repo),
         how,
         backend_of,
-        host,
+        device,
         now,
         Asked::Land(Some(confirmed)),
         &mut None,
@@ -490,7 +490,7 @@ fn gated(
     repos: &[String],
     how: How,
     backend_of: &dyn Fn(&Repo) -> Box<dyn ForgeBackend>,
-    host: &str,
+    device: &str,
     now: DateTime<Utc>,
     asked: Asked,
     found: &mut Option<Verified>,
@@ -570,7 +570,7 @@ fn gated(
         plane,
         ws,
         slug,
-        host,
+        device,
         now,
         log: landing::landings(plane, ws, slug),
         pending: pending::pendings(plane, ws, slug),

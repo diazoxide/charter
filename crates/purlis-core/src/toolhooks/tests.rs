@@ -281,7 +281,7 @@ fn a_helper_that_is_no_persona_still_runs_and_nothing_is_written_for_it() {
     assert_eq!(p.ask(other, pretooluse_dispatch), Answer::Nothing);
     // Nothing is kept about a helper: no in-flight record, no row in the committed log.
     assert!(!p.root.join(".charter/dispatch-inflight").exists());
-    assert!(!dispatch::dir(&p.root).exists());
+    assert!(!crate::dispatch::dir(&p.root).exists());
 }
 
 #[test]
@@ -302,7 +302,7 @@ fn a_returned_helper_is_no_longer_logged() {
     let mut done = dispatch_of("Explore");
     done["tool_response"] = serde_json::json!([{"type": "text", "text": "ok. agentId: a1b2c3d4"}]);
     assert_eq!(p.ask(done, posttooluse_dispatch), Answer::Nothing);
-    assert!(!dispatch::dir(&p.root).exists());
+    assert!(!crate::dispatch::dir(&p.root).exists());
     assert!(!p.root.join(".charter/agent-personas.json").exists());
 }
 

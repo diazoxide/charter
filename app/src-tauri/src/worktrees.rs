@@ -364,13 +364,7 @@ fn declare_done(
 /// The window speaking for a piece: no session or persona, this machine's name as the label,
 /// and the log named by the device id the store at `config` keeps (FD-25).
 fn window(config: Option<&Path>) -> purlis_core::pieces::Who {
-    let host = purlis_core::dispatch::host();
-    purlis_core::pieces::Who {
-        session: None,
-        persona: None,
-        log: purlis_core::dispatch::log_name(config, &host),
-        host,
-    }
+    purlis_core::pieces::Who::here(config, None, None)
 }
 
 /// Said when a branch was cut but the piece log could not be written.

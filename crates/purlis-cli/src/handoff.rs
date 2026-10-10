@@ -542,7 +542,7 @@ fn record_opened(opened: &Opened<'_>) {
                 placement,
                 opened.created,
                 opened.now.with_timezone(&chrono::Utc),
-                &purlis_core::dispatch::this_log_name(),
+                &purlis_core::machine::this_log_name(),
             )
             .err()
             .map(|why| purlis_core::rewrite::os_words(&why))
