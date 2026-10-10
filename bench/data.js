@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791654809585,
+  "lastUpdate": 1791655730502,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -6216,6 +6216,48 @@ window.BENCHMARK_DATA = {
             "value": 104.760216,
             "unit": "ms",
             "extra": "median of 5 runs: 103.115, 104.296, 104.760, 104.800, 107.536 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "eyehollow@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "dbrownsimple"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "9ca90c46d8f6ece5b1581572954c262d671723fa",
+          "message": "Start the first task's second chat on the stand-in Claude Code\n\nThe tab suggests another harness for the second chat so the two runs\ndiffer, and picked codex, which this run does not have. The spec picks\nclaude for it, the one harness the run stands in.\n\nRefs #1670\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nAssisted-by: claude-code\nPurlis-Chat: 01M4AREQXXRGBAEWM0SZ0N0WBN\nPurlis-Persona: steward",
+          "timestamp": "2026-10-10T21:48:03+04:00",
+          "tree_id": "333c1dba70cc481046b944c23b677d9c100bc778",
+          "url": "https://github.com/purlis/purlis/commit/9ca90c46d8f6ece5b1581572954c262d671723fa"
+        },
+        "date": 1791655729939,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.2659105,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.254, 0.255, 0.266, 0.275, 0.280 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.488737500000003,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.443, 16.444, 16.489, 16.523, 16.554 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 101.2083925,
+            "unit": "ms",
+            "extra": "median of 5 runs: 101.070, 101.136, 101.208, 101.459, 102.431 ms"
           }
         ]
       }
