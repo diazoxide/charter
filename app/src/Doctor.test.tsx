@@ -688,6 +688,12 @@ describe("which doctor findings stand as Notices (#1301, D-1301-1)", () => {
     discover: row("inventory", "warn", { fix: "discover" }),
     "persona-agents": row("personas", "warn", { fix: "persona-agents" }),
     "handoff-rule": row("handoff gate", "warn", { fix: "handoff-rule" }),
+    // D-1301-2: the doctor's layout row (#1289) offers this fix now, and it still stays in the
+    // dialog: the Alerts drawer stands it, and a second standing place would say it twice.
+    "workspace-reinit": row("workspace layout", "warn", {
+      detail: "1 workspace behind: alpha",
+      fix: "workspace-reinit",
+    }),
   };
 
   function draw(rows: DoctorRow[], over: Partial<DoctorState> = {}, dismissed: string[] = []) {
