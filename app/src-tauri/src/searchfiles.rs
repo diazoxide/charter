@@ -320,7 +320,10 @@ fn start(
             whole_word: options.whole_word,
         },
     )
-    .map_err(|bad| bad.to_string())?;
+    .map_err(|bad| bad.to_string())?
+    // Each branch's folder found by the bounded reader's child, so walking a branch starts no
+    // git to find it in this process (#1189).
+    .reading_with(crate::reader());
     Ok(Running {
         run,
         stop: Arc::new(AtomicBool::new(false)),

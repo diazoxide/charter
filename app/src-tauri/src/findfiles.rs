@@ -110,13 +110,19 @@ struct Session {
     finder: Finder,
 }
 
+/// A palette session's finder: each branch's folder found by the bounded reader's child, so
+/// listing a branch starts no git to find it in this process (#1189).
+fn finder() -> Finder {
+    Finder::default().reading_with(crate::reader())
+}
+
 impl FileFinder {
     /// The window's session `id`, a fresh one when the window has moved on to a new palette.
     fn session(&self, window: &str, id: u32) -> Arc<Mutex<Session>> {
         let fresh = || {
             Arc::new(Mutex::new(Session {
                 id,
-                finder: Finder::default(),
+                finder: finder(),
             }))
         };
         let mut windows = self.windows.lock().unwrap_or_else(PoisonError::into_inner);
@@ -129,14 +135,14 @@ impl FileFinder {
             .or_insert_with(|| {
                 Arc::new(Mutex::new(Session {
                     id,
-                    finder: Finder::default(),
+                    finder: finder(),
                 }))
             });
         let stale = session.lock().unwrap_or_else(PoisonError::into_inner).id != id;
         if stale {
             *session = Arc::new(Mutex::new(Session {
                 id,
-                finder: Finder::default(),
+                finder: finder(),
             }));
         }
         Arc::clone(session)
