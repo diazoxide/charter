@@ -15,6 +15,7 @@ import { forgetThisLaunch } from "./regions";
 import { GLOBAL } from "./windowprefs";
 import { onAMac } from "./tabKeys";
 import { findStripNamed, showTheExplorer, stripNamed } from "./test-strips";
+import { drawnWith } from "./cascade.testkit";
 
 /**
  * **The window is four regions** (ADR 0038), against the whole app, because three of
@@ -689,6 +690,24 @@ describe("the left side's activity bar", () => {
  * region's bar. Search is the Search tab's content in the side; Changes is what the bottom
  * region drew, which is gone, so the terminals have the window's whole height.
  */
+describe("a side's views, bounded", () => {
+  it("draws every view as the containing block of what is in it, clipping what hangs out", async () => {
+    core();
+    render(<App />);
+    await screen.findByRole("tabpanel", { name: "Chats" });
+
+    // A visually hidden word in a row far down the list, placed absolutely, made the page
+    // taller than the window when nothing positioned stood between it and the page.
+    const views = [...document.querySelectorAll('[role="tabpanel"].region-view')];
+    expect(views.length).toBeGreaterThan(1);
+    for (const view of views) {
+      expect(drawnWith(view, "position")).toBe("relative");
+      expect(drawnWith(view, "overflow")).toBe("hidden");
+    }
+    expect(drawnWith(screen.getByTestId("chats-section"), "position")).toBe("relative");
+  });
+});
+
 describe("the Search and Changes views", () => {
   const bar = () => screen.getByRole("tablist", { name: "Navigation" });
   const tab = (name: string) => within(bar()).getByRole("tab", { name });

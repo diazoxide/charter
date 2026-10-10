@@ -233,6 +233,14 @@ describe("the status line", () => {
       document.documentElement.clientWidth,
       document.documentElement.clientHeight,
     ]);
+    // The window is not scrolled and is no bigger than itself: a box hanging out of a view made
+    // the page taller once, and the click that opened the drawer scrolled the whole window
+    // (train 36). Said with the sizes, so a failure names which way it grew.
+    const page = await browser.execute(() => {
+      const it = document.scrollingElement ?? document.documentElement;
+      return `scrolled ${it.scrollLeft},${it.scrollTop} of ${it.scrollWidth}x${it.scrollHeight} in ${it.clientWidth}x${it.clientHeight}`;
+    });
+    expect(page).toMatch(/^scrolled 0,0 of (\d+)x(\d+) in \1x\2$/);
     const x = (await drawer.getLocation("x")) as number;
     const y = (await drawer.getLocation("y")) as number;
     expect(Math.abs(x + ((await drawer.getSize("width")) as number) - width)).toBeLessThanOrEqual(
