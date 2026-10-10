@@ -273,7 +273,7 @@ export const CharterPlugin = async (plugin, options) => {
     try {
       child = spawn([BINARY, "hook", "permissionrequest"], {
         cwd: directory,
-        env: { ...env, PURLIS_SESSION_ID: rootOf(props.sessionID), CHARTER_SESSION_ID: rootOf(props.sessionID) },
+        env: { ...env, PURLIS_SESSION_ID: rootOf(props.sessionID) },
         stdin: new Blob([stringify(props)]),
         stdout: "pipe",
         stderr: "ignore",

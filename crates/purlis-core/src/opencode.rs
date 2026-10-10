@@ -551,7 +551,7 @@ const SESSION_STATE: &str = r#"  // opencode's permission asks held in the windo
     try {
       child = spawn([BINARY, "hook", "{{PERMISSION_WORD}}"], {
         cwd: directory,
-        env: { ...env, PURLIS_SESSION_ID: rootOf(props.sessionID), CHARTER_SESSION_ID: rootOf(props.sessionID) },
+        env: { ...env, PURLIS_SESSION_ID: rootOf(props.sessionID) },
         stdin: new Blob([stringify(props)]),
         stdout: "pipe",
         stderr: "ignore",
