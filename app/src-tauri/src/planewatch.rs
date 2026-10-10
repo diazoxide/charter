@@ -52,11 +52,37 @@
 //! to fold through took a removal that arrived while the creation was still queued as the file
 //! never having been there, and told neither — but a read the window made on another change
 //! may already have drawn that file.
+//!
+//! # When the events are late (#756)
+//!
+//! macOS's file-event service serves the whole machine, and on a busy Mac it was measured
+//! handing a stream a change 4 to 15 seconds late, and sometimes not within four minutes, with
+//! no flag saying it had dropped anything (#577). The sidebar's model and the panels answer
+//! from what the watch told them (FD-10b), so a change the events never tell is one the window
+//! never draws. So the watch also **looks for itself** ([`Windows`]):
+//!
+//! - **while a window is shown**, every [`SWEEP_EVERY`], it reads the entries of the folders it
+//!   watches (one `read_dir` and one `lstat` each, no file is opened) and tells what differs
+//!   from its last look and no event has told — after a [`GRACE`] for the event to arrive;
+//! - **when a window is focused**, it looks at once, so coming back to the window after a
+//!   terminal wrote the project shows the terminal's change. A storm of focus changes is one
+//!   look per [`QUIET_FOR`];
+//! - **while every window is hidden or minimised** it does not look at all (SC-18, #1392); the
+//!   events it hears meanwhile are kept, and the first look after a focus compares against the
+//!   look before the windows went;
+//! - each change the look had to tell is counted for the doctor's `file events` row
+//!   ([`Windows::missed`]).
+//!
+//! A look tells the changed entries as a burst of their own, placed as the events' are, so the
+//! readers that hold the changed answers read again and nothing else does. A folder entry is
+//! compared by its being there, not its time: a clone's own writes move its folder's time, and
+//! no non-recursive watch tells those.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, PoisonError, Weak, mpsc};
-use std::time::{Duration, Instant};
+use std::sync::{Arc, Condvar, LazyLock, Mutex, OnceLock, PoisonError, Weak, mpsc};
+use std::time::{Duration, Instant, SystemTime};
 
 use purlis_core::planechange::{self, Answer, Change, Kind};
 use purlis_core::workspaces::Plane;
@@ -210,6 +236,40 @@ struct Inner<W: notify::Watcher> {
     /// whole.
     lapsed: bool,
     rewatch: Rewatch,
+    /// What the events told since the look before last ([`Heard`]).
+    heard: Heard,
+}
+
+/// The paths the events named, kept for the look ([`Windows`]) to leave alone what they told.
+#[derive(Debug, Default)]
+struct Heard {
+    paths: HashSet<PathBuf>,
+    /// A burst was everything: whatever the look finds, the events said.
+    everything: bool,
+}
+
+impl Heard {
+    /// The most paths kept. Past it, as a burst past its cap is, the events said everything.
+    const MOST: usize = MOST_PATHS * 4;
+
+    fn add(&mut self, burst: &Burst) {
+        if self.everything {
+            return;
+        }
+        if burst.everything || self.paths.len() + burst.paths.len() > Self::MOST {
+            self.everything = true;
+            self.paths = HashSet::new();
+            return;
+        }
+        self.paths.extend(burst.paths.iter().cloned());
+    }
+
+    /// Whether an event named `path`, or the folder it is in: FSEvents may name the folder.
+    fn told(&self, path: &Path) -> bool {
+        self.everything
+            || self.paths.contains(path)
+            || path.parent().is_some_and(|dir| self.paths.contains(dir))
+    }
 }
 
 /// How far a plane's watch can be trusted to tell everything the panels and the sidebar read
@@ -278,6 +338,248 @@ impl Rewatch {
     }
 }
 
+/// How often a watch looks for itself while a window is shown (#756). Five seconds keeps a
+/// missed change within the "few seconds" the issue asks for, and costs a sidebar-sized
+/// project well under a millisecond a look — a few hundred `lstat`s, measured in the PR — so
+/// the look is a rounding error against SC-18's idle budget (#1392). Nothing looks while every
+/// window is hidden.
+pub(crate) const SWEEP_EVERY: Duration = Duration::from_secs(5);
+
+/// How long a difference the look found waits for its event before the look tells it itself.
+/// FSEvents on a quiet Mac delivers well inside it; a change it found sooner than its event
+/// would otherwise be counted as missed.
+const GRACE: Duration = Duration::from_secs(1);
+
+/// How long a change the look had to tell keeps the doctor's `file events` row a warning.
+pub(crate) const LATELY: Duration = Duration::from_secs(600);
+
+/// The app's windows as the plane watches' looks follow them (#756): whether one is shown, and
+/// each time one was focused. One for the app ([`windows`]); a test makes its own.
+pub struct Windows {
+    state: Mutex<Shown>,
+    wake: Condvar,
+    /// Whether any window is shown now, asked from a look's own thread. Until it is set, every
+    /// window counts as shown.
+    shown: OnceLock<Box<dyn Fn() -> bool + Send + Sync>>,
+    /// Each watched root, and the changes its looks had to tell.
+    missed: Mutex<HashMap<PathBuf, Missed>>,
+}
+
+#[derive(Debug, Default)]
+struct Shown {
+    /// Every window was found hidden or minimised at the last look: nothing looks until one is
+    /// focused.
+    hidden: bool,
+    /// How many times a window was focused.
+    focused: u64,
+}
+
+/// What a watch's looks had to tell because no event did, since the watch started.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Missed {
+    /// How many changes.
+    pub count: u64,
+    /// When the last was told.
+    pub last: Option<Instant>,
+}
+
+/// Why a look's thread woke.
+enum Wake {
+    /// Its watch is gone.
+    Gone,
+    /// A window was focused.
+    Focused,
+    /// Its time to look came.
+    Look,
+}
+
+static WINDOWS: LazyLock<Arc<Windows>> = LazyLock::new(Windows::new);
+
+/// The app's [`Windows`], which every plane the app opens is watched with.
+pub fn windows() -> &'static Arc<Windows> {
+    &WINDOWS
+}
+
+impl Windows {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self {
+            state: Mutex::new(Shown::default()),
+            wake: Condvar::new(),
+            shown: OnceLock::new(),
+            missed: Mutex::new(HashMap::new()),
+        })
+    }
+
+    /// How a look asks whether any window is shown. The first one given is kept.
+    pub fn shown_when(&self, shown: impl Fn() -> bool + Send + Sync + 'static) {
+        let _ = self.shown.set(Box::new(shown));
+    }
+
+    /// A window was focused: every watch looks now, and goes on looking.
+    pub fn focused(&self) {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        state.hidden = false;
+        state.focused += 1;
+        drop(state);
+        self.wake.notify_all();
+    }
+
+    /// What the looks of the watch on `root` had to tell, or `None` when nothing watches it.
+    pub fn missed(&self, root: &Path) -> Option<Missed> {
+        self.missed
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(root)
+            .copied()
+    }
+
+    fn any_shown(&self) -> bool {
+        self.shown.get().is_none_or(|shown| shown())
+    }
+
+    fn hide(&self) {
+        self.state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .hidden = true;
+    }
+
+    fn focused_count(&self) -> u64 {
+        self.state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .focused
+    }
+
+    /// Waits for a focus past `seen`, for `every` to pass while a window is shown, or for
+    /// `alive` to say no. `alive` is asked under this lock, and a watch's drop takes it before
+    /// it wakes the looks, so a drop between the asking and the waiting is never slept through.
+    fn wait(&self, seen: u64, every: Duration, alive: &dyn Fn() -> bool) -> Wake {
+        let until = Instant::now() + every;
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        loop {
+            if !alive() {
+                return Wake::Gone;
+            }
+            if state.focused != seen {
+                return Wake::Focused;
+            }
+            if state.hidden {
+                state = self
+                    .wake
+                    .wait(state)
+                    .unwrap_or_else(PoisonError::into_inner);
+                continue;
+            }
+            let left = until.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return Wake::Look;
+            }
+            state = self
+                .wake
+                .wait_timeout(state, left)
+                .unwrap_or_else(PoisonError::into_inner)
+                .0;
+        }
+    }
+
+    /// Wakes every look's thread to see whether its watch is still there.
+    fn wake_all(&self) {
+        drop(self.state.lock().unwrap_or_else(PoisonError::into_inner));
+        self.wake.notify_all();
+    }
+
+    fn watching(&self, root: &Path) {
+        self.missed
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(root.to_path_buf(), Missed::default());
+    }
+
+    fn not_watching(&self, root: &Path) {
+        self.missed
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(root);
+    }
+
+    fn told_missed(&self, root: &Path, count: usize, at: Instant) {
+        if let Some(missed) = self
+            .missed
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get_mut(root)
+        {
+            missed.count += count as u64;
+            missed.last = Some(at);
+        }
+    }
+}
+
+/// One entry of a watched folder, as a look compares it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Stamp {
+    /// A folder: compared by its being there (see the module's header).
+    Folder,
+    /// Anything else, by its time and length, as `lstat` gives them.
+    Other {
+        modified: Option<SystemTime>,
+        len: u64,
+    },
+}
+
+/// What one look saw: each watched folder it could read, and its entries.
+type Look = HashMap<PathBuf, HashMap<OsString, Stamp>>;
+
+/// The entries of each of `dirs`. A folder that cannot be read is left out, and compared with
+/// nothing: its going is seen in the folder it was in.
+fn look<'a>(dirs: impl IntoIterator<Item = &'a PathBuf>) -> Look {
+    dirs.into_iter()
+        .filter_map(|dir| {
+            let entries = std::fs::read_dir(dir).ok()?;
+            let entries = entries
+                .flatten()
+                .filter_map(|entry| {
+                    let found = std::fs::symlink_metadata(entry.path()).ok()?;
+                    let stamp = if found.file_type().is_dir() {
+                        Stamp::Folder
+                    } else {
+                        Stamp::Other {
+                            modified: found.modified().ok(),
+                            len: found.len(),
+                        }
+                    };
+                    Some((entry.file_name(), stamp))
+                })
+                .collect();
+            Some((dir.clone(), entries))
+        })
+        .collect()
+}
+
+/// What moved between two looks, in the folders both read: the paths that differ, and among
+/// them the ones that went.
+fn differ(before: &Look, now: &Look) -> (HashSet<PathBuf>, HashSet<PathBuf>) {
+    let mut changed = HashSet::new();
+    let mut removed = HashSet::new();
+    for (dir, entries) in now {
+        let Some(was) = before.get(dir) else {
+            continue;
+        };
+        for (name, stamp) in entries {
+            if was.get(name) != Some(stamp) {
+                changed.insert(dir.join(name));
+            }
+        }
+        for name in was.keys().filter(|name| !entries.contains_key(*name)) {
+            let path = dir.join(name);
+            removed.insert(path.clone());
+            changed.insert(path);
+        }
+    }
+    (changed, removed)
+}
+
 /// One plane's watch. Dropping it stops it.
 ///
 /// `W` is where the changes come from: the platform's own watcher (FSEvents, inotify) in the
@@ -288,12 +590,23 @@ impl Rewatch {
 /// fall silent when dropped — is the same whichever watcher feeds it.
 pub struct Watch<W: notify::Watcher = Platform> {
     inner: Arc<Mutex<Inner<W>>>,
+    /// What its looks follow ([`Windows`]), and the root it is counted under there.
+    windows: Arc<Windows>,
+    root: PathBuf,
 }
 
 impl Watch {
-    /// Starts watching `root` and tells `changed` about `plane` whenever it moves.
+    /// Starts watching `root` and tells `changed` about `plane` whenever it moves, looking for
+    /// itself as the app's windows are shown and focused ([`windows`]).
     pub fn start(plane: PlaneId, root: &Path, changed: Changed) -> notify::Result<Self> {
-        Self::start_with(plane, root, changed, platform_config())
+        Self::start_with(
+            plane,
+            root,
+            changed,
+            platform_config(),
+            Arc::clone(windows()),
+            SWEEP_EVERY,
+        )
     }
 }
 
@@ -313,12 +626,15 @@ impl<W: notify::Watcher> Watch<W> {
 }
 
 impl<W: notify::Watcher + Send + 'static> Watch<W> {
-    /// [`Watch::start`] on a watcher of the caller's choosing, configured by `config`.
+    /// [`Watch::start`] on a watcher of the caller's choosing, configured by `config`, its looks
+    /// following `windows` every `every` while one is shown.
     fn start_with(
         plane: PlaneId,
         root: &Path,
         changed: Changed,
         config: notify::Config,
+        windows: Arc<Windows>,
+        every: Duration,
     ) -> notify::Result<Self> {
         let (sent, events) = mpsc::channel();
         let watcher = W::new(crate::watchset::sender(sent), config)?;
@@ -328,8 +644,9 @@ impl<W: notify::Watcher + Send + 'static> Watch<W> {
             unwatched: HashSet::new(),
             lapsed: false,
             rewatch: Rewatch::default(),
+            heard: Heard::default(),
         }));
-        {
+        let first = {
             let mut inner = inner.lock().unwrap_or_else(PoisonError::into_inner);
             inner.follow(root);
             // The root is where a workspace or a persona arriving is heard: without it the
@@ -340,54 +657,210 @@ impl<W: notify::Watcher + Send + 'static> Watch<W> {
                     root.display()
                 )));
             }
-        }
+            // The first look is taken now, so a change the events miss from here on is one
+            // the next look finds.
+            look(&inner.watched)
+        };
         let handle: Weak<Mutex<Inner<W>>> = Arc::downgrade(&inner);
         let at = root.to_path_buf();
         // The platform reports paths as the disk spells them, which a root opened through a
         // link (`/var` for `/private/var` on macOS) is not.
         let spelled = root.canonicalize().ok();
-        let tell = move |burst: Burst| {
-            let what = what_changed(&at, spelled.as_deref(), &burst);
-            // The set first, so a workspace made in this burst is watched before the window
-            // reads it, and a change inside it straight after is not missed.
-            //
-            // **And nothing at all once the watch is dropped.** Dropping it ends this thread,
-            // but a burst already gathered still arrives here, and a plane that has been
-            // closed must not be reported.
-            {
-                let Some(inner) = handle.upgrade() else {
-                    return;
-                };
-                let mut inner = inner.lock().unwrap_or_else(PoisonError::into_inner);
-                if inner.watcher.is_none() {
-                    return;
-                }
-                // What went is not known, so on inotify nothing watched can be trusted to still be.
-                if inner
-                    .rewatch
-                    .now(W::kind(), burst.everything, Instant::now())
+        let respell = spelled.clone();
+        let tell = {
+            let handle = handle.clone();
+            let at = at.clone();
+            move |burst: Burst| {
+                let what = what_changed(&at, spelled.as_deref(), &burst);
+                // The set first, so a workspace made in this burst is watched before the window
+                // reads it, and a change inside it straight after is not missed.
+                //
+                // **And nothing at all once the watch is dropped.** Dropping it ends this
+                // thread, but a burst already gathered still arrives here, and a plane that
+                // has been closed must not be reported.
                 {
-                    inner.forget_all();
+                    let Some(inner) = handle.upgrade() else {
+                        return;
+                    };
+                    let mut inner = inner.lock().unwrap_or_else(PoisonError::into_inner);
+                    if inner.watcher.is_none() {
+                        return;
+                    }
+                    inner.heard.add(&burst);
+                    // What went is not known, so on inotify nothing watched can be trusted to
+                    // still be.
+                    if inner
+                        .rewatch
+                        .now(W::kind(), burst.everything, Instant::now())
+                    {
+                        inner.forget_all();
+                    }
+                    for path in &burst.removed {
+                        inner.forget(path);
+                    }
+                    inner.follow(&at);
                 }
-                for path in &burst.removed {
-                    inner.forget(path);
-                }
-                inner.follow(&at);
+                // Before the window hears it, so the reads it makes on `plane-changed` are of
+                // the plane as it is now, not the shared standings from before (FD-11).
+                purlis_core::planegit::touch(&at);
+                changed(plane.clone(), what);
             }
-            // Before the window hears it, so the reads it makes on `plane-changed` are of the
-            // plane as it is now, not the shared standings from before (FD-11).
-            purlis_core::planegit::touch(&at);
-            changed(plane.clone(), what);
         };
-        std::thread::Builder::new()
-            .name("charter-plane-watch".into())
-            .spawn(move || {
-                for burst in crate::watchset::bursts(events, QUIET_FOR, MOST_PATHS) {
-                    tell(burst);
+        let tell: Arc<dyn Fn(Burst) + Send + Sync> = Arc::new(tell);
+        {
+            let tell = Arc::clone(&tell);
+            std::thread::Builder::new()
+                .name("charter-plane-watch".into())
+                .spawn(move || {
+                    for burst in crate::watchset::bursts(events, QUIET_FOR, MOST_PATHS) {
+                        tell(burst);
+                    }
+                })
+                .map_err(notify::Error::io)?;
+        }
+        windows.watching(root);
+        let looking = Looking {
+            inner: handle,
+            windows: Arc::clone(&windows),
+            root: at,
+            spelled: respell,
+            every,
+            tell,
+        };
+        let started = std::thread::Builder::new()
+            .name("charter-plane-look".into())
+            .spawn(move || looking.run(first));
+        if let Err(why) = started {
+            windows.not_watching(root);
+            return Err(notify::Error::io(why));
+        }
+        Ok(Self {
+            inner,
+            windows,
+            root: root.to_path_buf(),
+        })
+    }
+}
+
+/// A watch's own looks (#756, the module's header), on a thread of their own.
+struct Looking<W: notify::Watcher> {
+    inner: Weak<Mutex<Inner<W>>>,
+    windows: Arc<Windows>,
+    root: PathBuf,
+    /// The root as the disk spells it, which is how the events name what they told.
+    spelled: Option<PathBuf>,
+    every: Duration,
+    tell: Arc<dyn Fn(Burst) + Send + Sync>,
+}
+
+impl<W: notify::Watcher> Looking<W> {
+    /// Looks until the watch is dropped, from `before`, the look taken as it started.
+    fn run(self, mut before: Look) {
+        let mut seen = self.windows.focused_count();
+        // What the events told in the take before the last: an event that arrived after one
+        // look but was taken before the next one's difference is still what told it.
+        let mut told_before = Heard::default();
+        loop {
+            match self.windows.wait(seen, self.every, &|| self.alive()) {
+                Wake::Gone => return,
+                Wake::Focused => {
+                    // A storm of focus changes is one look: the ones inside this wait are
+                    // folded into it.
+                    std::thread::sleep(QUIET_FOR);
+                    seen = self.windows.focused_count();
                 }
-            })
-            .map_err(notify::Error::io)?;
-        Ok(Self { inner })
+                Wake::Look => {
+                    // Asked outside every lock: the answer may come from the window's thread.
+                    if !self.windows.any_shown() {
+                        self.windows.hide();
+                        continue;
+                    }
+                }
+            }
+            let Some(watched) = self.watched() else {
+                return;
+            };
+            let now = look(&watched);
+            let (changed, removed) = differ(&before, &now);
+            if !changed.is_empty() {
+                std::thread::sleep(GRACE);
+            }
+            let Some(told) = self.heard() else {
+                return;
+            };
+            let missed: HashSet<PathBuf> = changed
+                .into_iter()
+                .filter(|path| {
+                    let spelled = self.respelled(path);
+                    ![Some(path.as_path()), spelled.as_deref()]
+                        .into_iter()
+                        .flatten()
+                        .any(|path| told.told(path) || told_before.told(path))
+                })
+                .collect();
+            told_before = told;
+            if !missed.is_empty() {
+                self.windows
+                    .told_missed(&self.root, missed.len(), Instant::now());
+                let removed = removed.intersection(&missed).cloned().collect();
+                (self.tell)(Burst {
+                    paths: missed,
+                    removed,
+                    ..Burst::default()
+                });
+            }
+            before = self.merged(now);
+        }
+    }
+
+    /// `path`, under the root as the disk spells it, where that is another spelling.
+    fn respelled(&self, path: &Path) -> Option<PathBuf> {
+        let spelled = self
+            .spelled
+            .as_ref()
+            .filter(|spelled| **spelled != self.root)?;
+        Some(spelled.join(path.strip_prefix(&self.root).ok()?))
+    }
+
+    /// Whether the watch is still there.
+    fn alive(&self) -> bool {
+        self.inner.upgrade().is_some_and(|inner| {
+            inner
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .watcher
+                .is_some()
+        })
+    }
+
+    /// The folders the watch watches now, or `None` once it is dropped.
+    fn watched(&self) -> Option<HashSet<PathBuf>> {
+        let inner = self.inner.upgrade()?;
+        let inner = inner.lock().unwrap_or_else(PoisonError::into_inner);
+        inner.watcher.as_ref()?;
+        Some(inner.watched.clone())
+    }
+
+    /// What the events told since this was last asked, or `None` once the watch is dropped.
+    fn heard(&self) -> Option<Heard> {
+        let inner = self.inner.upgrade()?;
+        let mut inner = inner.lock().unwrap_or_else(PoisonError::into_inner);
+        inner.watcher.as_ref()?;
+        Some(std::mem::take(&mut inner.heard))
+    }
+
+    /// `now`, and a first look at each folder the watch took up since (a workspace this look
+    /// told): what the next look compares against.
+    fn merged(&self, mut now: Look) -> Look {
+        let Some(watched) = self.watched() else {
+            return now;
+        };
+        let new: Vec<PathBuf> = watched
+            .into_iter()
+            .filter(|dir| !now.contains_key(dir))
+            .collect();
+        now.extend(look(&new));
+        now
     }
 }
 
@@ -403,6 +876,9 @@ impl<W: notify::Watcher> Drop for Watch<W> {
             .watcher
             .take();
         drop(watcher);
+        self.windows.not_watching(&self.root);
+        // And its looks stop, whether a window is shown or not.
+        self.windows.wake_all();
     }
 }
 
@@ -576,6 +1052,19 @@ mod tests {
     fn telling_on<W: notify::Watcher + Send + 'static>(
         root: &Path,
     ) -> (Watch<W>, mpsc::Receiver<(PlaneId, What)>) {
+        looking_on::<W>(root, &Windows::new(), NEVER)
+    }
+
+    /// Longer than any test: a watch whose looks a test does not ask about looks only when its
+    /// own windows are focused, which nothing does.
+    const NEVER: Duration = Duration::from_secs(3600);
+
+    /// [`telling_on`], its looks following `windows` every `every`.
+    fn looking_on<W: notify::Watcher + Send + 'static>(
+        root: &Path,
+        windows: &Arc<Windows>,
+        every: Duration,
+    ) -> (Watch<W>, mpsc::Receiver<(PlaneId, What)>) {
         let (tx, rx) = mpsc::channel();
         let tx = Mutex::new(tx);
         let watch = Watch::<W>::start_with(
@@ -585,6 +1074,8 @@ mod tests {
                 let _ = tx.lock().expect("sender").send((plane, what));
             }),
             notify::Config::default().with_poll_interval(LOOK_EVERY),
+            Arc::clone(windows),
+            every,
         )
         .expect("a watch");
         (watch, rx)
@@ -739,6 +1230,8 @@ mod tests {
             &root,
             Arc::new(|_, _| {}),
             notify::Config::default().with_poll_interval(LOOK_EVERY),
+            Windows::new(),
+            NEVER,
         );
         assert!(
             started.is_err(),
@@ -1042,5 +1535,221 @@ mod tests {
         let unknown = PlaneChanged::of(plane, None);
         assert_eq!(unknown.changes, None);
         assert_eq!(unknown.answers, None);
+    }
+
+    // #756: the watch's own looks. Each test's watch is fed by `Raw`, which reports nothing the
+    // test does not send, so a write on disk is one whose event never came: a stalled FSEvents,
+    // played without one. A real FSEvents stall cannot be made on demand; nothing here runs on
+    // FSEvents itself.
+
+    /// How often the looks of a test that waits on them look.
+    const SOON: Duration = Duration::from_millis(100);
+
+    /// Long enough for a look that was going to tell to have told: past its [`GRACE`].
+    const TOLD_BY_NOW: Duration = Duration::from_secs(3);
+
+    #[test]
+    fn a_write_no_event_told_is_told_when_a_window_is_focused() {
+        use crate::watchset::raw::Raw;
+        let plane = plane_with_todos(&["m8-1"]);
+        let root = plane.path().canonicalize().expect("canonical");
+        let windows = Windows::new();
+        let (_watch, told) = looking_on::<Raw>(&root, &windows, NEVER);
+
+        std::fs::write(
+            root.join("workspaces/alpha/todos/m8-1.md"),
+            "# m8-1, written in a terminal\n",
+        )
+        .expect("a write");
+        assert!(
+            told.recv_timeout(QUIET_FOR * 4).is_err(),
+            "told with no event and no focus"
+        );
+        windows.focused();
+
+        let change = told_about(&told, "workspaces/alpha/todos/m8-1.md");
+        assert_eq!(change.kind, Kind::Todos);
+        assert_eq!(change.workspace.as_deref(), Some("alpha"));
+        assert_eq!(windows.missed(&root).map(|missed| missed.count), Some(1));
+    }
+
+    #[test]
+    fn a_removal_no_event_told_is_told_by_the_next_look() {
+        use crate::watchset::raw::Raw;
+        let plane = plane_with_todos(&["m8-1", "m8-2"]);
+        let root = plane.path().canonicalize().expect("canonical");
+        let windows = Windows::new();
+        let (_watch, told) = looking_on::<Raw>(&root, &windows, SOON);
+
+        std::fs::remove_file(root.join("workspaces/alpha/todos/m8-1.md")).expect("closed");
+
+        let change = told_about(&told, "workspaces/alpha/todos/m8-1.md");
+        assert_eq!(change.kind, Kind::Todos);
+        let missed = windows.missed(&root).expect("watched");
+        assert_eq!(missed.count, 1);
+        assert!(missed.last.is_some());
+    }
+
+    #[test]
+    fn nothing_is_looked_at_while_every_window_is_hidden_and_a_focus_looks_at_once() {
+        use crate::watchset::raw::Raw;
+        let plane = plane_with_todos(&["m8-1"]);
+        let root = plane.path().canonicalize().expect("canonical");
+        let windows = Windows::new();
+        windows.shown_when(|| false);
+        let (_watch, told) = looking_on::<Raw>(&root, &windows, SOON);
+        // The first look's turn finds every window hidden, and stops looking.
+        std::thread::sleep(SOON * 3);
+
+        std::fs::remove_file(root.join("workspaces/alpha/todos/m8-1.md")).expect("closed");
+        assert!(
+            told.recv_timeout(TOLD_BY_NOW).is_err(),
+            "looked while every window was hidden"
+        );
+        assert_eq!(windows.missed(&root).map(|missed| missed.count), Some(0));
+
+        windows.focused();
+        told_about(&told, "workspaces/alpha/todos/m8-1.md");
+    }
+
+    #[test]
+    fn a_change_the_events_told_is_not_told_again_by_a_look() {
+        use crate::watchset::raw::{Raw, raw};
+        use notify::event::{CreateKind, EventKind};
+        let plane = plane_with_todos(&[]);
+        let root = plane.path().canonicalize().expect("canonical");
+        let windows = Windows::new();
+        let (_watch, told) = looking_on::<Raw>(&root, &windows, SOON);
+        let todo = root.join("workspaces/alpha/todos/brief.md");
+
+        std::fs::write(&todo, "# brief\n").expect("a todo");
+        raw(EventKind::Create(CreateKind::File), &todo);
+
+        told_about(&told, "workspaces/alpha/todos/brief.md");
+        assert!(
+            told.recv_timeout(TOLD_BY_NOW).is_err(),
+            "a look told what the events had told"
+        );
+        assert_eq!(windows.missed(&root).map(|missed| missed.count), Some(0));
+    }
+
+    #[test]
+    fn a_storm_of_focus_changes_is_one_look() {
+        use crate::watchset::raw::Raw;
+        let plane = plane_with_todos(&["m8-1"]);
+        let root = plane.path().canonicalize().expect("canonical");
+        let windows = Windows::new();
+        let (_watch, told) = looking_on::<Raw>(&root, &windows, NEVER);
+
+        std::fs::remove_file(root.join("workspaces/alpha/todos/m8-1.md")).expect("closed");
+        for _ in 0..20 {
+            windows.focused();
+        }
+
+        told_about(&told, "workspaces/alpha/todos/m8-1.md");
+        assert!(
+            told.recv_timeout(TOLD_BY_NOW).is_err(),
+            "told more than once"
+        );
+        assert_eq!(windows.missed(&root).map(|missed| missed.count), Some(1));
+    }
+
+    #[test]
+    fn a_workspace_a_look_found_is_watched_and_looked_into_from_then_on() {
+        use crate::watchset::raw::Raw;
+        let plane = plane_with_todos(&[]);
+        let root = plane.path().canonicalize().expect("canonical");
+        let windows = Windows::new();
+        let (_watch, told) = looking_on::<Raw>(&root, &windows, SOON);
+
+        std::fs::create_dir_all(root.join("workspaces/beta/todos")).expect("a new workspace");
+        told_about(&told, "workspaces/beta");
+        assert!(
+            crate::watchset::raw::watched(&root.join("workspaces/beta/todos")) > 0,
+            "the new workspace's todos are not watched"
+        );
+
+        std::fs::write(root.join("workspaces/beta/todos/new.md"), "# new\n").expect("a todo");
+        let change = told_about(&told, "workspaces/beta/todos/new.md");
+        assert_eq!(change.workspace.as_deref(), Some("beta"));
+    }
+
+    #[test]
+    fn a_dropped_watch_is_no_longer_counted_and_its_looks_tell_nothing() {
+        use crate::watchset::raw::Raw;
+        let plane = plane_with_todos(&["m8-1"]);
+        let root = plane.path().canonicalize().expect("canonical");
+        let windows = Windows::new();
+        let (watch, told) = looking_on::<Raw>(&root, &windows, SOON);
+        assert_eq!(windows.missed(&root), Some(Missed::default()));
+
+        drop(watch);
+        std::fs::remove_file(root.join("workspaces/alpha/todos/m8-1.md")).expect("closed");
+        windows.focused();
+
+        assert_eq!(windows.missed(&root), None);
+        assert!(told.recv_timeout(TOLD_BY_NOW).is_err());
+    }
+
+    #[test]
+    fn a_look_compares_a_folder_by_its_being_there_and_a_file_by_its_time_and_length() {
+        // A clone's own writes move its folder's time, and no non-recursive watch tells them.
+        let plane = plane_with_todos(&["m8-1"]);
+        let root = plane.path().canonicalize().expect("canonical");
+        std::fs::create_dir_all(root.join("workspaces/alpha/svc")).expect("a clone");
+        let dirs = [
+            root.join("workspaces/alpha"),
+            root.join("workspaces/alpha/todos"),
+        ];
+        let before = look(&dirs);
+
+        std::fs::write(root.join("workspaces/alpha/svc/README.md"), "busy\n").expect("a write");
+        std::fs::write(root.join("workspaces/alpha/todos/m8-1.md"), "# changed\n").expect("a todo");
+        std::fs::write(root.join("workspaces/alpha/todos/m8-2.md"), "# new\n").expect("a todo");
+        let (changed, removed) = differ(&before, &look(&dirs));
+
+        let todos = root.join("workspaces/alpha/todos");
+        assert_eq!(
+            changed,
+            HashSet::from([todos.join("m8-1.md"), todos.join("m8-2.md")])
+        );
+        assert!(removed.is_empty());
+
+        let before = look(&dirs);
+        std::fs::remove_file(todos.join("m8-2.md")).expect("closed");
+        let (changed, removed) = differ(&before, &look(&dirs));
+        assert_eq!(changed, HashSet::from([todos.join("m8-2.md")]));
+        assert_eq!(removed, HashSet::from([todos.join("m8-2.md")]));
+    }
+
+    /// The cost of one look on a large project, for the PR (#756, SC-18). Not a check: a
+    /// number. `cargo test -p purlis-app --lib planewatch::tests::what_a_look_costs -- --ignored
+    /// --nocapture` prints it.
+    #[test]
+    #[ignore = "a measurement, not a check"]
+    fn what_a_look_costs() {
+        let plane = plane_with_todos(&[]);
+        let root = plane.path().canonicalize().expect("canonical");
+        for ws in 0..30 {
+            for store in ["todos", "memory", "sessions"] {
+                let dir = root.join(format!("workspaces/w{ws}/{store}"));
+                std::fs::create_dir_all(&dir).expect("a store");
+                for n in 0..20 {
+                    std::fs::write(dir.join(format!("{n}.md")), "# x\n").expect("a file");
+                }
+            }
+        }
+        let dirs: Vec<PathBuf> = wanted(&root).into_iter().collect();
+        let entries: usize = look(&dirs).values().map(HashMap::len).sum();
+        let rounds = 200;
+        let started = Instant::now();
+        for _ in 0..rounds {
+            std::hint::black_box(look(&dirs));
+        }
+        println!(
+            "one look: {} folders, {entries} entries, {:?}",
+            dirs.len(),
+            started.elapsed() / rounds
+        );
     }
 }

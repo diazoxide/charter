@@ -380,10 +380,17 @@ fn report_in(
     };
     DoctorReport {
         rows: doctor.run().into_iter().map(DoctorRow::from).collect(),
-        app_rows: [chat_footer(root), event_log(crate::EVENT_LOG.get())]
-            .into_iter()
-            .chain(config_root.and_then(|config_root| local_project(root, config_root)))
-            .collect(),
+        app_rows: [
+            chat_footer(root),
+            event_log(crate::EVENT_LOG.get()),
+            file_events(
+                crate::planewatch::windows().missed(root),
+                std::time::Instant::now(),
+            ),
+        ]
+        .into_iter()
+        .chain(config_root.and_then(|config_root| local_project(root, config_root)))
+        .collect(),
         full,
         path: std::env::var_os("PATH").map(|p| p.to_string_lossy().into_owned()),
     }
@@ -544,6 +551,80 @@ fn event_log(opened: Option<&Result<std::path::PathBuf, crate::EventLogRefused>>
     }
 }
 
+/// `file events`: do the platform's file events keep the window up with the project (#756)?
+///
+/// **The app's own row**, for `chat_footer`'s reason: the watch is the app's, and only the app
+/// knows what its own looks had to tell ([`crate::planewatch::Windows`]). `missed` is what
+/// they told for this project, or `None` when nothing watches it. A warning lasts
+/// [`crate::planewatch::LATELY`] after the last change the events did not tell, so a stall the
+/// operator noticed is still on the row when they open the doctor, and a stall long past does
+/// not hold the count up for the rest of the day.
+fn file_events(missed: Option<crate::planewatch::Missed>, now: std::time::Instant) -> DoctorRow {
+    let row = |status: DoctorStatus, detail: String, hint: String| DoctorRow {
+        name: "file events".to_owned(),
+        status,
+        detail,
+        hint,
+        checked: true,
+        settings: None,
+        fix: None,
+    };
+    let looks = format!(
+        "While a window is shown, purlis also looks at the project's folders every {} seconds \
+         and each time you come back to the window, and catches up on any change the events \
+         did not tell.",
+        crate::planewatch::SWEEP_EVERY.as_secs()
+    );
+    let lately = crate::planewatch::LATELY.as_secs() / 60;
+    let Some(missed) = missed else {
+        return row(
+            DoctorStatus::Warn,
+            "not checked (purlis is not watching this project's files)".to_owned(),
+            "changes made outside this window reach its panels only when they are read again; \
+             close the project and open it again to start the watch"
+                .to_owned(),
+        );
+    };
+    let ago = missed.last.map(|last| now.saturating_duration_since(last));
+    match ago {
+        Some(ago) if ago < crate::planewatch::LATELY => {
+            let minutes = ago.as_secs() / 60;
+            let when = match minutes {
+                0 => "less than a minute ago".to_owned(),
+                1 => "1 minute ago".to_owned(),
+                n => format!("{n} minutes ago"),
+            };
+            let changes = match missed.count {
+                1 => "1 change".to_owned(),
+                n => format!("{n} changes"),
+            };
+            row(
+                DoctorStatus::Warn,
+                format!(
+                    "file events are late or missing: purlis's own look found {changes} they \
+                     had not told since it opened this project, the last {when}"
+                ),
+                format!(
+                    "The window caught up each time, so nothing is lost: changes made outside \
+                     it reach it a few seconds late. {looks} This clears {lately} minutes after \
+                     the last late change."
+                ),
+            )
+        }
+        _ => row(
+            DoctorStatus::Ok,
+            match missed.count {
+                0 => "file events have told every change purlis's own look found".to_owned(),
+                n => format!(
+                    "file events are keeping up again; purlis's own look found {n} they had \
+                     not told since it opened this project, none in the last {lately} minutes"
+                ),
+            },
+            looks,
+        ),
+    }
+}
+
 /// `local project`: only on this machine's local project while it is still in the config home,
 /// where no sandboxed chat starts (#1670). The launch moves it when nothing works in it
 /// (`purlis_core::localproject`); this says so where the person meets it, every time the
@@ -582,6 +663,51 @@ mod tests {
             std::fs::create_dir_all(root.join(d)).expect("a directory");
         }
         (dir, root)
+    }
+
+    /// #756: the row reads the watch's own looks: a warning while a change the events did not
+    /// tell is recent, green before any and again once the last is long past.
+    #[test]
+    fn the_file_events_row_warns_after_a_change_the_events_did_not_tell() {
+        use crate::planewatch::Missed;
+        let now = std::time::Instant::now();
+        let ago = |secs: u64| now.checked_sub(std::time::Duration::from_secs(secs));
+
+        let kept_up = file_events(Some(Missed::default()), now);
+        assert_eq!(kept_up.name, "file events");
+        assert_eq!(kept_up.status, DoctorStatus::Ok);
+        assert!(kept_up.checked);
+
+        let late = file_events(
+            Some(Missed {
+                count: 3,
+                last: ago(120),
+            }),
+            now,
+        );
+        assert_eq!(late.status, DoctorStatus::Warn);
+        assert!(late.detail.contains("3 changes"), "{late:?}");
+        assert!(late.detail.contains("2 minutes ago"), "{late:?}");
+
+        if let Some(long_ago) = ago(3600) {
+            let past = file_events(
+                Some(Missed {
+                    count: 3,
+                    last: Some(long_ago),
+                }),
+                now,
+            );
+            assert_eq!(past.status, DoctorStatus::Ok);
+            assert!(past.detail.contains("keeping up again"), "{past:?}");
+        }
+
+        let unwatched = file_events(None, now);
+        assert_eq!(
+            unwatched.status,
+            DoctorStatus::Warn,
+            "an absent answer is not health"
+        );
+        assert!(unwatched.detail.starts_with("not checked"), "{unwatched:?}");
     }
 
     /// #1670: the local project still in the config home is said, where it opens; any other
