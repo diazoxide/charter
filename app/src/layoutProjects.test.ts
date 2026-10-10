@@ -121,6 +121,27 @@ describe("a version 2 file written before the views kept anything per project", 
   });
 });
 
+describe("a version 1 file", () => {
+  it("takes what a view keeps for a project, and goes forward to version 2 with its arrangement", async () => {
+    // Version 1's id for the navigation region.
+    const v1 = [{ id: "explorer", side: "right", order: 0, collapsed: true }];
+    put({ version: 1, regions: v1, explorer: { closed: ["workspaces"] } });
+
+    act(() => keepFacet("/p", "explorer", { closed: ["files"] }));
+
+    await vi.waitFor(() => expect(writes()).toHaveLength(1));
+    const written = lastWritten();
+    expect(written.version).toBe(2);
+    expect(written.regions).toContainEqual(
+      expect.objectContaining({ id: "navigation", side: "right", collapsed: true }),
+    );
+    expect(written.projects).toEqual({ "/p": { explorer: { closed: ["files"] } } });
+    expect(closedSections("/p")).toEqual(new Set(["files"]));
+    expect(closedSections("/q")).toEqual(new Set(["workspaces"]));
+    expect(aboutThisMachine()).toEqual([]);
+  });
+});
+
 describe("a project's entry", () => {
   it("is written with what its views keep, and no arrangement while it has none of its own", async () => {
     act(() => keepFacet("/one", "chats", { scope: "tab" }));

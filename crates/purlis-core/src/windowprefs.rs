@@ -353,36 +353,58 @@ pub fn write_layout(config_root: &Path, text: &str) -> io::Result<()> {
         Some(dismissed) => object.insert(DISMISSED.to_owned(), dismissed),
         None => object.remove(DISMISSED),
     };
+    let sent: Vec<String> = object
+        .get(PROJECTS)
+        .and_then(serde_json::Value::as_object)
+        .map(|projects| projects.keys().cloned().collect())
+        .unwrap_or_default();
     keep_other_projects(
         config_root,
         object,
         was.as_mut().and_then(|was| was.get_mut(PROJECTS)),
     );
-    within_the_file(config_root, &mut document);
+    within_the_file(config_root, &mut document, &sent)?;
     write_document(config_root, &document)
 }
 
 /// **The whole file is never one the next launch refuses for its size** (F4, #1686): should
 /// the dismissals, the projects and the rest together still be past [`MAX_BYTES`], projects
-/// are let go, the ones opened longest ago first, until it fits.
-fn within_the_file(config_root: &Path, document: &mut serde_json::Value) {
+/// are let go until it fits: first the ones this window did not send, then the ones it did,
+/// each the one opened longest ago first, so the project in front goes last. Whole entries
+/// go, never part of one, and the document is written out again after each, so what lands is
+/// always JSON. Should it still be past [`MAX_BYTES`] with no project left, **nothing is
+/// written**: the file on disk, which a launch reads, is kept rather than replaced by one the
+/// next launch refuses whole.
+fn within_the_file(
+    config_root: &Path,
+    document: &mut serde_json::Value,
+    sent: &[String],
+) -> io::Result<()> {
     let size = |document: &serde_json::Value| {
         serde_json::to_string_pretty(document).map_or(u64::MAX, |text| text.len() as u64 + 1)
     };
     if size(document) <= MAX_BYTES {
-        return;
+        return Ok(());
     }
-    let mut oldest_last = by_opened(
-        config_root,
-        document
-            .get(PROJECTS)
-            .and_then(serde_json::Value::as_object)
-            .map(|projects| projects.keys().cloned().collect())
-            .unwrap_or_default(),
-    );
+    let (theirs, ours): (Vec<String>, Vec<String>) = document
+        .get(PROJECTS)
+        .and_then(serde_json::Value::as_object)
+        .map(|projects| projects.keys().cloned().collect::<Vec<_>>())
+        .unwrap_or_default()
+        .into_iter()
+        .partition(|project| !sent.contains(project));
+    // Popped from the end: the window's own last, each list the one opened longest ago first.
+    let mut oldest_last = by_opened(config_root, ours);
+    oldest_last.extend(by_opened(config_root, theirs));
     while size(document) > MAX_BYTES {
         let Some(oldest) = oldest_last.pop() else {
-            return;
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "the window sent a layout that would be past {MAX_BYTES} bytes with no \
+                     project's own kept, so the layout on disk was kept"
+                ),
+            ));
         };
         if let Some(projects) = document
             .get_mut(PROJECTS)
@@ -391,6 +413,7 @@ fn within_the_file(config_root: &Path, document: &mut serde_json::Value) {
             projects.remove(&oldest);
         }
     }
+    Ok(())
 }
 
 /// `projects`, the ones opened last first (the machine store's recents), so the one opened
@@ -896,6 +919,73 @@ mod tests {
         )
         .unwrap();
         assert!(std::fs::metadata(layout_path(home.path())).unwrap().len() <= MAX_BYTES);
+        assert!(read_layout(home.path()).trouble.is_none());
+    }
+
+    #[test]
+    fn the_whole_file_lets_go_of_other_windows_projects_before_the_ones_sent() {
+        // #1686: when the rest of the file leaves the projects less than their bound, the
+        // project in front of the window that wrote is the last to go, however recently
+        // another window opened its own.
+        let home = home();
+        crate::machine::update(home.path(), |store| {
+            store.remember(Path::new("/mine"), 100);
+            store.remember(Path::new("/theirs"), 200);
+        })
+        .unwrap();
+        write_layout(
+            home.path(),
+            &serde_json::json!({
+                "version": 2, "regions": [], "projects": { "/theirs": a_project_keeping(2000) },
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let causes: Vec<String> = (0..2000).map(|i| format!("pin-dormant:{i:0>60}")).collect();
+        set_dismissed(home.path(), "/d", &causes).unwrap();
+        // The rest of the file: room for one project's entry beside the dismissals, not two.
+        let on_disk = std::fs::metadata(layout_path(home.path())).unwrap().len();
+        let rest = "x".repeat(usize::try_from(MAX_BYTES - on_disk - 500).unwrap());
+        write_layout(
+            home.path(),
+            &serde_json::json!({
+                "version": 2, "regions": [], "rest": rest,
+                "projects": { "/mine": a_project_keeping(2000) },
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let projects = projects_in(home.path());
+        let kept = projects.as_object().expect("a map");
+        assert!(kept.contains_key("/mine"), "the window's own is kept");
+        assert!(!kept.contains_key("/theirs"), "another window's goes first");
+        assert!(std::fs::metadata(layout_path(home.path())).unwrap().len() <= MAX_BYTES);
+    }
+
+    #[test]
+    fn a_layout_past_the_file_with_no_project_left_is_not_written() {
+        // #1686: a file past MAX_BYTES is refused whole at the next launch, so one that fits
+        // only by losing more than its projects is not written, and the one on disk stays.
+        let home = home();
+        put(home.path(), LAYOUT, A_LAYOUT);
+        let causes: Vec<String> = (0..2000).map(|i| format!("pin-dormant:{i:0>60}")).collect();
+        set_dismissed(home.path(), "/d", &causes).unwrap();
+        let before = std::fs::read_to_string(layout_path(home.path())).unwrap();
+        let rest = "x".repeat(usize::try_from(MAX_BYTES).unwrap() / 2);
+        let refused = write_layout(
+            home.path(),
+            &serde_json::json!({
+                "version": 2, "regions": [], "rest": rest,
+                "projects": { "/p": a_project_keeping(200) },
+            })
+            .to_string(),
+        )
+        .expect_err("past the file");
+        assert_eq!(refused.kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(
+            std::fs::read_to_string(layout_path(home.path())).unwrap(),
+            before
+        );
         assert!(read_layout(home.path()).trouble.is_none());
     }
 
