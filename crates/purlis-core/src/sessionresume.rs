@@ -38,7 +38,8 @@ pub enum NotResumed {
     /// start.
     NoProfileFor(String),
     /// The harness was given the conversation and could not bring it back: it ended before it
-    /// reported a session (the window's `after_failure`).
+    /// reported a session (the window's `after_failure`). `conversation` is kept for the
+    /// record and the logs; the sentence the window says names no id (#1646).
     HarnessLostIt {
         harness: String,
         conversation: String,
@@ -61,12 +62,9 @@ impl NotResumed {
                 "no harness profile on this machine runs {harness}, so it starts on this \
                  project's default with the record in its briefing"
             ),
-            Self::HarnessLostIt {
-                harness,
-                conversation,
-            } => format!(
-                "{harness} could not bring back conversation {conversation}, so it starts with the \
-                 record in its briefing"
+            Self::HarnessLostIt { harness, .. } => format!(
+                "{harness} could not bring back its conversation, so it starts with the record in \
+                 its briefing"
             ),
         }
     }
@@ -365,4 +363,26 @@ fn default_profile(set: &crate::profiles::ProfileSet) -> Option<String> {
     set.default
         .clone()
         .or_else(|| set.profiles().first().map(|p| p.name.clone()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_conversation_the_harness_could_not_bring_back_is_said_without_its_id() {
+        let id = "082aefb8-82fe-4d49-8fb4-ac29ffc8f254";
+        let said = NotResumed::HarnessLostIt {
+            harness: "claude".to_owned(),
+            conversation: id.to_owned(),
+        }
+        .said();
+
+        assert_eq!(
+            said,
+            "claude could not bring back its conversation, so it starts with the record in its \
+             briefing"
+        );
+        assert!(!said.contains(id), "{said}");
+    }
 }
