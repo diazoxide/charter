@@ -31,6 +31,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::LazyLock;
 
 const PLANNED: &str = "not in this version yet";
 
@@ -189,11 +190,16 @@ fn skill_texts(page: &str) -> Vec<String> {
 
 /// `(first word, optional second word)` of every suggestion in `text`.
 fn suggestions(text: &str) -> Vec<(String, Option<String>)> {
-    let re = regex::Regex::new(
-        r"(?:`(?:charter|purlis) ([a-z][a-z-]*)(?: ([a-z][a-z-]*))?|(?:\b[Rr]un|\b[Tt]ry|\b[Uu]se|\bwith|:)\s+(?:charter|purlis) ([a-z][a-z-]*)(?: ([a-z][a-z-]*))?)",
-    )
-    .expect("the pattern compiles");
-    re.captures_iter(text)
+    // Compiled once: the scan asks it of every string literal in the shipped source, and
+    // compiling it for each one was most of this test's two minutes on CI.
+    static SUGGESTION: LazyLock<regex::Regex> = LazyLock::new(|| {
+        regex::Regex::new(
+            r"(?:`(?:charter|purlis) ([a-z][a-z-]*)(?: ([a-z][a-z-]*))?|(?:\b[Rr]un|\b[Tt]ry|\b[Uu]se|\bwith|:)\s+(?:charter|purlis) ([a-z][a-z-]*)(?: ([a-z][a-z-]*))?)",
+        )
+        .expect("the pattern compiles")
+    });
+    SUGGESTION
+        .captures_iter(text)
         .filter_map(|c| {
             let backticked = c.get(1).is_some();
             let first = c.get(1).or(c.get(3)).expect("a first word").as_str();
