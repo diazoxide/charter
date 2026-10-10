@@ -95,6 +95,52 @@ fn a_libpq_string_points_at_its_host_and_port() {
     }
 }
 
+/// #1708: a libpq value that checks the server's certificate by name (`sslmode=verify-full`)
+/// keeps its `host`, so the name still matches, and connects to the tunnel through `hostaddr`,
+/// which libpq connects to instead of looking the name up. Any other value is pointed as before.
+#[test]
+fn a_libpq_value_that_checks_the_certificate_by_name_keeps_the_name() {
+    let p = pointed("host=db.example.com port=16752 dbname=orders sslmode=verify-full")
+        .expect("a target");
+    assert_eq!((p.host(), p.port()), ("db.example.com", 16752));
+    assert_eq!(
+        p.at(41234),
+        "host=db.example.com port=41234 dbname=orders sslmode=verify-full hostaddr=127.0.0.1"
+    );
+    let p = pointed("sslmode='verify-full' host=db.example.com").expect("a target");
+    assert_eq!(
+        p.at(9),
+        "sslmode='verify-full' host=db.example.com port=9 hostaddr=127.0.0.1"
+    );
+    let p = pointed("postgres://app:pw@db.example.com:16752/orders?sslmode=verify-full")
+        .expect("a target");
+    assert_eq!(
+        p.at(41234),
+        "postgres://app:pw@db.example.com:41234/orders?sslmode=verify-full&hostaddr=127.0.0.1"
+    );
+    // Only libpq's own schemes: another driver's answer is its own (D-1708-3).
+    assert_eq!(
+        pointed("mysql://u:p@maria.example.com/app?ssl-mode=VERIFY_IDENTITY")
+            .expect("a target")
+            .at(7),
+        "mysql://u:p@127.0.0.1:7/app?ssl-mode=VERIFY_IDENTITY"
+    );
+    // A check that does not compare the name is pointed as before.
+    assert_eq!(
+        pointed("host=db.example.com sslmode=verify-ca")
+            .expect("a target")
+            .at(9),
+        "host=127.0.0.1 sslmode=verify-ca port=9"
+    );
+    // A fragment after the query would swallow what is added: pointed as before.
+    assert_eq!(
+        pointed("postgres://db.example.com/x?sslmode=verify-full#frag")
+            .expect("a target")
+            .at(9),
+        "postgres://127.0.0.1:9/x?sslmode=verify-full#frag"
+    );
+}
+
 #[test]
 fn a_bare_host_and_port_points_there() {
     let p = pointed("db.example.com:16752").expect("a target");

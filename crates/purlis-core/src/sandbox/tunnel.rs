@@ -219,6 +219,30 @@ fn url(value: &str) -> Option<Pointed> {
         Some(port) => digits(port)?,
         None => default,
     };
+    // libpq's own URL, checking the certificate by name: the name stays, and libpq connects to
+    // `hostaddr` instead (#1708). Not past a fragment, which would swallow what is added.
+    let libpq = scheme == bare
+        && matches!(
+            bare.to_ascii_lowercase().as_str(),
+            "postgres" | "postgresql"
+        );
+    if libpq && !tail.contains('#') && query.split('&').any(|pair| pair == VERIFY_FULL) {
+        let spelled = if host.contains(':') {
+            format!("[{host}]")
+        } else {
+            host.clone()
+        };
+        return Some(Pointed {
+            host,
+            port,
+            pieces: vec![
+                Piece::Text(format!("{scheme}://{userinfo}{spelled}:")),
+                Piece::Port,
+                Piece::Text(format!("{tail}&hostaddr=")),
+                Piece::Host,
+            ],
+        });
+    }
     Some(Pointed {
         host,
         port,
@@ -229,6 +253,10 @@ fn url(value: &str) -> Option<Pointed> {
         ],
     })
 }
+
+/// libpq's word for a check of the server's certificate that compares its name: the one a
+/// tunnel on loopback would fail unless the name is kept (#1708).
+const VERIFY_FULL: &str = "sslmode=verify-full";
 
 /// `host[:port]` or `[v6][:port]`: the host, unbracketed, and the port as written.
 fn split_host_port(hostport: &str) -> Option<(String, Option<&str>)> {
@@ -326,9 +354,15 @@ fn key_values(value: &str) -> Option<Pointed> {
         Some(at) => digits(&unquoted(at))?,
         None => 5432,
     };
+    // Checking the certificate by name (#1708): the host's value stays, so the name matches,
+    // and libpq connects to `hostaddr`, added, instead of looking the name up.
+    let by_name = matches!(named("sslmode")[..], [one] if format!("sslmode={}", unquoted(one)) == VERIFY_FULL);
     // The value as it was, with the host's value and the port's swapped, and a port added where
     // it named none.
-    let mut places: Vec<(usize, usize, Piece)> = vec![(host_at.0, host_at.1, Piece::Host)];
+    let mut places: Vec<(usize, usize, Piece)> = Vec::new();
+    if !by_name {
+        places.push((host_at.0, host_at.1, Piece::Host));
+    }
     if let Some((start, end)) = port_at {
         places.push((start, end, Piece::Port));
     }
@@ -344,6 +378,10 @@ fn key_values(value: &str) -> Option<Pointed> {
     if port_at.is_none() {
         pieces.push(Piece::Text(" port=".to_owned()));
         pieces.push(Piece::Port);
+    }
+    if by_name {
+        pieces.push(Piece::Text(" hostaddr=".to_owned()));
+        pieces.push(Piece::Host);
     }
     Some(Pointed { host, port, pieces })
 }

@@ -17,6 +17,9 @@ export const SETTLE_MS = 1500;
  */
 const drawnAt = () => Date.now();
 
+/** The time a press lands at, read in the handler that answers it. */
+const pressedAt = () => Date.now();
+
 /** What the window sends back for each task: the block it showed for it, exactly. */
 function seenOf(members: readonly Member[]): SeenBlock[] {
   return members.map((one) => ({
@@ -33,10 +36,17 @@ function seenOf(members: readonly Member[]): SeenBlock[] {
  * the session's tab: "3 tasks want to reach registry.npmjs.org", each task named by its whole
  * path, and one answer that applies to each task listed and to no other chat.
  *
- * - **Allow for these tasks** grants each task listed its own grant ("this chat" for each of
- *   them), never the session that asked them: a session's permission and its tasks' are apart.
- *   **Always allow…** keeps one grant for every chat here, as a block's own does, and every
- *   task listed restarts to take it. **Keep blocked** answers each task listed.
+ * - **Its scopes in the single-chat Notice's order** (#1709): for a host, the main button allows
+ *   it for this project on this machine, and **Other scopes…** offers only these tasks, or
+ *   everyone in the project; for a folder, only these tasks first, then **Always allow…** for
+ *   this project on this machine. "Only these tasks" grants each task listed its own grant
+ *   ("this chat" for each of them), never the session that asked them: a session's permission
+ *   and its tasks' are apart. A wider scope keeps one grant for every chat here, as a block's own
+ *   does. Every task listed that is not held takes it at its restart. **Keep blocked** answers
+ *   each task listed. Only the scopes policy leaves open are offered (#1343).
+ * - **What it says** (#1709), as the single-chat Notice does: a task whose connection is held
+ *   while the person answers (`held`) is said to wait, and an Allow lets its command carry on;
+ *   what an administrator's policy ruled out here is said (`ruled`).
  * - **An answer is to what was shown** (D-1508-9). Every press sends each task with the block
  *   shown for it, and the core refuses the whole answer unless each task is held on exactly
  *   that block now and is recorded as a task of this session. A task that hits the same block
@@ -88,7 +98,7 @@ export function TaskBlocksNotice({
   const joined = drawn.joined;
   /** Whether a press now is too soon after what it is on was drawn. */
   const tooSoon = () => {
-    if (Date.now() - drawn.at < SETTLE_MS) {
+    if (pressedAt() - drawn.at < SETTLE_MS) {
       setSaid(
         "This question was drawn or changed just now, so nothing was answered. Read the tasks " +
           "it lists and answer again.",
@@ -134,8 +144,24 @@ export function TaskBlocksNotice({
       .finally(() => setBusy(false));
   };
   const allowsAt = (level: GrantLevel) => group.levels.includes(level);
-  const always = allowsAt("you") || (group.offer === "host" && allowsAt("project"));
+  /** The main button, and the rest under a menu, in the single-chat Notice's order. */
+  const order: readonly GrantLevel[] =
+    group.offer === "host" ? ["you", "chat", "project"] : ["chat", "you"];
+  const open = order.filter(allowsAt);
+  const main = open[0];
+  const others = open.slice(1);
+  const scope: Readonly<Record<GrantLevel, string>> = {
+    you: "Allow for me on this machine",
+    chat: `Allow only for these ${count} tasks`,
+    project: "Allow for everyone in this project",
+  };
   const target = <code className="block-allow-target">{group.target}</code>;
+  /** The tasks whose connection is held while the person answers (#1666): set by the app. */
+  const held = group.members.filter((one) => one.block.held);
+  /** What policy ruled out here, once each (#1666). */
+  const ruled = [
+    ...new Set(group.members.flatMap((one) => (one.block.ruled ? [one.block.ruled] : []))),
+  ];
 
   const under = (
     <div className="block-allow" id={id}>
@@ -146,29 +172,28 @@ export function TaskBlocksNotice({
       </ul>
       {alwaysOpen && (
         <div className="block-allow-actions">
-          {allowsAt("you") && (
-            <button type="button" tabIndex={0} disabled={busy} onClick={() => allow("you")}>
-              Allow for me on this machine
+          {others.map((level) => (
+            <button
+              key={level}
+              type="button"
+              tabIndex={0}
+              disabled={busy}
+              onClick={() => allow(level)}
+            >
+              {scope[level]}
             </button>
-          )}
-          {group.offer === "host" && allowsAt("project") && (
-            <button type="button" tabIndex={0} disabled={busy} onClick={() => allow("project")}>
-              Allow for everyone in this project
-            </button>
-          )}
+          ))}
         </div>
       )}
     </div>
   );
   const keep: NoticeAction = { label: "Keep blocked", onPress: keepBlocked };
   const allows: NoticeAction[] = [
-    ...(allowsAt("chat")
-      ? [{ label: `Allow for these ${count} tasks`, onPress: () => allow("chat") }]
-      : []),
-    ...(always
+    ...(main !== undefined ? [{ label: scope[main], onPress: () => allow(main) }] : []),
+    ...(others.length > 0
       ? [
           {
-            label: "Always allow…",
+            label: group.offer === "host" ? "Other scopes…" : "Always allow…",
             onPress: () => setAlways((was) => !was),
             opens: { id, open: alwaysOpen },
           },
@@ -189,8 +214,22 @@ export function TaskBlocksNotice({
       {count} tasks want to {group.offer === "host" ? "reach " : "write "}
       {target}
       {group.offer === "write" && " and everything in it"}:{" "}
-      {listed(group.members.map((one) => one.whose))}. The sandbox blocked {group.said} in each. One
-      answer applies to each task listed, and to no other chat.
+      {listed(group.members.map((one) => one.whose))}.{" "}
+      {held.length === 0 ? (
+        <>The sandbox blocked {group.said} in each.</>
+      ) : (
+        <>
+          {held.length === count
+            ? "Each one's command is waiting"
+            : `${listed(held.map((one) => one.whose))} ${held.length === 1 ? "is" : "are"} waiting`}{" "}
+          on {group.said}: purlis holds the connection while you answer, and an Allow lets the same
+          command carry on. If nobody answers within a minute it is refused, and an Allow after that
+          tells the task to run it again.
+          {held.length < count && ` The sandbox blocked it in the others.`}
+        </>
+      )}{" "}
+      One answer applies to each task listed, and to no other chat.
+      {ruled.length > 0 && ` ${ruled.join(" ")}`}
       {joined.length > 0 && ` ${listed(joined)} joined this question after it was first shown.`}
       {said !== undefined && ` ${said}`}
     </Notice>

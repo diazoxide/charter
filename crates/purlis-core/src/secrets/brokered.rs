@@ -1122,7 +1122,7 @@ fn tunnelled(
     reached: Option<crate::sandbox::egress::Reached>,
 ) -> std::io::Result<(Vec<crate::sandbox::tunnel::Tunnel>, Vec<String>)> {
     use crate::sandbox::tunnel::{Route, TUNNELS_AT_MOST, Tunnel, route};
-    let reach = crate::sandbox::reach::Reach::open(confines.hosts.clone());
+    let reach = confines.decides();
     let own = crate::sandbox::hosts::own_addresses();
     let mut tunnels: Vec<Tunnel> = Vec::new();
     let mut notes = Vec::new();
@@ -1140,7 +1140,10 @@ fn tunnelled(
         else {
             continue;
         };
-        match route(&value, &reach, &own) {
+        // libpq's own pair (#1708): a host alone in PGHOST, its port beside it in PGPORT.
+        let pair = libpq_pair(name, &value, &prepared.env);
+        let routed = pair.as_ref().map_or(value, |pair| pair.target.clone());
+        match route(&routed, &reach, &own) {
             Route::Through(pointed, decision) => {
                 let at = match tunnels.iter().find(|t| t.target() == pointed.target()) {
                     Some(open) => open.port(),
@@ -1159,9 +1162,16 @@ fn tunnelled(
                         port
                     }
                 };
-                let swapped = pointed.at(at);
-                exec::set_var(&mut prepared.env, name, swapped.clone());
-                prepared.secret_values.push(swapped);
+                if let Some(pair) = &pair {
+                    // Nothing secret is added: loopback and the tunnel's port.
+                    let place = if pair.by_name { PGHOSTADDR } else { PGHOST };
+                    exec::set_var(&mut prepared.env, place, crate::sandbox::tunnel::LOOPBACK);
+                    exec::set_var(&mut prepared.env, PGPORT, at.to_string());
+                } else {
+                    let swapped = pointed.at(at);
+                    exec::set_var(&mut prepared.env, name, swapped.clone());
+                    prepared.secret_values.push(swapped);
+                }
                 tracing::info!(
                     "purlis: {name} of a brokered `secret exec` reaches its host through a \
                      tunnel on port {at}"
@@ -1176,6 +1186,55 @@ fn tunnelled(
         }
     }
     Ok((tunnels, notes))
+}
+
+/// libpq's variables for where it connects: the host, the address it connects to instead of
+/// looking the host up, the port, and the certificate check.
+const PGHOST: &str = "PGHOST";
+const PGHOSTADDR: &str = "PGHOSTADDR";
+const PGPORT: &str = "PGPORT";
+const PGSSLMODE: &str = "PGSSLMODE";
+
+/// A host handed alone in libpq's `PGHOST`, with its port beside it (#1708).
+struct LibpqPair {
+    /// `host:port`, as a value pointed at one place spells it.
+    target: String,
+    /// The certificate is checked by name (`PGSSLMODE=verify-full`): `PGHOST` stays, and libpq
+    /// connects to `PGHOSTADDR` instead.
+    by_name: bool,
+}
+
+/// **`PGHOST` as one place** (#1708): where `name` is libpq's `PGHOST` and `value` a host alone,
+/// the host with its port from `PGPORT` in `env` (libpq's 5432 where none is set). None for any
+/// other variable, a value that already names its port, a port that is not one, or where
+/// `PGHOSTADDR` is set already, which could be read two ways.
+fn libpq_pair(name: &str, value: &str, env: &[(OsString, OsString)]) -> Option<LibpqPair> {
+    let var = |wanted: &str| {
+        env.iter()
+            .rev()
+            .find(|(k, _)| k == wanted)
+            .map(|(_, v)| v.to_str().map(str::to_owned))
+    };
+    if name != PGHOST
+        || crate::sandbox::tunnel::pointed(value).is_some()
+        || var(PGHOSTADDR).is_some()
+    {
+        return None;
+    }
+    let port = match var(PGPORT) {
+        None => "5432".to_owned(),
+        Some(Some(port)) if !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) => port,
+        Some(_) => return None,
+    };
+    let host = if value.contains(':') {
+        format!("[{value}]")
+    } else {
+        value.to_owned()
+    };
+    Some(LibpqPair {
+        target: format!("{host}:{port}"),
+        by_name: var(PGSSLMODE).flatten().as_deref() == Some("verify-full"),
+    })
 }
 
 /// What runs beside a brokered child: the chat's egress proxy and a temp directory of its own,
@@ -1198,9 +1257,7 @@ impl Beside {
                 crate::sandbox::Confinement::serving(crate::sandbox::egress::Serving {
                     refusals,
                     reached,
-                    ..crate::sandbox::egress::Serving::of(crate::sandbox::reach::Reach::open(
-                        confines.hosts.clone(),
-                    ))
+                    ..crate::sandbox::egress::Serving::of(confines.decides())
                 })
                 .map(Self::Confined)
             }

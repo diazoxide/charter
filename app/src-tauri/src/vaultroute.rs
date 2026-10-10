@@ -483,12 +483,7 @@ pub fn allow_refused_vault(
             name: held.chats().shown_name(session),
         },
         &vault,
-        &crate::network::recorded(
-            &|number, audited| held.hooks().record_grant(&root, number, audited),
-            planes.network(),
-            &root,
-            held.chats(),
-        ),
+        &held.audit_then_record(planes.network()),
         now_secs(),
     )?;
     let told = tell(

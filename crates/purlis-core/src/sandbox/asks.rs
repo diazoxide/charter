@@ -20,6 +20,9 @@
 //! - **Keep blocked** refuses what is held on that host now and what comes after, until an Allow.
 //! - **Bounded.** At most [`MOST_HELD`] connections are held at once; one more is refused at
 //!   once, as before, and not asked about ([`Answer::Busy`]).
+//! - **Nobody to ask.** Where no Notice can be raised ([`Asks::asking_while`]: the project's
+//!   hooks are not listening yet, or the chat has no number yet), a connection is refused at
+//!   once, as before, and not held a minute for an ask nobody sees ([`Answer::NobodyToAsk`]).
 
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::time::{Duration, Instant};
@@ -51,6 +54,8 @@ pub enum Answer {
     TimedOut,
     /// The board holds all it holds: refused at once, not asked about.
     Busy,
+    /// No Notice can be raised now: refused at once, not asked about.
+    NobodyToAsk,
 }
 
 /// What a board tells the app.
@@ -89,7 +94,11 @@ pub struct Asks {
     hold: Duration,
     group: Duration,
     known: Option<Known>,
+    askable: Option<Askable>,
 }
+
+/// Whether a Notice can be raised now ([`Asks::asking_while`]).
+pub type Askable = Arc<dyn Fn() -> bool + Send + Sync + 'static>;
 
 /// Where a host the person allowed already, since the chat started, is found ([`Asks::knowing`]):
 /// the scope it is allowed at, or none.
@@ -118,6 +127,7 @@ impl Asks {
             hold,
             group,
             known: None,
+            askable: None,
         }
     }
 
@@ -127,6 +137,17 @@ impl Asks {
     pub fn knowing(self, known: Known) -> Self {
         Self {
             known: Some(known),
+            ..self
+        }
+    }
+
+    /// This board, holding a connection only while `askable` says a Notice can be raised: at
+    /// any other time a connection nothing lets on is refused at once ([`Answer::NobodyToAsk`]),
+    /// so nothing waits a minute on an ask nobody sees.
+    #[must_use]
+    pub fn asking_while(self, askable: Askable) -> Self {
+        Self {
+            askable: Some(askable),
             ..self
         }
     }
@@ -179,6 +200,9 @@ impl Asks {
         }
         if state.holding >= MOST_HELD {
             return Answer::Busy;
+        }
+        if self.askable.as_ref().is_some_and(|askable| !askable()) {
+            return Answer::NobodyToAsk;
         }
         state.holding += 1;
         let deadline = Instant::now() + self.hold;
@@ -293,14 +317,11 @@ impl Asks {
         self.changed.notify_all();
     }
 
-    /// The hosts allowed live on this board, as a grant writes each: what a run for the chat
-    /// started now carries besides what the chat was compiled with (#1667).
-    pub fn allowed_live(&self) -> Vec<String> {
-        self.state()
-            .live
-            .iter()
-            .map(|(host, _)| host.clone())
-            .collect()
+    /// The hosts allowed live on this board, as a grant writes each, with the scope each was
+    /// allowed at: what a run for the chat started now carries besides what the chat was
+    /// compiled with (#1667), decided at that scope (#1708).
+    pub fn allowed_live(&self) -> Vec<(String, By)> {
+        self.state().live.clone()
     }
 
     /// **An Allow of `host` at scope `by` was removed**: what it allowed live reaches nothing

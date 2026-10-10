@@ -1987,3 +1987,160 @@ fn a_connection_string_to_a_host_the_chat_may_reach_goes_through_a_tunnel_to_exa
         "every tunnelled connection is told: {reached:?}"
     );
 }
+
+/// #1708: a tunnelled connection is told by the layer that lists its host for the chat (here,
+/// yours on this machine), as the chat's own proxy tells it, never as an Open host. Binds
+/// sockets: first run on CI.
+#[test]
+fn a_tunnelled_connection_is_told_by_the_layer_that_lists_its_host_for_the_chat() {
+    use std::io::Read as _;
+    let database = std::net::TcpListener::bind("127.0.0.1:0").expect("a stand-in database");
+    let at = database.local_addr().unwrap();
+    let answering = std::thread::spawn(move || {
+        let (mut conn, _) = database.accept().expect("the tunnel's connection");
+        let mut asked = [0u8; 4];
+        conn.read_exact(&mut asked).expect("the client's bytes");
+        conn.write_all(b"pong").expect("answered");
+    });
+    let project = project();
+    holding_dsn(
+        project.path(),
+        &format!("postgres://app:pw@127.0.0.1:{}/orders", at.port()),
+    );
+    let mut want = wanted(
+        project.path(),
+        "team",
+        sh(r#"hp="${DSN#*@}"; hp="${hp%%/*}";
+              printf ping | /usr/bin/nc -w 5 "${hp%:*}" "${hp#*:}""#),
+    );
+    want.env = vec!["DSN=DSN".into()];
+    let listed = format!("127.0.0.1:{}", at.port());
+    let mut asker = reaching(asker(project.path(), Some("devops")), &[listed.as_str()]);
+    if let Some(confines) = asker.confines.as_mut() {
+        confines.reach = crate::sandbox::reach::Reach::of(vec![(
+            listed.clone(),
+            crate::sandbox::reach::By::You,
+        )]);
+    }
+    let (frames, _, reached) = served_recorded(&asker, want);
+    assert_eq!(stdout(&frames), "pong", "{frames:?}");
+    answering.join().unwrap();
+    assert!(
+        reached.contains(&(Some(listed.clone()), "you", 1)),
+        "told by its layer: {reached:?}"
+    );
+}
+
+fn env_of(pairs: &[(&str, &str)]) -> Vec<(OsString, OsString)> {
+    pairs
+        .iter()
+        .map(|(k, v)| (OsString::from(k), OsString::from(v)))
+        .collect()
+}
+
+/// #1708: a host handed alone in libpq's `PGHOST` is one place with the port beside it in
+/// `PGPORT`, or libpq's own; where the certificate is checked by name, `PGHOST` keeps the name
+/// and `PGHOSTADDR` takes the tunnel. Nothing else is read as such a pair.
+#[test]
+fn a_host_alone_in_pghost_is_one_place_with_its_port_beside_it() {
+    let pair = |name: &str, value: &str, env: &[(&str, &str)]| {
+        libpq_pair(name, value, &env_of(env)).map(|pair| (pair.target, pair.by_name))
+    };
+    assert_eq!(
+        pair("PGHOST", "db.example.com", &[("PGPORT", "16752")]),
+        Some(("db.example.com:16752".to_owned(), false))
+    );
+    assert_eq!(
+        pair("PGHOST", "db.example.com", &[]),
+        Some(("db.example.com:5432".to_owned(), false))
+    );
+    assert_eq!(
+        pair(
+            "PGHOST",
+            "db.example.com",
+            &[("PGSSLMODE", "verify-full"), ("PGPORT", "6000")]
+        ),
+        Some(("db.example.com:6000".to_owned(), true))
+    );
+    assert_eq!(
+        pair("PGHOST", "2001:db8::5", &[]),
+        Some(("[2001:db8::5]:5432".to_owned(), false))
+    );
+    for (name, value, env) in [
+        ("DB_HOST", "db.example.com", vec![("PGPORT", "1")]),
+        ("PGHOST", "db.example.com", vec![("PGPORT", "not a port")]),
+        ("PGHOST", "db.example.com", vec![("PGHOSTADDR", "10.0.0.5")]),
+        // A value that names its own port is pointed as itself.
+        ("PGHOST", "db.example.com:7000", vec![]),
+    ] {
+        assert!(pair(name, value, &env).is_none(), "{name}={value} {env:?}");
+    }
+}
+
+/// #1708: a host alone in `PGHOST` the chat may not reach, on the port `PGPORT` names, is
+/// refused there and handed as it is. The host is the vault's whole value, so it is not named
+/// and no Allow is offered for it, as for any value that carries one (#1708's last line).
+#[test]
+fn a_host_alone_in_pghost_the_chat_may_not_reach_is_refused_on_pgports_port() {
+    let project = project();
+    holding_dsn(project.path(), "db.example.com");
+    let mut want = wanted(
+        project.path(),
+        "team",
+        sh(r#"printf '%s|%s' "${PGHOST#db.}" "$PGPORT""#),
+    );
+    want.env = vec!["PGHOST=DSN".into()];
+    want.environment.push(("PGPORT".into(), "16752".into()));
+    let (frames, told, _) = served_recorded(
+        &reaching(
+            asker(project.path(), Some("devops")),
+            &["db.example.com:5432"],
+        ),
+        want,
+    );
+    assert_eq!(stdout(&frames), "example.com|16752");
+    assert_eq!(told, Vec::new(), "never named");
+    let said = notes(&frames).join("\n");
+    assert!(
+        said.contains(WITHHELD_NOTE),
+        "refused on PGPORT's port: {said}"
+    );
+}
+
+/// #1708: a host alone in `PGHOST` the chat may reach on `PGPORT`'s port goes through a tunnel:
+/// `PGHOST` and `PGPORT` are pointed at it. Binds sockets: first run on CI.
+#[test]
+fn a_host_alone_in_pghost_the_chat_may_reach_goes_through_a_tunnel() {
+    use std::io::Read as _;
+    let database = std::net::TcpListener::bind("127.0.0.1:0").expect("a stand-in database");
+    let at = database.local_addr().unwrap();
+    let answering = std::thread::spawn(move || {
+        let (mut conn, _) = database.accept().expect("the tunnel's connection");
+        let mut asked = [0u8; 4];
+        conn.read_exact(&mut asked).expect("the client's bytes");
+        conn.write_all(b"pong").expect("answered");
+    });
+    let project = project();
+    holding_dsn(project.path(), "127.0.0.1");
+    let mut want = wanted(
+        project.path(),
+        "team",
+        sh(r#"printf '%s|' "$PGPORT"; printf ping | /usr/bin/nc -w 5 "$PGHOST" "$PGPORT""#),
+    );
+    want.env = vec!["PGHOST=DSN".into()];
+    want.environment
+        .push(("PGPORT".into(), at.port().to_string()));
+    let listed = format!("127.0.0.1:{}", at.port());
+    let (frames, told, reached) = served_recorded(
+        &reaching(asker(project.path(), Some("devops")), &[listed.as_str()]),
+        want,
+    );
+    let out = stdout(&frames);
+    let (port, answer) = out.split_once('|').expect("the port, then the answer");
+    assert_ne!(port, at.port().to_string(), "pointed at the tunnel's port");
+    assert_eq!(answer, "pong", "{frames:?}");
+    answering.join().unwrap();
+    assert_eq!(told, Vec::new());
+    // Counted, never named: the host is the vault's value.
+    assert!(reached.contains(&(None, "open", 1)), "{reached:?}");
+}

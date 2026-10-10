@@ -201,6 +201,52 @@ fn past_the_most_it_holds_a_connection_is_refused_at_once_not_held() {
 }
 
 #[test]
+fn with_nobody_to_ask_a_connection_is_refused_at_once_not_held_its_minute() {
+    let (asks, heard) = board(Duration::from_secs(30), Duration::from_millis(10));
+    let listening = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let can = Arc::clone(&listening);
+    let asks = Arc::try_unwrap(asks)
+        .unwrap()
+        .asking_while(Arc::new(move || {
+            can.load(std::sync::atomic::Ordering::SeqCst)
+        }));
+    let started = std::time::Instant::now();
+    assert_eq!(
+        asks.hold("api.example.com", 443, &[443]),
+        Answer::NobodyToAsk
+    );
+    assert!(started.elapsed() < Duration::from_millis(200), "not held");
+    assert_eq!(asks.holding(), 0);
+    assert!(heard.lock().unwrap().is_empty(), "nobody was asked");
+    assert!(
+        !asks.asks_about(&host("api.example.com")),
+        "no ask is left waiting"
+    );
+    // Once a Notice can be raised, the next connection to it is asked about as any other.
+    listening.store(true, std::sync::atomic::Ordering::SeqCst);
+    let asks = Arc::new(asks);
+    let waiting = held(&asks, "api.example.com", 443);
+    until_holding(&asks, 1);
+    asks.allow(&host("api.example.com"), By::You);
+    assert_eq!(waiting.join().unwrap(), Answer::Allowed(By::You));
+}
+
+#[test]
+fn with_nobody_to_ask_a_host_allowed_live_or_kept_blocked_is_still_answered_so() {
+    let (asks, _) = board(Duration::from_secs(30), Duration::from_millis(10));
+    let asks = Arc::try_unwrap(asks)
+        .unwrap()
+        .asking_while(Arc::new(|| false));
+    asks.allow(&host("api.example.com"), By::Chat);
+    asks.keep_blocked(&host("bad.example.com"));
+    assert_eq!(
+        asks.hold("api.example.com", 443, &[443]),
+        Answer::Allowed(By::Chat)
+    );
+    assert_eq!(asks.hold("bad.example.com", 443, &[443]), Answer::Refused);
+}
+
+#[test]
 fn a_held_ask_names_a_host_as_the_proxy_heard_it_never_a_wildcard() {
     let (asks, heard) = board(Duration::from_millis(80), Duration::from_millis(10));
     assert_eq!(asks.hold("API.Example.COM.", 443, &[443]), Answer::TimedOut);
@@ -255,21 +301,22 @@ fn after_a_timeout_or_keep_blocked_the_host_is_no_longer_said_to_be_waiting() {
 
 #[test]
 fn a_host_allowed_live_reaches_a_run_started_after_and_a_removed_one_does_not() {
-    use super::reach::Reach;
+    use super::reach::{Decision, Reach};
     use super::tunnel::{Route, route};
     let (asks, _) = board(Duration::from_millis(100), Duration::from_millis(10));
     let dsn = "postgres://app@db.example.com:6543/app";
     asks.allow(&host("db.example.com:6543"), By::Chat);
     let live = asks.allowed_live();
-    assert_eq!(live, vec!["db.example.com:6543".to_owned()]);
-    assert!(matches!(
-        route(dsn, &Reach::open(live), &[]),
-        Route::Through(..)
-    ));
+    assert_eq!(live, vec![("db.example.com:6543".to_owned(), By::Chat)]);
+    // Decided at the scope the person chose, as the chat's own proxy decides it (#1708).
+    match route(dsn, &Reach::of(live), &[]) {
+        Route::Through(_, decision) => assert_eq!(decision, Decision::Allowed(By::Chat)),
+        other => panic!("not tunnelled: {other:?}"),
+    }
     asks.forget(&host("db.example.com:6543"), By::Chat);
     assert!(asks.allowed_live().is_empty());
     assert!(matches!(
-        route(dsn, &Reach::open(asks.allowed_live()), &[]),
+        route(dsn, &Reach::of(asks.allowed_live()), &[]),
         Route::Refused(_)
     ));
 }
