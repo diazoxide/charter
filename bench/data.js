@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791624200263,
+  "lastUpdate": 1791628783811,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -5796,6 +5796,48 @@ window.BENCHMARK_DATA = {
             "value": 103.6598365,
             "unit": "ms",
             "extra": "median of 5 runs: 103.375, 103.536, 103.660, 104.039, 105.508 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "eyehollow@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "dbrownsimple"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "251aa2e4875b12b5a70d0630e43d9900726a0593",
+          "message": "Hold a pane Notice's brief where the box under its line scrolls it\n\nThe row's cap at three fifths of the pane (#1647) means the box under a\nNotice's line gives way first and scrolls, as #1481 has it. With the\ndispatch's five answers in a narrow Linux pane, the brief ran 7px past\nthe bottom of that box unscrolled. The two narrow cases now scroll the\nbox to the brief and hold it there: at the box's width, with its top\nshown and the rest either shown or reachable in the same box.\n\nRefs #1647\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nAssisted-by: claude-code:claude-opus-5-5\nPurlis-Chat: 01M4AREQXXRGBAEWM0SZ0N0WBN\nPurlis-Persona: steward",
+          "timestamp": "2026-10-10T14:38:29+04:00",
+          "tree_id": "581a419bbec93ea4b6d5e51ed0745c5a1f8c9f8c",
+          "url": "https://github.com/purlis/purlis/commit/251aa2e4875b12b5a70d0630e43d9900726a0593"
+        },
+        "date": 1791628782578,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.466708,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.453, 0.465, 0.467, 0.472, 0.479 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.367869499999998,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.221, 16.292, 16.368, 16.388, 16.660 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 101.44235800000001,
+            "unit": "ms",
+            "extra": "median of 5 runs: 99.928, 101.425, 101.442, 101.483, 101.826 ms"
           }
         ]
       }
