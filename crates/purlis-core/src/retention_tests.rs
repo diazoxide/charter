@@ -970,6 +970,44 @@ fn a_trace_read_past_the_largest_read_is_kept() {
     assert!(!scan_for_hand_outs(at, SCAN_CHUNK));
 }
 
+/// #1027 line 3: a trace on disk several pieces long is judged by the sweep as a whole read
+/// judged it. A hand-out cut by a piece's edge deep in the file keeps it, a byte that is not
+/// text past the first piece keeps it, and the same length of plain lines goes.
+#[test]
+fn a_trace_longer_than_one_piece_is_swept_as_a_whole_read_would_sweep_it() {
+    let (_d, root) = plane();
+    let line = b"{\"event\":\"persona-use\"}\n";
+    let plain: Vec<u8> = line
+        .iter()
+        .copied()
+        .cycle()
+        .take(3 * SCAN_CHUNK + 17)
+        .collect();
+    let needle = format!("\"{}\"", crate::secrets::cmd::HANDED_OUT[0]).into_bytes();
+    let edge = 2 * SCAN_CHUNK - needle.len() / 2;
+    let mut handed = plain.clone();
+    handed.splice(edge..edge, needle.iter().copied());
+    let mut not_text = plain.clone();
+    not_text.splice(SCAN_CHUNK + 5..SCAN_CHUNK + 5, [0xff_u8]);
+
+    let gone = a_trace_holding(&root, "plain.jsonl", &plain);
+    let kept = a_trace_holding(&root, "handed.jsonl", &handed);
+    let odd = a_trace_holding(&root, "odd.jsonl", &not_text);
+
+    let swept = sweep(&root, SystemTime::now(), &[]);
+
+    assert_eq!(swept.traces, 1);
+    assert!(!gone.exists(), "plain lines several pieces long go");
+    assert!(
+        kept.exists(),
+        "a hand-out across the second piece's edge keeps the trace"
+    );
+    assert!(
+        odd.exists(),
+        "bytes that are not text past the first piece keep the trace"
+    );
+}
+
 /// #1025: `workspace use` collects by the sweep's own rule. A chat the reopen record brings
 /// back keeps its month-old pointer and lock, another chat's go, the tool gate's files are left
 /// to the gate, and a per-terminal pointer goes by its age alone.
