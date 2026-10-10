@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791646726191,
+  "lastUpdate": 1791649126035,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -6090,6 +6090,48 @@ window.BENCHMARK_DATA = {
             "value": 101.978328,
             "unit": "ms",
             "extra": "median of 5 runs: 101.206, 101.744, 101.978, 102.187, 102.468 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "eyehollow@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "dbrownsimple"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "fc3f0a2ebaf869c5238e511a44fae1e43d1e68d1",
+          "message": "Count the extension record's open among the window-only commands\n\nopen_extension_record joined WINDOW_ONLY (#1296), so the link-side test\nthat counts the list names it and counts one more.\n\nRefs #1296\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nAssisted-by: claude-code\nPurlis-Chat: 01M4AREQXXRGBAEWM0SZ0N0WBN\nPurlis-Persona: steward",
+          "timestamp": "2026-10-10T20:08:05+04:00",
+          "tree_id": "070d4206ebe72f6bd5fcbd121d5ec90ec7e094df",
+          "url": "https://github.com/purlis/purlis/commit/fc3f0a2ebaf869c5238e511a44fae1e43d1e68d1"
+        },
+        "date": 1791649124838,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.496208,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.461, 0.487, 0.496, 0.506, 0.517 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 16.8854845,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.372, 16.629, 16.885, 17.077, 17.116 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 103.919783,
+            "unit": "ms",
+            "extra": "median of 5 runs: 102.727, 103.077, 103.920, 103.950, 106.234 ms"
           }
         ]
       }
