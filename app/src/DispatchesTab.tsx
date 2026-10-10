@@ -37,8 +37,10 @@ import {
   type DispatchFilter,
   type DispatchWhen,
 } from "./dispatches";
+import { useWhileShown } from "./whileShown";
 
-/** How often the list is read again while a dispatch in it is still running. */
+/** How often the list is read again while a dispatch in it is still running, and the window is
+ *  shown. */
 const WHILE_RUNNING_MS = 5000;
 
 /**
@@ -178,11 +180,9 @@ export function DispatchesTab({
   const running =
     (said?.read?.rows.some((row) => row.outcome === "running") ?? false) ||
     (said?.read?.not_started ?? []).some(waitsOnMemory);
-  useEffect(() => {
-    if (!running) return;
-    const timer = window.setInterval(() => setAgain((was) => was + 1), WHILE_RUNNING_MS);
-    return () => window.clearInterval(timer);
-  }, [running]);
+  // On the window's one beat (`whileShown.ts`): not while the window is hidden, and once the
+  // moment it is shown again, so what started or ended meanwhile is drawn at once.
+  useWhileShown(WHILE_RUNNING_MS, () => setAgain((was) => was + 1), running);
 
   if (said === undefined) {
     return (
