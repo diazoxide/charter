@@ -10,6 +10,12 @@ import clsx from "clsx";
  * (`PanelList.tsx`). Three callers on the day it was written, which is the bar `docs/
  * design-system.md` sets for a shared component rather than a second copy of a paragraph.
  *
+ * Every view tab draws its empty state through it too (DS-3 #626, FR-19 #614): a headline that
+ * says what is missing, a body that says what goes there, and the tab's own button where it
+ * has one. `emptyStates.guard.test.ts` fails on a tab that writes its own `No …` paragraph
+ * again. A search or filter that keeps nothing is not an empty state: that tab still holds
+ * things, and the box above its list is the way back to them.
+ *
  * # Why the action is a node and not an offer id
  *
  * The button on an empty state is a row of the catalogue — `chat.new` for the centre — and

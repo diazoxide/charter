@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { LoaderCircle } from "lucide-react";
+import { FileText, LoaderCircle } from "lucide-react";
 import { commands, type InstructionFile, type PlaneId } from "./bindings";
+import { EmptyState } from "./EmptyState";
 import { Choice, SettingActions, SettingRow } from "./settings/components";
 
 /**
@@ -93,6 +94,30 @@ export function RepoInstructionsTab({
         <LoaderCircle className="node-icon spinning" />
         Reading the repo…
       </p>
+    );
+  }
+
+  // Nothing to offer: the sentence below would say the repo has instructions over an empty
+  // list. Read again is the tab's own read, for a file added since it opened.
+  if (files !== undefined && files.length === 0 && trouble === undefined) {
+    return (
+      <EmptyState
+        mark={FileText}
+        headline="No instructions for AI agents in this workspace's repos"
+        body={
+          <>
+            purlis offers a repo&apos;s <code>CLAUDE.md</code> and <code>AGENTS.md</code> at its
+            top, and the rules under <code>.cursor/rules</code>, to this workspace&apos;s memory.
+            Add one to a repo, then press Read again.
+          </>
+        }
+        action={
+          <button type="button" tabIndex={0} onClick={() => setAsked((was) => was + 1)}>
+            Read again
+          </button>
+        }
+        testid="repo-instructions-empty"
+      />
     );
   }
 

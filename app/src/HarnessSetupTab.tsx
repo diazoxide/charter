@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { LoaderCircle } from "lucide-react";
 import { commands, type HarnessRow, type HarnessSetupFound, type PlaneId } from "./bindings";
+import { EmptyState } from "./EmptyState";
 import { askHarnessSetup } from "./harnessSetup";
 
 /**
@@ -88,12 +89,19 @@ export function HarnessSetupTab({
 
   return (
     <div className="harness-setup">
-      <h3>{any ? "A harness is installed" : "No harness found"}</h3>
-      <p className="came-back">
-        {any
-          ? "Start a chat and pick it. A harness that is not signed in asks for its own login when its chat starts."
-          : "A chat runs a harness, and none is installed on this machine. Install one with its own installer: Install runs that command in a shell tab. When it has finished, press Check again. Signing in is the harness's own first screen, when its chat starts."}
-      </p>
+      {/* A look that failed found nothing, which is not the same as finding no harness. */}
+      {found === undefined ? (
+        <h3>purlis could not look at this machine</h3>
+      ) : (
+        <>
+          <h3>{any ? "A harness is installed" : "No harness found"}</h3>
+          <p className="came-back">
+            {any
+              ? "Start a chat and pick it. A harness that is not signed in asks for its own login when its chat starts."
+              : "A chat runs a harness, and none is installed on this machine. Install one with its own installer: Install runs that command in a shell tab. When it has finished, press Check again. Signing in is the harness's own first screen, when its chat starts."}
+          </p>
+        </>
+      )}
 
       {/* Verbatim: the core's sentence. */}
       {trouble && (
@@ -139,10 +147,14 @@ export function HarnessSetupTab({
           ))}
         </section>
       ) : (
-        <p className="came-back">
-          No account? opencode can run on a model served on this machine by Ollama or LM Studio;
-          start one and press Check again.
-        </p>
+        found !== undefined && (
+          <EmptyState
+            size="panel"
+            headline="No model is served on this machine"
+            body="Without an account, opencode can run on a model served on this machine by Ollama or LM Studio: start one and press Check again."
+            testid="harness-setup-no-local-model"
+          />
+        )
       )}
 
       <div className="doing">
