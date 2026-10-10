@@ -87,7 +87,7 @@ pub async fn plane_saving(
     let root = planes.held(&plane)?.root().to_path_buf();
     tauri::async_runtime::spawn_blocking(move || saving_of(&root))
         .await
-        .map_err(|err| format!("reading the plane's save state did not finish: {err}"))
+        .map_err(|err| format!("reading the project's save state did not finish: {err}"))
 }
 
 /// Save the plane, as the save button does: `message`, or the generated one when it is empty.

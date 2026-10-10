@@ -592,7 +592,7 @@ pub(crate) fn sessions_panel(place: &Place, records: &[sessionrecord::Listed]) -
             empty: panel::Empty {
                 headline: "No session records yet".into(),
                 body: Some(match place {
-                    Place::PlaneRoot => "A chat at the plane root writes one when it closes \
+                    Place::PlaneRoot => "A chat at the project root writes one when it closes \
                                          through Smart close."
                         .into(),
                     Place::Workspace(_) => "A chat in this workspace writes one when it closes \
@@ -820,7 +820,7 @@ fn charters_own(
         blocks: vec![panel::Block::List {
             rows,
             empty: panel::Empty {
-                headline: "No personas on this plane".into(),
+                headline: "No personas in this project".into(),
                 body: Some("Make one with the + above, or New persona… in the palette.".into()),
                 offer: None,
             },
@@ -1790,7 +1790,7 @@ mod tests {
 
     #[test]
     fn a_plane_with_no_personas_and_nothing_shared_keeps_its_empty_personas_panel() {
-        // The row would otherwise hide "No personas on this plane" behind a store that holds
+        // The row would otherwise hide "No personas in this project" behind a store that holds
         // nothing either.
         let (_plane, root) = plane_with_a_clone();
 

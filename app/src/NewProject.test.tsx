@@ -191,7 +191,7 @@ describe("making a project", () => {
     core();
     render(<App />);
     const dialog = await askForOne();
-    for (const name of ["Repo", "Folder", "Repository to adopt", "Make this repo itself the plane"])
+    for (const name of ["Repo", "Folder", "Repository to adopt", "Make this repo itself the project"])
       expect(within(dialog).getByLabelText(name).closest(".ui-setting-row")).not.toBeNull();
 
     expect(within(dialog).getByLabelText("Folder")).toHaveAccessibleDescription(
@@ -201,7 +201,7 @@ describe("making a project", () => {
       /^Optional: the project goes in the folder above/,
     );
     expect(
-      within(dialog).getByLabelText("Make this repo itself the plane"),
+      within(dialog).getByLabelText("Make this repo itself the project"),
     ).toHaveAccessibleDescription(/^Only for a folder that is the top of a git repository/);
   });
 
@@ -256,7 +256,7 @@ describe("making a project", () => {
 
     await userEvent.type(within(dialog).getByLabelText("Repository to adopt"), REPO);
     await userEvent.type(within(dialog).getByLabelText("Folder"), MADE);
-    await userEvent.click(within(dialog).getByLabelText("Make this repo itself the plane"));
+    await userEvent.click(within(dialog).getByLabelText("Make this repo itself the project"));
 
     expect(within(dialog).getByLabelText("Repository to adopt")).toBeDisabled();
 
@@ -276,7 +276,7 @@ describe("making a project", () => {
     const dialog = await askForOne();
 
     await userEvent.type(within(dialog).getByLabelText("Folder"), MADE);
-    await userEvent.click(within(dialog).getByLabelText("Make this repo itself the plane"));
+    await userEvent.click(within(dialog).getByLabelText("Make this repo itself the project"));
     await userEvent.click(within(dialog).getByRole("button", { name: "Create project" }));
 
     expect(calls("create_project")[0].args.planeIsThisRepo).toBe(true);

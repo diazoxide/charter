@@ -3,7 +3,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { copyFaults } from "./copy";
+import { copyFaults, retiredTerms } from "./copy";
 
 /**
  * **The window's copy written in Rust is held to the same rules** (#1156, DS-2).
@@ -279,6 +279,53 @@ const PLACES: readonly Place[] = [
  * files belong to other work; it is never added without both.
  */
 const KEPT: Readonly<Record<string, string>> = {};
+
+/**
+ * The error's own text (`#[error(…)]` or `Display`), which the terminal prints: `in_window`
+ * falls back to `self.to_string()` for some variants, and this check reads every variant's.
+ */
+const CUT_SENTENCE =
+  "the cut error's terminal text (purlis wt), some of it naming git's own worktree command; " +
+  "reworded with the CLI's copy, or each variant given a sentence of its own in in_window";
+/** The same for a dispatched chat's place, beside the CLI's `--in worktree` word. */
+const DISPATCH_PLACE =
+  "the dispatch-place error's terminal text (purlis dispatch --in worktree); reworded with " +
+  "the CLI's copy, or given a sentence of its own in in_window";
+
+/**
+ * **Retired terms in the window's Rust copy, kept for now** (FR-3, #602), as `path: "text"`,
+ * each with why: the Rust half of `copy.test.ts`'s `RETIRED_TERM_DEBT`, exactly, so paying one
+ * off or adding one is a visible change. Empty is the goal. What is left is the core's sentences
+ * the terminal prints too, which move with the CLI's copy (#602).
+ */
+const RETIRED_TERM_DEBT: Readonly<Record<string, string>> = {
+  "crates/purlis-core/src/worktree/mod.rs: \"'\u2026' does not name a workspace this plane contains\"":
+    CUT_SENTENCE,
+  "crates/purlis-core/src/worktree/mod.rs: \"'\u2026' does not name a piece (letters, digits, '.', '_', '-', starting with a letter or digit)\"":
+    CUT_SENTENCE,
+  "crates/purlis-core/src/worktree/mod.rs: \"purlis will not cut a worktree called '\u2026': \u2026. A piece's directory name is recorded in the clone's git config and reaches every machine the branch does\"":
+    CUT_SENTENCE,
+  'crates/purlis-core/src/worktree/mod.rs: "this plane relocates its worktree root ([plane] worktrees = \u2026), and this version of purlis does not follow that yet: unset [plane] worktrees to keep worktrees in the plane"':
+    CUT_SENTENCE,
+  "crates/purlis-core/src/worktree/mod.rs: \"branch '\u2026' already exists in \u2026. Pick another piece name, or remove the branch if nothing on it is needed\"":
+    CUT_SENTENCE,
+  "crates/purlis-core/src/worktree/mod.rs: \"no worktree '\u2026' for \u2026 in workspace '\u2026'. See what exists: git -C <clone> worktree list\"":
+    CUT_SENTENCE,
+  "crates/purlis-core/src/worktree/mod.rs: \"could not determine whether '\u2026' holds uncommitted changes \u2014 refusing to remove. Check the worktree by hand, or discard with --force\"":
+    CUT_SENTENCE,
+  "crates/purlis-core/src/worktree/mod.rs: \"could not determine whether '\u2026' holds commits that exist nowhere else \u2014 refusing to remove. Check the worktree by hand, or discard with --force\"":
+    CUT_SENTENCE,
+  "crates/purlis-core/src/worktree/mod.rs: \"'\u2026' was cut, but purlis could not record the branch it came from (\u2026), so a merge would not know where to land it. The worktree is there; record it by hand: git -C <clone> config --replace-all branch.\u2026.charterBase <base>\"":
+    CUT_SENTENCE,
+  "crates/purlis-core/src/worktree/mod.rs: \"purlis could not record the branch '\u2026' was cut from (\u2026), so it took the worktree back\u2026\"":
+    CUT_SENTENCE,
+  'crates/purlis-core/src/worktree/mod.rs: ", and could not (\u2026): the worktree and its branch remain"':
+    CUT_SENTENCE,
+  "crates/purlis-core/src/dispatchplace.rs: \"a worktree is cut from the repo the asking chat works in, and this chat works in no repo's clone: this folder is not a git repository purlis cuts worktrees of. Dispatch it from a chat that works in a repo, or leave out `--in worktree` and the new chat works in this chat's folder.\"":
+    DISPATCH_PLACE,
+  'crates/purlis-core/src/dispatchplace.rs: "purlis could not cut a worktree for this task: \u2026."':
+    DISPATCH_PLACE,
+};
 
 /**
  * **Calls an `in_window` body makes that this check does not read**, as `path::name` or `name`,
@@ -575,6 +622,15 @@ describe("the window's copy written in Rust", () => {
         .map((call) => `${place.file}: ${call}`),
     );
     expect(unread).toEqual([]);
+  });
+
+  it("says no retired term but the ones listed as debt (#602)", () => {
+    const retired = [...PLACES, ...COMMAND_PLACES].flatMap((place) =>
+      shownIn(read(place.file), place)
+        .filter(({ text }) => retiredTerms(text, "shown").length > 0)
+        .map(({ text }) => `${place.file}: ${JSON.stringify(text)}`),
+    );
+    expect(retired).toEqual(Object.keys(RETIRED_TERM_DEBT));
   });
 
   it("keeps only faults that are still there, and only calls still made", () => {
