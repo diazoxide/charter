@@ -1002,7 +1002,13 @@ const BUSY_TRIES: usize = BRANCHES.div_ceil(purlis_core::files::AT_ONCE) + 1;
 
 /// What `ask` answers, asked again while it finds every reader place taken, at most
 /// [`BUSY_TRIES`] times; nothing once it fails otherwise.
-fn past_busy<T>(mut ask: impl FnMut() -> Result<T, purlis_core::files::Refused>) -> Option<T> {
+///
+/// The app's one retry for a read the bounded reader's gate may answer busy (#1189): an
+/// automatic read nobody will ask for again, such as a watch finding its folder, uses it rather
+/// than going without.
+pub(crate) fn past_busy<T>(
+    mut ask: impl FnMut() -> Result<T, purlis_core::files::Refused>,
+) -> Option<T> {
     for _ in 0..BUSY_TRIES {
         match ask() {
             Ok(answer) => return Some(answer),
