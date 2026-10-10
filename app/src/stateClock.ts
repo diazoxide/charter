@@ -3,6 +3,7 @@ import type { ChatStates } from "./chatState";
 import { standingOfRows } from "./sessionTasks";
 import type { ChatRow } from "./chatsTree";
 import type { ShownKind } from "./shownState";
+import { everyWhileShown } from "./whileShown";
 
 /**
  * **How long each chat has been in its state, as this window saw it** (#1499, V100-19).
@@ -98,26 +99,30 @@ export function stateClock(): StateClock {
   };
 }
 
-/** How often a row's time is read again. A row says minutes, so half of one is enough. */
+/** How often a row's time is read again. A row says minutes, so half of one is enough. It is
+ *  read on the window's one beat (`whileShown.ts`): not while the window is hidden, and at once
+ *  when it is shown again, so a row is never drawn with the minutes it had when the window went. */
 const TICK_MS = 30_000;
 let nowMs = 0;
-let ticking: ReturnType<typeof setInterval> | undefined;
+let stopTicking: (() => void) | undefined;
 const tickers = new Set<() => void>();
+
+function tick(): void {
+  nowMs = Date.now();
+  for (const one of [...tickers]) one();
+}
 
 function everyTick(listener: () => void): () => void {
   tickers.add(listener);
-  if (ticking === undefined) {
+  if (stopTicking === undefined) {
     nowMs = Date.now();
-    ticking = setInterval(() => {
-      nowMs = Date.now();
-      for (const one of [...tickers]) one();
-    }, TICK_MS);
+    stopTicking = everyWhileShown(TICK_MS, tick);
   }
   return () => {
     tickers.delete(listener);
     if (tickers.size === 0) {
-      clearInterval(ticking);
-      ticking = undefined;
+      stopTicking?.();
+      stopTicking = undefined;
     }
   };
 }

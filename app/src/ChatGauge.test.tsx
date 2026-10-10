@@ -6,6 +6,7 @@ import { act, cleanup, render, renderHook, screen } from "@testing-library/react
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { AFTER_A_MOVE_MS, ChatGauge, Trend, useChatUsage, WHILE_RUNNING_MS } from "./ChatGauge";
 import type { ChatUsage } from "./bindings";
+import { forgetShown, windowShown } from "./test-shown";
 
 /**
  * **A chat's gauge**: what it draws from the core's answer, and when it asks again.
@@ -17,6 +18,7 @@ import type { ChatUsage } from "./bindings";
 afterEach(() => {
   cleanup();
   clearMocks();
+  forgetShown();
   vi.useRealTimers();
 });
 
@@ -161,6 +163,25 @@ describe("useChatUsage", () => {
 
     // One at open, one a moment after, and one per tick.
     expect(asked).toBe(1 + 1 + 3);
+  });
+
+  it("reads nothing mid-turn while the window is hidden, and once the moment it is shown", async () => {
+    renderHook(() => useChatUsage(PLANE, 3, 1, true));
+    await settle();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(AFTER_A_MOVE_MS);
+    });
+    const before = asked;
+
+    act(() => windowShown(false));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(WHILE_RUNNING_MS * 20);
+    });
+    expect(asked).toBe(before);
+
+    act(() => windowShown(true));
+    await settle();
+    expect(asked).toBe(before + 1);
   });
 
   it("reads again when the chat moves", async () => {

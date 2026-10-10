@@ -1,8 +1,9 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import type { RepoSaving } from "./bindings";
-import { useRepoSaving, useRepoSavingKept } from "./saving";
+import { SAVING_REREAD_MS, usePlaneSaving, useRepoSaving, useRepoSavingKept } from "./saving";
+import { forgetShown, windowShown } from "./test-shown";
 
 /**
  * The repos' save standing the title bar counts in, read for the project in front (charter-app
@@ -114,5 +115,47 @@ describe("the repos of the project in front, across a switch", () => {
     await answer(ONE, [repo("svc", "changed")]);
 
     expect(renders).toBe(asked);
+  });
+});
+
+describe("the standing's beat, and the window out of sight (#1392)", () => {
+  afterEach(() => {
+    forgetShown();
+    vi.useRealTimers();
+  });
+
+  /** A core that answers every read at once, counting each command it is asked. */
+  function counting() {
+    const asked = new Map<string, number>();
+    mockIPC((cmd) => {
+      if (cmd === "plugin:event|listen") return 1;
+      asked.set(cmd, (asked.get(cmd) ?? 0) + 1);
+      if (cmd === "workspace_saving") return [];
+      if (cmd === "plane_saving") return { stage: "saved" };
+      return null;
+    });
+    return (cmd: string) => asked.get(cmd) ?? 0;
+  }
+
+  it("asks again on every beat while shown, never while hidden, and once on show", async () => {
+    // Only the beat's clock: the window's promises settle as they do.
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const asked = counting();
+    renderHook(() => {
+      usePlaneSaving(ONE);
+      useRepoSaving(ONE, "alpha");
+    });
+    await waitFor(() => expect(asked("workspace_saving")).toBe(1));
+    expect(asked("plane_saving")).toBe(1);
+
+    await act(async () => void vi.advanceTimersByTime(SAVING_REREAD_MS));
+    expect([asked("plane_saving"), asked("workspace_saving")]).toEqual([2, 2]);
+
+    act(() => windowShown(false));
+    await act(async () => void vi.advanceTimersByTime(SAVING_REREAD_MS * 30));
+    expect([asked("plane_saving"), asked("workspace_saving")]).toEqual([2, 2]);
+
+    await act(async () => windowShown(true));
+    expect([asked("plane_saving"), asked("workspace_saving")]).toEqual([3, 3]);
   });
 });

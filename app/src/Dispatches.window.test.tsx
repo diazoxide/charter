@@ -1,6 +1,7 @@
 import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  act,
   cleanup,
   configure,
   render as renderBare,
@@ -19,6 +20,7 @@ import type {
   SessionRecordRow,
   WorktreeLoss,
 } from "./bindings";
+import { forgetShown, windowShown } from "./test-shown";
 import { stripNamed } from "./test-strips";
 
 /**
@@ -44,6 +46,7 @@ beforeEach(() => globalThis.localStorage.clear());
 afterEach(() => {
   cleanup();
   clearMocks();
+  forgetShown();
 });
 
 const PLANE = "/home/dev/plane";
@@ -643,6 +646,38 @@ describe("the Dispatches tab", () => {
       const before = reads();
       await vi.advanceTimersByTimeAsync(12_000);
       expect(reads()).toBeGreaterThan(before);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reads a waiting dispatch's list nothing while the window is hidden, and once on show (#1392)", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const waiting: NotStartedRow = {
+        state: "waiting-on-memory",
+        mode: "task",
+        persona: "devops",
+        task: "rotate the keys",
+        asker: "steward 3",
+        by_person: false,
+        at: "2026-10-09T08:30:00Z",
+      };
+      const { asked } = core({ rows: [], notStarted: [waiting] });
+      render(<App />);
+      const panel = await screen.findByTestId("panel-sessions");
+      await userEvent.click(await within(panel).findByRole("button", { name: "Open dispatches" }));
+      await screen.findAllByTestId("dispatch-not-started");
+      const reads = () => asked.filter((one) => one.cmd === "dispatches").length;
+
+      act(() => windowShown(false));
+      const before = reads();
+      await act(async () => void (await vi.advanceTimersByTimeAsync(60_000)));
+      expect(reads()).toBe(before);
+
+      // Whatever started while nobody looked is on screen at once, not a beat later.
+      act(() => windowShown(true));
+      await waitFor(() => expect(reads()).toBe(before + 1));
     } finally {
       vi.useRealTimers();
     }

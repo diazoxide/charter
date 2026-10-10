@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { commands, type PlaneId, type PlaneSaving, type RepoSaving } from "./bindings";
 import { GIT, usePlaneChanged } from "./planeChanged";
+import { everyWhileShown } from "./whileShown";
 
 /** The window event a finished save sends, so every reader of the save standing reads again —
  *  the title bar after the Saving tab's button, and the tab after the title bar's. */
@@ -34,14 +35,14 @@ export function tellSaved(): void {
 
 /** How often the standing is read while nothing else asks. A file an agent writes is not an
  *  event this window hears (`planewatch.rs` watches no memory directory and no `.git`), so the
- *  title bar asks git — one `status` — this often. */
+ *  title bar asks git — one `status` — this often, while the window is shown. */
 export const SAVING_REREAD_MS = 10_000;
 
 /**
  * **The project's save standing, kept fresh** (charter-app#294): asked when the project
  * changes, when it changes on disk, when the window comes back into focus, when any save
- * finishes, and every {@link SAVING_REREAD_MS}. Written as `useAlerts` is: the command's own
- * promise, a `gone` flag, and state set only in its callback.
+ * finishes, and every {@link SAVING_REREAD_MS} while the window is shown. Written as
+ * `useAlerts` is: the command's own promise, a `gone` flag, and state set only in its callback.
  *
  * The last answer is kept while the next is on its way, so the bar never blanks between reads.
  */
@@ -85,17 +86,19 @@ export function usePlaneSaving(plane: PlaneId | undefined): {
   return { saving: saving?.plane === plane ? saving?.standing : undefined, reread };
 }
 
-/** Ask again on focus, after any save, and every {@link SAVING_REREAD_MS}. */
+/** Ask again on focus, after any save, and every {@link SAVING_REREAD_MS} while the window is
+ *  shown — on the window's one beat (`whileShown.ts`), which asks once more when it is shown
+ *  again rather than running `git status` for a window nobody sees. */
 function useRereads(setAsked: (next: (n: number) => number) => void): void {
   useEffect(() => {
     const again = () => setAsked((n) => n + 1);
     window.addEventListener("focus", again);
     window.addEventListener(PLANE_SAVED, again);
-    const timer = setInterval(again, SAVING_REREAD_MS);
+    const stop = everyWhileShown(SAVING_REREAD_MS, again);
     return () => {
       window.removeEventListener("focus", again);
       window.removeEventListener(PLANE_SAVED, again);
-      clearInterval(timer);
+      stop();
     };
   }, [setAsked]);
 }
