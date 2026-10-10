@@ -6,6 +6,12 @@
  * its number, which holds for as long as the app runs and no longer, so a reload of the window
  * keeps it and a new launch starts from the folds the list makes by itself. Nothing here is
  * needed: storage a webview refuses, or a value that is not one, is no fold.
+ *
+ * **Not in `layout.json` with the other views' state** (#1687, B-11): the core hands the window
+ * no key a chat keeps across a launch. `OpenChat.resumed` names the conversation only of a chat
+ * a launch put back, and only as long as its harness resumes under the same id, so a fold keyed
+ * by it would come back for some chats and not for others. A launch-stable key from the core
+ * is a bindings change, left to the next owner of the bindings.
  */
 
 const KEY = "purlis.chats.folds:";

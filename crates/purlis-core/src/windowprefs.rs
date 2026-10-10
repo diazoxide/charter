@@ -65,10 +65,16 @@ pub const LAYOUT_READS: &[u64] = &[1, 2];
 /// The layout's field for each project's own arrangement (#1673), by the project's path.
 pub const PROJECTS: &str = "projects";
 
-/// The most projects whose arrangements the file keeps. A project's is a few hundred bytes, so
-/// this many stays well inside the half of [`MAX_BYTES`] the dismissals leave; past it, the
-/// projects opened longest ago lose theirs first and are drawn from the machine's arrangement.
+/// The most projects whose entries the file keeps: past it, the projects opened longest ago
+/// lose theirs first and are drawn from the machine's arrangement.
 pub const MOST_PROJECTS: usize = 32;
+
+/// The most bytes the projects' entries take of the file, written out (#1686): each keeps what
+/// its views keep beside its arrangement (`app/src/projectViews.ts`), so a count alone no
+/// longer bounds them. With the dismissals' half ([`DISMISSED_MOST_BYTES`]) the rest of the
+/// file keeps an eighth of [`MAX_BYTES`]. Past it, the projects opened longest ago lose theirs
+/// first. `app/src/regions.ts` holds what a window sends to the same number.
+pub const PROJECTS_MOST_BYTES: u64 = MAX_BYTES * 3 / 8;
 
 /// The most either file may be.
 ///
@@ -252,6 +258,15 @@ fn read(
     }
 }
 
+/// [`LAYOUT_READS`] as a sentence says them: `1 and 2`, or `1, 2 and 3`.
+fn versions_read() -> String {
+    let said: Vec<String> = LAYOUT_READS.iter().map(u64::to_string).collect();
+    match said.split_last() {
+        Some((last, rest)) if !rest.is_empty() => format!("{} and {last}", rest.join(", ")),
+        _ => said.concat(),
+    }
+}
+
 /// What is wrong with a layout's envelope, or `None` when the window can load it.
 fn layout_problem(document: &serde_json::Value) -> Option<String> {
     let Some(object) = document.as_object() else {
@@ -270,7 +285,8 @@ fn layout_problem(document: &serde_json::Value) -> Option<String> {
                 .is_some_and(|one| LAYOUT_READS.contains(&one)) => {}
         Some(found) => {
             return Some(format!(
-                "is version {found}, and this purlis reads versions 1 and {LAYOUT_VERSION}"
+                "is version {found}, and this purlis reads versions {}",
+                versions_read()
             ));
         }
     }
@@ -342,14 +358,56 @@ pub fn write_layout(config_root: &Path, text: &str) -> io::Result<()> {
         object,
         was.as_mut().and_then(|was| was.get_mut(PROJECTS)),
     );
+    within_the_file(config_root, &mut document);
     write_document(config_root, &document)
+}
+
+/// **The whole file is never one the next launch refuses for its size** (F4, #1686): should
+/// the dismissals, the projects and the rest together still be past [`MAX_BYTES`], projects
+/// are let go, the ones opened longest ago first, until it fits.
+fn within_the_file(config_root: &Path, document: &mut serde_json::Value) {
+    let size = |document: &serde_json::Value| {
+        serde_json::to_string_pretty(document).map_or(u64::MAX, |text| text.len() as u64 + 1)
+    };
+    if size(document) <= MAX_BYTES {
+        return;
+    }
+    let mut oldest_last = by_opened(
+        config_root,
+        document
+            .get(PROJECTS)
+            .and_then(serde_json::Value::as_object)
+            .map(|projects| projects.keys().cloned().collect())
+            .unwrap_or_default(),
+    );
+    while size(document) > MAX_BYTES {
+        let Some(oldest) = oldest_last.pop() else {
+            return;
+        };
+        if let Some(projects) = document
+            .get_mut(PROJECTS)
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            projects.remove(&oldest);
+        }
+    }
+}
+
+/// `projects`, the ones opened last first (the machine store's recents), so the one opened
+/// longest ago is popped first.
+fn by_opened(config_root: &Path, mut projects: Vec<String>) -> Vec<String> {
+    let store = crate::machine::read(config_root).store;
+    let opened = |one: &str| store.recent(Path::new(one)).map_or(0, |entry| entry.opened);
+    projects.sort_by_key(|one| std::cmp::Reverse(opened(one)));
+    projects
 }
 
 /// **A window sends only the projects it arranged, and the file keeps everyone else's**
 /// (#1673): another window may have arranged its own project since this one launched, and the
 /// whole map written back by one would take that away. So the projects on disk that `object`
-/// does not name are kept, and the file is held to [`MOST_PROJECTS`]: the ones opened longest
-/// ago (the machine store's recents) are let go first, and never one the window just sent.
+/// does not name are kept, and the file is held to [`MOST_PROJECTS`] and
+/// [`PROJECTS_MOST_BYTES`]: the ones opened longest ago (the machine store's recents) are let
+/// go first, and never one the window just sent, which the window holds to the same bounds.
 fn keep_other_projects(
     config_root: &Path,
     object: &mut serde_json::Map<String, serde_json::Value>,
@@ -372,13 +430,14 @@ fn keep_other_projects(
             sent.insert(project, held);
         }
     }
-    if sent.len() <= MOST_PROJECTS {
+    let bytes = |sent: &serde_json::Map<String, serde_json::Value>| {
+        serde_json::to_string_pretty(sent).map_or(u64::MAX, |text| text.len() as u64)
+    };
+    if sent.len() <= MOST_PROJECTS && bytes(sent) <= PROJECTS_MOST_BYTES {
         return;
     }
-    let store = crate::machine::read(config_root).store;
-    let opened = |one: &str| store.recent(Path::new(one)).map_or(0, |entry| entry.opened);
-    others.sort_by_key(|one| std::cmp::Reverse(opened(one)));
-    while sent.len() > MOST_PROJECTS {
+    let mut others = by_opened(config_root, others);
+    while sent.len() > MOST_PROJECTS || bytes(sent) > PROJECTS_MOST_BYTES {
         let Some(oldest) = others.pop() else { break };
         sent.remove(&oldest);
     }
@@ -773,6 +832,82 @@ mod tests {
         let kept = projects.as_object().expect("a map");
         assert_eq!(kept.len(), MOST_PROJECTS);
         assert!(kept.contains_key("/new"));
+    }
+
+    /// A project's entry with what its views keep (#1686), about `bytes` long as written.
+    fn a_project_keeping(bytes: usize) -> serde_json::Value {
+        let folded: Vec<String> = (0..bytes / 50)
+            .map(|at| format!("workspace/repo-{at:0>30}"))
+            .collect();
+        serde_json::json!({ "explorer": { "folded": folded } })
+    }
+
+    #[test]
+    fn the_projects_are_held_to_their_bytes_the_ones_opened_longest_ago_let_go_first() {
+        // #1686: each project keeps what its views keep beside its arrangement, so a count
+        // alone no longer holds the projects inside the file.
+        let home = home();
+        crate::machine::update(home.path(), |store| {
+            for at in 0..20u64 {
+                store.remember(Path::new(&format!("/old/{at}")), 100 + at);
+            }
+        })
+        .unwrap();
+        for at in 0..20 {
+            write_layout(
+                home.path(),
+                &serde_json::json!({
+                    "version": 2,
+                    "regions": [],
+                    "projects": { format!("/old/{at}"): a_project_keeping(2000) },
+                })
+                .to_string(),
+            )
+            .unwrap();
+        }
+        let projects = projects_in(home.path());
+        let kept = projects.as_object().expect("a map");
+        let bytes = serde_json::to_string_pretty(&projects).unwrap().len() as u64;
+        assert!(bytes <= PROJECTS_MOST_BYTES, "{bytes} bytes");
+        assert!(kept.contains_key("/old/19"), "the one just sent is kept");
+        assert!(
+            kept.contains_key("/old/18"),
+            "the one opened next to last is kept"
+        );
+        assert!(
+            !kept.contains_key("/old/0"),
+            "the one opened first goes first"
+        );
+    }
+
+    #[test]
+    fn a_window_write_never_grows_the_file_past_what_a_launch_reads() {
+        // F4 for the projects (#1686): with the dismissals at their half, whatever the
+        // projects hold, the whole file is still one the next launch reads.
+        let home = home();
+        let causes: Vec<String> = (0..2000).map(|i| format!("pin-dormant:{i:0>60}")).collect();
+        set_dismissed(home.path(), "/d", &causes).unwrap();
+        let many: serde_json::Map<String, serde_json::Value> = (0..MOST_PROJECTS)
+            .map(|at| (format!("/p/{at}"), a_project_keeping(2000)))
+            .collect();
+        write_layout(
+            home.path(),
+            &serde_json::json!({ "version": 2, "regions": [], "projects": many }).to_string(),
+        )
+        .unwrap();
+        assert!(std::fs::metadata(layout_path(home.path())).unwrap().len() <= MAX_BYTES);
+        assert!(read_layout(home.path()).trouble.is_none());
+    }
+
+    #[test]
+    fn a_version_this_purlis_does_not_read_is_answered_with_every_one_it_does() {
+        let home = home();
+        put(home.path(), LAYOUT, r#"{"version":9,"regions":[]}"#);
+        let said = trouble(&read_layout(home.path())).to_owned();
+        assert!(
+            said.contains("this purlis reads versions 1 and 2"),
+            "{said}"
+        );
     }
 
     #[test]
