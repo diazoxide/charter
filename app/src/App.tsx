@@ -1337,6 +1337,8 @@ function App() {
       renameWorkspace: () => undefined,
       openSettingsTab: windowDoes.openSettingsTab,
       openYourSettings: windowDoes.openYourSettings,
+      // No workspace is focused with no project, so there is nothing to read again.
+      readAgain: () => undefined,
       // A curation chat is opened in a project, and there is no project here.
       curate: async () => nowhere(),
       quit: windowDoes.quit,

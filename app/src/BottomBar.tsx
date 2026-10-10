@@ -141,8 +141,16 @@ export function BottomBar({
 
   return (
     <footer className="state-bar" aria-label="Repository state" data-testid="bottom-bar">
-      {trouble && <Trouble>{trouble}</Trouble>}
-      {repos?.cache_refused && <Trouble>{repos.cache_refused}</Trouble>}
+      {trouble && (
+        <Trouble offers={offers} onPress={onPress}>
+          {trouble}
+        </Trouble>
+      )}
+      {repos?.cache_refused && (
+        <Trouble offers={offers} onPress={onPress}>
+          {repos.cache_refused}
+        </Trouble>
+      )}
 
       {panels === undefined ? (
         <Pending>Reading the plane…</Pending>
@@ -207,7 +215,7 @@ export function BottomBar({
       {/* A refusal is drawn, never swallowed: a row that is simply missing looks like a
           workspace with fewer repos than it has. */}
       {panels?.refused.map(([name, why]) => (
-        <Trouble key={`refused-${name}`}>
+        <Trouble key={`refused-${name}`} offers={offers} onPress={onPress}>
           purlis will not read <code>{name}</code>: {why}
         </Trouble>
       ))}
@@ -236,13 +244,27 @@ function absentSaid(clone: CloneState | undefined): string {
 }
 
 /** A refusal, with the mark that says it is one. Lucide hides a nameless icon from a screen
- *  reader itself, so the alert reads exactly as it did before. */
-function Trouble({ children }: { children: ReactNode }) {
+ *  reader itself, so the alert reads exactly as it did before.
+ *
+ *  **Its menu is Read again** (#1244): the explorer's own row, so a refusal down here has its
+ *  way out with the explorer hidden. A menu, not a control (charter-app#174), so the region
+ *  stays unpressable. */
+function Trouble({
+  offers,
+  onPress,
+  children,
+}: {
+  offers: Catalogued;
+  onPress: (offer: Offer) => void;
+  children: ReactNode;
+}) {
   return (
-    <p className="trouble" role="alert">
-      <TriangleAlert className="node-icon" />
-      <span>{children}</span>
-    </p>
+    <Menued on={{ on: "refusal" }} offers={offers} onPress={onPress}>
+      <p className="trouble" role="alert">
+        <TriangleAlert className="node-icon" />
+        <span>{children}</span>
+      </p>
+    </Menued>
   );
 }
 

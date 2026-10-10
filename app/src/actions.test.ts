@@ -35,6 +35,7 @@ import {
   STOPS_IT,
   toKeep,
   OUTSIDE,
+  READ_AGAIN,
   perform,
   revealSaid,
   SHELL_KEY_SAID,
@@ -243,6 +244,7 @@ function doing(): Doing & { calls: string[] } {
     renameWorkspace: note("renameWorkspace"),
     openSettingsTab: note("openSettingsTab"),
     openYourSettings: note("openYourSettings"),
+    readAgain: note("readAgain"),
     openMemory: vi.fn((ref: MemoryRef, title: string, keep: boolean) => {
       calls.push(`openMemory:${memoryKey(ref)},${title},${keep}`);
     }),
@@ -1231,11 +1233,27 @@ describe("the one list of actions", () => {
       expect(hands.calls).toEqual(["newBranch:svc"]);
     });
 
-    it("lists the new tab, the new branch, then the pick, and nothing below the line", () => {
+    it("lists the new tab, the new branch, the pick, then Read again, and nothing below the line", () => {
+      // Read again is found only while a read stands refused (#1244).
       expect(menuOn({ on: "clone", repo: "svc" })).toEqual({
-        above: ["clone.chat:svc", "clone.branch:svc", "clone.pick:svc"],
+        above: ["clone.chat:svc", "clone.branch:svc", "clone.pick:svc", READ_AGAIN],
         below: [],
       });
+    });
+  });
+
+  describe("a refused read of the focused workspace (#1244)", () => {
+    it("offers Read again only while one stands, and it reads the workspace again", async () => {
+      expect(by(catalogue(now({ focused: "alpha" })), READ_AGAIN)).toBeUndefined();
+      expect(
+        by(catalogue(now({ focused: OUTSIDE, readRefused: true })), READ_AGAIN),
+      ).toBeUndefined();
+
+      const offers = catalogue(now({ focused: "alpha", readRefused: true }));
+      expect(by(offers, READ_AGAIN)?.title).toBe("Read the workspace again");
+      const hands = doing();
+      await run(offers, READ_AGAIN, hands);
+      expect(hands.calls).toEqual(["readAgain"]);
     });
   });
 

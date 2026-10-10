@@ -774,6 +774,96 @@ describe("a repo row's menu", () => {
   });
 });
 
+/**
+ * **A refusal down here has its way out without the explorer** (#1244): the explorer's Read
+ * again is a Notice's button, and with the explorer hidden there was nothing to press. The
+ * refusal line has a menu with the catalogue's Read again — a menu, not a control (#174), so
+ * the region stays unpressable — and the palette has the same row while a refusal stands.
+ */
+describe("a refused read's menu (#1244)", () => {
+  const offers = (readRefused: boolean) =>
+    catalogued(
+      catalogue({
+        tabs: noTabs(),
+        workspaces: ["alpha"],
+        focused: "alpha",
+        plane: "/plane",
+        clones: [{ repo: "svc", path: "/p/svc" }],
+        needsYou: [],
+        nameOf: String,
+        readRefused,
+      }),
+    );
+  const rightClick = (el: Element) =>
+    el.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+
+  it("offers Read again on the workspace's refusal, and hands the row back", async () => {
+    const pressed: string[] = [];
+    render(
+      <BottomBar
+        workspace="alpha"
+        offers={offers(true)}
+        onPress={(offer) => pressed.push(offer.id)}
+        state={state({ trouble: "purlis could not read alpha: permission denied" })}
+      />,
+    );
+
+    rightClick(screen.getByText("purlis could not read alpha: permission denied"));
+    await screen.findByRole("menu");
+    await userEvent.click(screen.getByRole("menuitem", { name: "Read the workspace again" }));
+
+    expect(pressed).toEqual(["workspace.readagain"]);
+  });
+
+  it("offers it on the forge cache's refusal and on a repo it could not read", async () => {
+    render(
+      <BottomBar
+        workspace="alpha"
+        offers={offers(true)}
+        onPress={() => {}}
+        state={state({
+          panels: { ...PANELS, repos: ["svc"] },
+          repos: {
+            workspace: "alpha",
+            cache_refused: "purlis could not read the forge cache",
+            repos: [repo("svc", { branch: null, unreadable: "could not read the tree" })],
+          },
+        })}
+      />,
+    );
+
+    rightClick(screen.getByText("purlis could not read the forge cache"));
+    expect(
+      within(await screen.findByRole("menu")).getByRole("menuitem", {
+        name: "Read the workspace again",
+      }),
+    ).toBeInTheDocument();
+    await userEvent.keyboard("{Escape}");
+
+    rightClick(within(row("svc")).getByText("could not read the tree"));
+    expect(
+      within(await screen.findByRole("menu")).getByRole("menuitem", {
+        name: "Read the workspace again",
+      }),
+    ).toBeInTheDocument();
+  });
+
+  it("is not on a repo's menu while nothing is refused", async () => {
+    render(
+      <BottomBar
+        workspace="alpha"
+        offers={offers(false)}
+        onPress={() => {}}
+        state={state({ panels: { ...PANELS, repos: ["svc"] } })}
+      />,
+    );
+
+    rightClick(within(row("svc")).getByText("svc"));
+    const menu = await screen.findByRole("menu");
+    expect(within(menu).queryByRole("menuitem", { name: "Read the workspace again" })).toBeNull();
+  });
+});
+
 describe("an extension's repo columns (charter-app#340)", () => {
   const column = (over: Partial<FactColumn> = {}): FactColumn => ({
     extension: "prs",
