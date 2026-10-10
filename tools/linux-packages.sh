@@ -29,9 +29,11 @@ set -euo pipefail
 TAURI_PACKAGES="libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev"
 # A normal install is under 45 s in all. Two attempts at the most, plus the try from the cache,
 # stay under the 9 minutes the calling step allows, so this script's message is what is read
-# and not the runner's "exceeded the maximum execution time".
+# and not the runner's "exceeded the maximum execution time": with each limit's 10 s for a
+# process that ignores the first signal and the pause between attempts, the worst case is
+# (60+10) + 2 x ((75+10) + (120+10)) + 10 = 510 s, under the step's 540.
 UPDATE_SECONDS=75
-INSTALL_SECONDS=150
+INSTALL_SECONDS=120
 OFFLINE_SECONDS=60
 ATTEMPTS=2
 
@@ -153,7 +155,10 @@ if [ -n "$cache" ]; then
     [ -e "$deb" ] || continue
     # apt writes an epoch's colon as %3a in the file name.
     name=$(basename "$deb" .deb | sed 's/%3a/:/g')
-    if printf '%s\n' "$installed" | grep -qxF "$name"; then
+    # A here-string and not a pipe: under `pipefail`, `grep -q` leaving at its first match can
+    # end the writer with SIGPIPE once the list outgrows the pipe's buffer, and a runner image
+    # lists thousands of packages, so the match would read as a miss.
+    if grep -qxF "$name" <<< "$installed"; then
       cp "$deb" "$cache/"
       kept=$((kept + 1))
     fi
@@ -161,6 +166,8 @@ if [ -n "$cache" ]; then
   if [ "$kept" -gt 0 ]; then
     echo "save=true" >> "$OUTPUT"
     note=" $kept .deb files kept for the cache."
+  else
+    note=" No .deb files were left in $ARCHIVES to keep, so the next run asks the mirror too."
   fi
 fi
 say "$count packages installed in $(elapsed) s from the mirror, on attempt $attempt of $ATTEMPTS.$note"
