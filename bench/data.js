@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791631457453,
+  "lastUpdate": 1791638910992,
   "repoUrl": "https://github.com/purlis/purlis",
   "entries": {
     "session layer (ubuntu-24.04)": [
@@ -5880,6 +5880,48 @@ window.BENCHMARK_DATA = {
             "value": 104.025062,
             "unit": "ms",
             "extra": "median of 5 runs: 102.630, 103.877, 104.025, 104.151, 106.011 ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "eyehollow@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "dbrownsimple"
+          },
+          "committer": {
+            "email": "aaron.yor@gmail.com",
+            "name": "Aaron Yordanyan",
+            "username": "diazoxide"
+          },
+          "distinct": true,
+          "id": "16e7af4d80a99414d1257ad922e0374933e892d6",
+          "message": "Say in the handoff guide that an orphaned task ends at its report\n\ncrates/purlis-core/docs/handoff.md still said a task whose asking chat\nhad gone ends nothing and asks for the person. It now says the task ends\nat its report, as every other task does, and which tasks stay open and\nraise an item.\n\nRefs #1510\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nAssisted-by: claude-code:claude-opus-5-5\nPurlis-Chat: 01M4AREQXXRGBAEWM0SZ0N0WBN\nPurlis-Persona: steward",
+          "timestamp": "2026-10-10T17:15:46+04:00",
+          "tree_id": "a052d9749e8a4155e164bbbb49955c47aebac170",
+          "url": "https://github.com/purlis/purlis/commit/16e7af4d80a99414d1257ad922e0374933e892d6"
+        },
+        "date": 1791638910004,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "keystroke under ten flooding panes",
+            "value": 0.509377,
+            "unit": "ms",
+            "extra": "median of 5 runs: 0.496, 0.508, 0.509, 0.522, 0.526 ms"
+          },
+          {
+            "name": "2 MB burst, asked to drawn",
+            "value": 17.241044000000002,
+            "unit": "ms",
+            "extra": "median of 5 runs: 16.841, 16.920, 17.241, 17.351, 17.557 ms"
+          },
+          {
+            "name": "13 MB burst, asked to drawn",
+            "value": 104.85768200000001,
+            "unit": "ms",
+            "extra": "median of 5 runs: 103.063, 103.352, 104.858, 104.860, 106.271 ms"
           }
         ]
       }
