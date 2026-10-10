@@ -16,6 +16,14 @@ const RUNS = [1, 2] as const;
 /** What each chat is called on the tab: ADR 0072's first-hour words, so "chat" and not "run". */
 const ORDINAL: Record<number, string> = { 1: "First chat", 2: "Second chat" };
 
+/** The branch FR-28 cuts for run `run` (`purlis_core::firsttask::label`, by the labelled-chat
+ *  rule): what the tab looks for in the clone to know a run started before this launch. */
+const branchOf = (run: number) => `first-task-${run}`;
+
+/** The harnesses whose program is not installed on this machine, by kind, with their titles.
+ *  Empty until read, and when it could not be: every profile is then offered as before. */
+type NotInstalled = Readonly<Record<string, string>>;
+
 /** What the plane does for the tab: starts a run and puts its chat's tab on the strip, and
  *  opens a run's diff. */
 export interface FirstTaskDoes {
@@ -69,6 +77,10 @@ export function FirstTaskTab({
   const [trouble, setTrouble] = useState<string>();
   const [picked, setPicked] = useState<Partial<Record<number, string>>>({});
   const [starting, setStarting] = useState<number>();
+  /** The harnesses whose program is not installed here (#1698), by kind, with their titles. */
+  const [notInstalled, setNotInstalled] = useState<NotInstalled>({});
+  /** The runs whose branch is in the clone (#945): the ones that started before this launch. */
+  const [onDisk, setOnDisk] = useState<Partial<Record<number, string>>>({});
   const groupId = useId();
 
   useEffect(() => {
@@ -88,19 +100,75 @@ export function FirstTaskTab({
     };
   }, [plane, again]);
 
+  // Which harness's program is on this machine: the harness setup tab's look (FR-29), read when
+  // the tab opens and on Read again. Unread, every profile is offered as before, and a start on
+  // a missing program says so itself.
+  useEffect(() => {
+    let gone = false;
+    void commands
+      .harnessSetupFound()
+      .then((answer) => {
+        if (gone || answer.status === "error") return;
+        const missing: Record<string, string> = {};
+        for (const one of answer.data?.harnesses ?? []) {
+          if (!one.installed) missing[one.name] = one.title;
+        }
+        setNotInstalled(missing);
+      })
+      .catch(() => {});
+    return () => {
+      gone = true;
+    };
+  }, [again]);
+
+  // Which runs started before this launch: their branches are in the clone, whatever the window
+  // remembers (#945). The clone is `<workspace>/<repo>` in the project's layout.
+  useEffect(() => {
+    let gone = false;
+    const [repo, workspace] = clone.split(/[\\/]/).filter(Boolean).reverse();
+    if (!repo || !workspace) return;
+    void commands
+      .worktreeList(plane, workspace, repo)
+      .then((answer) => {
+        if (gone || answer.status === "error") return;
+        const started: Partial<Record<number, string>> = {};
+        for (const run of RUNS) {
+          const cut = (answer.data ?? []).find((one) => one.branch === branchOf(run) && !one.stale);
+          if (cut?.branch) started[run] = cut.branch;
+        }
+        setOnDisk(started);
+      })
+      .catch(() => {});
+    return () => {
+      gone = true;
+    };
+  }, [plane, clone, again]);
+
   const runs = does?.runs[clone] ?? {};
   const profiles = options?.profiles ?? [];
   const chosen = (run: number): ProfileRow | undefined => {
     const first = run === 1 ? undefined : chosen(1);
     const name =
       picked[run] ??
-      suggested(profiles, run, first && { kind: runs[1]?.harness ?? first.kind, name: first.name });
+      suggested(
+        profiles,
+        run,
+        first && { kind: runs[1]?.harness ?? first.kind, name: first.name },
+        (one) => notInstalled[one.kind] === undefined,
+      );
     return profiles.find((one) => one.name === name);
+  };
+  /** Why `profile` cannot start here: its program is not installed. Said only of a built-in
+   *  profile, which runs its harness's own program; one the project defines names its own
+   *  command, which this look does not check (D-1698-7). */
+  const missing = (profile: ProfileRow | undefined): string | undefined => {
+    const title = profile?.source === "built-in" ? notInstalled[profile.kind] : undefined;
+    return title === undefined ? undefined : `${title} is not installed on this machine.`;
   };
 
   async function start(run: number) {
     const profile = chosen(run);
-    if (!profile || !options) return;
+    if (!profile || !options || missing(profile)) return;
     setStarting(run);
     setTrouble(undefined);
     if (profile.approval !== null) {
@@ -165,6 +233,9 @@ export function FirstTaskTab({
       )}
       {RUNS.map((run) => {
         const done = runs[run];
+        // Started before this launch: its branch is in the clone. Its diff waits on the commit it
+        // was cut from, which only the run this launch started carries.
+        const before = done ? undefined : onDisk[run];
         const profile = chosen(run);
         const labelId = `${groupId}-${run}`;
         return (
@@ -184,6 +255,8 @@ export function FirstTaskTab({
                   Show its diff
                 </button>
               </p>
+            ) : before ? (
+              <p className="came-back">{`Started on the branch ${before}.`}</p>
             ) : (
               <>
                 <Choice
@@ -192,22 +265,28 @@ export function FirstTaskTab({
                   value={profile?.name ?? ""}
                   onValueChange={(name) => setPicked((was) => ({ ...was, [run]: name }))}
                   disabled={starting !== undefined}
-                  options={profiles.map((one) => ({
-                    value: one.name,
-                    label: one.name,
-                    disabled: !one.ready_to_type,
-                    // The capability it lacks, in its harness card's words (HP-19).
-                    title: one.harness?.cannot_type ?? undefined,
-                    says: (
-                      <ProfileMeta row={one}>
-                        {!one.ready_to_type && (
-                          <span className="what">
-                            {one.harness?.cannot_type ?? "purlis cannot type the task into it"}
-                          </span>
-                        )}
-                      </ProfileMeta>
-                    ),
-                  }))}
+                  options={profiles.map((one) => {
+                    const notHere = missing(one);
+                    return {
+                      value: one.name,
+                      label: one.name,
+                      disabled: !one.ready_to_type || notHere !== undefined,
+                      // The capability it lacks, in its harness card's words (HP-19), or the
+                      // program this machine does not have (#1698).
+                      title: one.harness?.cannot_type ?? notHere,
+                      says: (
+                        <ProfileMeta row={one}>
+                          {!one.ready_to_type ? (
+                            <span className="what">
+                              {one.harness?.cannot_type ?? "purlis cannot type the task into it"}
+                            </span>
+                          ) : (
+                            notHere && <span className="what">{notHere}</span>
+                          )}
+                        </ProfileMeta>
+                      ),
+                    };
+                  })}
                 />
                 {/* The picker's own sentence, before the press that approves (V69). */}
                 <ApprovalSentence row={profile} />
@@ -215,7 +294,11 @@ export function FirstTaskTab({
                   <button
                     type="button"
                     tabIndex={0}
-                    disabled={profile === undefined || starting !== undefined}
+                    disabled={
+                      profile === undefined ||
+                      missing(profile) !== undefined ||
+                      starting !== undefined
+                    }
                     onClick={() => void start(run)}
                   >
                     {profile?.approval != null
@@ -240,14 +323,18 @@ export function FirstTaskTab({
 /**
  * The profile a run starts on until the operator picks one: for run 1 the project's default, and
  * for run 2 one of another harness than run 1's (`first`), else another profile, so the two runs
- * differ. Never a profile charter cannot type into.
+ * differ. Never a profile charter cannot type into, and one whose program is `found` on this
+ * machine while there is one (#1698).
  */
 export function suggested(
   profiles: readonly ProfileRow[],
   run: number,
   first?: { kind: string; name: string },
+  found: (profile: ProfileRow) => boolean = () => true,
 ): string | undefined {
-  const typed = profiles.filter((one) => one.ready_to_type);
+  const ready = profiles.filter((one) => one.ready_to_type);
+  const here = ready.filter(found);
+  const typed = here.length > 0 ? here : ready;
   const byDefault = typed.find((one) => one.is_default) ?? typed[0];
   if (run === 1 || first === undefined) return byDefault?.name;
   const other =
