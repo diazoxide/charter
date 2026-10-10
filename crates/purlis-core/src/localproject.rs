@@ -18,6 +18,31 @@
 //!   projects and windows.
 //! - **The pointer goes only once every one of those is done** and the project reads as a
 //!   project in its new place. Until then it stays, and the next launch finishes the rest.
+//! - **A journal says a move was started** (`<config>/purlis/local-project-move`), written before
+//!   the rename and taken away after the pointer, holding the folder's identity (its device and
+//!   inode, which a rename keeps). A launch that died between the rename and the pointer finds
+//!   the old place empty and the journal there: it puts the pointer back only when the folder in
+//!   the new place is that same folder, and finishes. The approval and pin of the old place go to
+//!   the new one only through the pointer or the journal, both in the config home a chat may not
+//!   write, so they go only with the same files.
+//! - **One launch at a time**: the move holds a lock beside the machine store for its whole
+//!   length, so two launches never move or rewrite at once.
+//! - **Nothing a chat wrote is followed.** The project's files are a chat's to write, so every
+//!   file the move reads or rewrites in it is reached through no link and no `..`
+//!   ([`crate::contain::no_link_on_the_way`]) and replaced whole ([`crate::rewrite::replace`]).
+//!   A worktree outside the project, or a clone outside it whose worktree is inside, is never
+//!   written: the pointer is kept and the log names the `git worktree repair` to run.
+//!
+//! # A chat's harness conversation
+//!
+//! A harness that keeps its conversations under the folder a chat ran in (Claude Code keeps
+//! them in `~/.claude/projects/<the folder, spelled with dashes>/`) does not find a conversation
+//! from the old place when the chat resumes in the new one, since the folder has another name.
+//! Nothing is deleted: the conversation's file stays where the harness wrote it. A resume that
+//! is not found starts the chat fresh with its session record in its briefing, as any lost
+//! conversation does ([`crate::sessionresume::NotResumed::HarnessLostIt`]). Keeping the pointer
+//! would not help: a chat started at the old spelling runs in the folder the system resolves,
+//! the new one, and the old spelling is inside the config home a sandbox refuses.
 //!
 //! # What is never moved
 //!
@@ -25,8 +50,11 @@
 //!   working folder is inside it. It is left where it is, and the launch says so once
 //!   ([`Moved::Left`]). It moves at a later launch, once nothing works in it.
 //! - A project whose new place is taken: two folders are never merged.
+//! - A project whose new place would be inside a repository, a project, or the config home.
 
 use std::path::{Path, PathBuf};
+
+use crate::rewrite::Mode;
 
 /// The local project's folder's old name, in purlis's folder in the config home.
 pub const OLD_NAME: &str = "local-plane";
@@ -65,12 +93,25 @@ impl Places {
         out
     }
 
+    /// The journal of a move that was started ([`MOVE_JOURNAL`]).
+    fn journal(&self) -> PathBuf {
+        crate::machine::dir(&self.config_root).join(MOVE_JOURNAL)
+    }
+
     /// The new place as the system resolves it, else as written.
     fn new_real(&self) -> PathBuf {
         let new = self.current();
         new.canonicalize().unwrap_or(new)
     }
 }
+
+/// The journal of a move started and not yet finished, beside the machine store: the moved
+/// folder's identity, so a launch that died before the pointer was made puts it back only for
+/// the same folder.
+const MOVE_JOURNAL: &str = "local-project-move";
+
+/// The lock one launch holds for the whole of a move, beside the machine store.
+const MOVE_LOCK: &str = "local-project-move.lock";
 
 /// What a move does to the file system, so a test can stand in for it.
 pub struct Seams<'a> {
@@ -128,11 +169,13 @@ impl std::fmt::Display for Moved {
 /// Move the local project from the config home to the data home, or finish a move a launch
 /// started (see the module).
 pub fn run(places: &Places, seams: &Seams<'_>) -> Moved {
+    // Held for the whole move: a second launch waits, then finds it moved or finishes it.
+    let _one_at_a_time = crate::machine::Lock::named(&places.config_root, MOVE_LOCK);
     let old = places.old();
     let new = places.current();
     let olds = places.old_spellings();
     match std::fs::symlink_metadata(&old) {
-        Err(_) => return Moved::Nothing,
+        Err(_) => return after_a_rename(places, &olds),
         Ok(meta) if meta.file_type().is_symlink() => {
             // A pointer a launch left: the rename was made, and only the rest is to finish. A
             // link that points anywhere else is not purlis's, and is left alone.
@@ -144,6 +187,9 @@ pub fn run(places: &Places, seams: &Seams<'_>) -> Moved {
         Ok(meta) if !meta.is_dir() => return Moved::Nothing,
         Ok(_) => {}
     }
+    // The folder is still in the old place, so a journal there is of a move whose rename was
+    // never made.
+    let _ = std::fs::remove_file(places.journal());
     let left = |why: String| Moved::Left {
         at: old.clone(),
         why,
@@ -158,6 +204,9 @@ pub fn run(places: &Places, seams: &Seams<'_>) -> Moved {
     if let Some(why) = crate::datahome::refusal(&new) {
         return left(why);
     }
+    if let Some(why) = in_the_config_home(places, &new) {
+        return left(why);
+    }
     if let Some(why) = (seams.in_use)(&old) {
         return left(why);
     }
@@ -166,16 +215,27 @@ pub fn run(places: &Places, seams: &Seams<'_>) -> Moved {
     {
         return left(format!("{} could not be made ({e})", parent.display()));
     }
+    let Some(id) = folder_id(&old) else {
+        return left("its folder's identity could not be read".to_owned());
+    };
+    if let Err(e) = write_journal(places, id) {
+        return left(format!("the move's journal could not be written ({e})"));
+    }
     if let Err(e) = (seams.rename)(&old, &new) {
+        let _ = std::fs::remove_file(places.journal());
         return left(format!("it could not be moved to {} ({e})", new.display()));
     }
     if let Err(e) = link(&new, &old) {
         // Without the pointer, a record still naming the old place would find nothing: the
         // rename is put back, so the project is exactly where it was.
         return match (seams.rename)(&new, &old) {
-            Ok(()) => left(format!(
-                "no link could be left at the old place ({e}), so the move was put back"
-            )),
+            Ok(()) => {
+                let _ = std::fs::remove_file(places.journal());
+                left(format!(
+                    "no link could be left at the old place ({e}), so the move was put back"
+                ))
+            }
+            // The journal stays: the next launch puts the pointer back and finishes.
             Err(back) => Moved::PointerKept {
                 from: old.clone(),
                 to: new.clone(),
@@ -190,6 +250,83 @@ pub fn run(places: &Places, seams: &Seams<'_>) -> Moved {
     finish(places, &olds)
 }
 
+/// Why `new` is in purlis's folder in the config home, which a chat's sandbox denies whole: a
+/// data home set there would move the project from one denied place to another.
+fn in_the_config_home(places: &Places, new: &Path) -> Option<String> {
+    let config = crate::machine::dir(&places.config_root);
+    let config = config.canonicalize().unwrap_or(config);
+    let parent = new.parent()?;
+    let resolved = parent
+        .canonicalize()
+        .unwrap_or_else(|_| parent.to_path_buf());
+    resolved.starts_with(&config).then(|| {
+        format!(
+            "{} is in purlis's config home, where a sandboxed chat cannot start either",
+            new.display()
+        )
+    })
+}
+
+/// The old place is empty: nothing to move, unless a launch died between the rename and the
+/// pointer. Then the journal is there, and the folder in the new place is the one it names: the
+/// pointer is put back and the move finished. Anything else is not this move's.
+fn after_a_rename(places: &Places, olds: &[PathBuf]) -> Moved {
+    let journal = places.journal();
+    let Ok(text) = std::fs::read_to_string(&journal) else {
+        return Moved::Nothing;
+    };
+    let new = places.current();
+    let same = std::fs::symlink_metadata(&new).is_ok_and(|meta| meta.is_dir())
+        && folder_id(&new).is_some_and(|id| text.trim() == journal_line(id));
+    if !same {
+        let _ = std::fs::remove_file(&journal);
+        return Moved::Nothing;
+    }
+    if let Err(e) = link(&new, &places.old()) {
+        return Moved::PointerKept {
+            from: places.old(),
+            to: new.clone(),
+            why: format!(
+                "the link at the old place could not be put back ({e}); the project is whole at \
+                 {}",
+                new.display()
+            ),
+        };
+    }
+    finish(places, olds)
+}
+
+/// A folder's device and inode, which a rename on one file system keeps.
+#[cfg(unix)]
+fn folder_id(at: &Path) -> Option<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt;
+    let meta = std::fs::symlink_metadata(at).ok()?;
+    meta.is_dir().then(|| (meta.dev(), meta.ino()))
+}
+
+#[cfg(not(unix))]
+fn folder_id(_at: &Path) -> Option<(u64, u64)> {
+    None
+}
+
+fn journal_line((dev, ino): (u64, u64)) -> String {
+    format!("{dev} {ino}")
+}
+
+fn write_journal(places: &Places, id: (u64, u64)) -> std::io::Result<()> {
+    let journal = places.journal();
+    let dir = journal
+        .parent()
+        .expect("the journal is in purlis's folder")
+        .to_path_buf();
+    crate::rewrite::replace(
+        &dir,
+        &journal,
+        format!("{}\n", journal_line(id)).as_bytes(),
+        crate::rewrite::Mode::Private,
+    )
+}
+
 #[cfg(unix)]
 fn link(target: &Path, at: &Path) -> std::io::Result<()> {
     std::os::unix::fs::symlink(target, at)
@@ -200,7 +337,8 @@ fn link(_target: &Path, _at: &Path) -> std::io::Result<()> {
     Err(std::io::Error::other("links are made only on unix"))
 }
 
-/// Point what names the old place at the new one, then take the pointer away.
+/// Point what names the old place at the new one, then take the pointer away. Every step is
+/// safe to make again, so a launch that died in the middle is finished by the next.
 fn finish(places: &Places, olds: &[PathBuf]) -> Moved {
     let from = places.old();
     let to = places.current();
@@ -208,8 +346,9 @@ fn finish(places: &Places, olds: &[PathBuf]) -> Moved {
     let mut failed: Vec<String> = Vec::new();
     if !to.is_dir() {
         failed.push(format!("{} is not there", to.display()));
+    } else {
+        failed.extend(git_links(&real, olds));
     }
-    failed.extend(git_links(&to, olds, &real));
     if let Err(e) = reopen_record(&to, olds, &real) {
         failed.push(format!(
             "the record of its open chats could not be rewritten ({e})"
@@ -222,12 +361,16 @@ fn finish(places: &Places, olds: &[PathBuf]) -> Moved {
     }
     if failed.is_empty()
         && let Err(e) = std::fs::remove_file(&from)
+        && e.kind() != std::io::ErrorKind::NotFound
     {
         failed.push(format!(
             "the link at the old place could not be taken away ({e})"
         ));
     }
     if failed.is_empty() {
+        // Best effort: a journal left behind makes the next launch finish again, which changes
+        // nothing.
+        let _ = std::fs::remove_file(places.journal());
         Moved::Moved { from, to }
     } else {
         Moved::PointerKept {
@@ -239,86 +382,180 @@ fn finish(places: &Places, olds: &[PathBuf]) -> Moved {
 }
 
 /// `path` with whichever of `olds` it starts with replaced by `new`; `None` when it starts with
-/// none of them.
+/// none of them, or walks up with a `..` below it (never a path git or purlis writes).
 fn rebased(path: &Path, olds: &[PathBuf], new: &Path) -> Option<PathBuf> {
     olds.iter().find_map(|old| {
-        path.strip_prefix(old).ok().map(|rest| {
-            if rest.as_os_str().is_empty() {
-                new.to_path_buf()
-            } else {
-                new.join(rest)
-            }
+        let rest = path.strip_prefix(old).ok()?;
+        if rest
+            .components()
+            .any(|step| !matches!(step, std::path::Component::Normal(_)))
+        {
+            return None;
+        }
+        Some(if rest.as_os_str().is_empty() {
+            new.to_path_buf()
+        } else {
+            new.join(rest)
         })
     })
 }
 
 /// How deep below the project a clone's `.git` is looked for: `workspaces/<ws>/<repo>/.git` is
-/// four, and a persona's or a nested layout one more.
-const CLONE_DEPTH: usize = 5;
+/// four, a worktree under `workspaces/<ws>/.worktrees/<repo>/<name>/.git` six.
+const CLONE_DEPTH: usize = 6;
 
-/// Every git repository's `.git` folder in `root`, to [`CLONE_DEPTH`], never through a link.
-fn git_dirs(root: &Path) -> Vec<PathBuf> {
-    let mut found = Vec::new();
+/// The largest git link file the move reads: one path and a prefix.
+const LINK_FILE_MAX: u64 = 64 * 1024;
+
+/// Every `.git` in `root`, to [`CLONE_DEPTH`], never through a link: the folders (a clone) and
+/// the files (a worktree or a submodule).
+fn git_entries(root: &Path) -> (Vec<PathBuf>, Vec<PathBuf>) {
+    let (mut folders, mut files) = (Vec::new(), Vec::new());
     let mut todo = vec![(root.to_path_buf(), 0usize)];
     while let Some((dir, depth)) = todo.pop() {
         let Ok(entries) = std::fs::read_dir(&dir) else {
             continue;
         };
         for entry in entries.flatten() {
+            // Of the entry itself: a link is neither a folder nor a file here.
             let Ok(kind) = entry.file_type() else {
                 continue;
             };
-            if !kind.is_dir() {
-                continue;
-            }
             let path = entry.path();
             if entry.file_name() == ".git" {
-                found.push(path);
-            } else if depth + 1 < CLONE_DEPTH {
+                if kind.is_dir() {
+                    folders.push(path);
+                } else if kind.is_file() {
+                    files.push(path);
+                }
+            } else if kind.is_dir() && depth + 1 < CLONE_DEPTH {
                 todo.push((path, depth + 1));
             }
         }
     }
-    found
+    (folders, files)
 }
 
-/// The two links between each repository in `root` and its linked worktrees, pointed at the new
-/// place (what `git worktree repair` writes): each worktree's `gitdir` record in the repository,
-/// and the `.git` file in the worktree. What could not be rewritten, in words.
-fn git_links(root: &Path, olds: &[PathBuf], new: &Path) -> Vec<String> {
+/// The file at `path` in `root`, reached through no link and no `..`, when it is a plain file
+/// of a link's size.
+fn read_inside(root: &Path, path: &Path) -> Option<String> {
+    crate::contain::no_link_on_the_way(root, path).ok()?;
+    let meta = std::fs::symlink_metadata(path).ok()?;
+    if !meta.is_file() || meta.len() > LINK_FILE_MAX {
+        return None;
+    }
+    std::fs::read_to_string(path).ok()
+}
+
+/// A file outside the project, read and never written, when it is a plain file of a link's
+/// size.
+fn read_outside(path: &Path) -> Option<String> {
+    let meta = std::fs::symlink_metadata(path).ok()?;
+    if !meta.is_file() || meta.len() > LINK_FILE_MAX {
+        return None;
+    }
+    std::fs::read_to_string(path).ok()
+}
+
+/// Whether `path` is in the project, in the old place or the new one.
+fn in_the_project(path: &Path, olds: &[PathBuf], new: &Path) -> bool {
+    path.starts_with(new) || olds.iter().any(|old| path.starts_with(old))
+}
+
+/// The two links between each repository in the project at `root` (as it resolves) and its
+/// linked worktrees, pointed at the new place (what `git worktree repair` writes): each
+/// worktree's `gitdir` record in the repository, and the `.git` file in the worktree. Each is
+/// rewritten only where it still names the old place, so a second run changes nothing. A
+/// worktree outside the project, and a clone outside it with a worktree inside, are never
+/// written: each still naming the old place is said, and keeps the pointer. What could not be
+/// pointed, in words.
+fn git_links(root: &Path, olds: &[PathBuf]) -> Vec<String> {
     let mut failed = Vec::new();
-    for git in git_dirs(root) {
-        let Ok(worktrees) = std::fs::read_dir(git.join("worktrees")) else {
+    let (folders, files) = git_entries(root);
+    for git in folders {
+        let worktrees = git.join("worktrees");
+        if crate::contain::no_link_on_the_way(root, &worktrees).is_err() {
+            continue;
+        }
+        let Ok(entries) = std::fs::read_dir(&worktrees) else {
             continue;
         };
-        for worktree in worktrees.flatten() {
+        for worktree in entries.flatten() {
+            if !worktree.file_type().is_ok_and(|kind| kind.is_dir()) {
+                continue;
+            }
             let record = worktree.path().join("gitdir");
-            let Ok(text) = std::fs::read_to_string(&record) else {
+            let Some(text) = read_inside(root, &record) else {
                 continue;
             };
             let named = PathBuf::from(text.trim_end());
-            let Some(moved) = rebased(&named, olds, new) else {
-                continue;
+            let at = match rebased(&named, olds, root) {
+                Some(moved) => {
+                    let line = format!("{}\n", moved.display());
+                    if let Err(e) =
+                        crate::rewrite::replace(root, &record, line.as_bytes(), Mode::Kept)
+                    {
+                        failed.push(format!("{} could not be rewritten ({e})", record.display()));
+                        continue;
+                    }
+                    moved
+                }
+                None => named,
             };
-            if let Err(e) = std::fs::write(&record, format!("{}\n", moved.display())) {
-                failed.push(format!("{} could not be rewritten ({e})", record.display()));
-                continue;
-            }
-            // The worktree's own `.git` file, now in the new place, names the record back.
-            let Ok(text) = std::fs::read_to_string(&moved) else {
-                continue;
-            };
-            let Some(back) = text.trim_end().strip_prefix("gitdir: ") else {
-                continue;
-            };
-            if let Some(back) = rebased(Path::new(back), olds, new)
-                && let Err(e) = std::fs::write(&moved, format!("gitdir: {}\n", back.display()))
-            {
-                failed.push(format!("{} could not be rewritten ({e})", moved.display()));
+            if let Some(why) = worktree_back(root, olds, &at) {
+                failed.push(why);
             }
         }
     }
+    // A worktree in the project of a clone outside it: that clone's record names this one.
+    for file in files {
+        let Some(text) = read_inside(root, &file) else {
+            continue;
+        };
+        let Some(admin) = text.trim_end().strip_prefix("gitdir: ").map(PathBuf::from) else {
+            continue;
+        };
+        if !admin.is_absolute() || in_the_project(&admin, olds, root) {
+            continue;
+        }
+        let names_old = read_outside(&admin.join("gitdir"))
+            .is_some_and(|back| rebased(Path::new(back.trim_end()), olds, root).is_some());
+        if names_old {
+            failed.push(format!(
+                "the clone whose worktree record is {} still names its worktree at the old \
+                 place; run `git worktree repair {}` in that clone",
+                admin.display(),
+                file.parent().unwrap_or(root).display()
+            ));
+        }
+    }
     failed
+}
+
+/// The worktree's own `.git` file at `at`, naming its record back, pointed at the new place
+/// when it is in the project; said when it is outside and still names the old place.
+fn worktree_back(root: &Path, olds: &[PathBuf], at: &Path) -> Option<String> {
+    if !at.starts_with(root) {
+        let names_old = read_outside(at).is_some_and(|text| {
+            text.trim_end()
+                .strip_prefix("gitdir: ")
+                .is_some_and(|back| rebased(Path::new(back), olds, root).is_some())
+        });
+        return names_old.then(|| {
+            format!(
+                "the worktree at {} is outside the project and still names it at the old \
+                 place; run `git worktree repair` in it",
+                at.parent().unwrap_or(at).display()
+            )
+        });
+    }
+    let text = read_inside(root, at)?;
+    let back = text.trim_end().strip_prefix("gitdir: ")?;
+    let moved = rebased(Path::new(back), olds, root)?;
+    let line = format!("gitdir: {}\n", moved.display());
+    crate::rewrite::replace(root, at, line.as_bytes(), Mode::Kept)
+        .err()
+        .map(|e| format!("{} could not be rewritten ({e})", at.display()))
 }
 
 /// The record of the chats that were open, with each folder in the old place named in the new.
@@ -376,14 +613,37 @@ fn machine_store(config_root: &Path, olds: &[PathBuf], new: &Path) -> std::io::R
 }
 
 /// Whether a purlis window holds the project at `at`, or a process of this user works in it;
-/// fail closed: a process list that cannot be read reads as in use.
+/// fail closed: a process list that cannot be read, or that does not show this process, reads
+/// as in use, and so does any purlis answering in the fallback folders, which are not named by
+/// the project they serve.
 pub fn in_use(at: &Path) -> Option<String> {
+    let bases = [
+        std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from),
+        Some(std::env::temp_dir()),
+    ];
+    in_use_with(at, &bases.into_iter().flatten().collect::<Vec<_>>())
+}
+
+/// [`in_use`], with the fallback folders a window's socket may be in handed in.
+fn in_use_with(at: &Path, fallbacks: &[PathBuf]) -> Option<String> {
     if let Some(socket) = crate::renamelocal::busy::beside(at)
         .into_iter()
         .find(|socket| crate::renamelocal::busy::answers(socket))
     {
         return Some(format!(
             "a purlis window has it open ({} answers)",
+            socket.display()
+        ));
+    }
+    // A window whose project's path is too long for a socket answers in a fallback folder,
+    // which does not say which project it holds: any one answering may hold this one.
+    if let Some(socket) = fallbacks
+        .iter()
+        .flat_map(|base| crate::renamelocal::busy::in_fallback(base))
+        .find(|socket| crate::renamelocal::busy::answers(socket))
+    {
+        return Some(format!(
+            "a running purlis answers on {}, and may have it open",
             socket.display()
         ));
     }
@@ -404,6 +664,9 @@ pub fn in_use(at: &Path) -> Option<String> {
 fn working_folders() -> Result<Vec<(String, PathBuf)>, String> {
     let me = std::process::id();
     let uid = rustix::process::getuid().as_raw();
+    if std::fs::symlink_metadata(format!("/proc/{me}/cwd")).is_err() {
+        return Err("/proc does not show this process".to_owned());
+    }
     let entries =
         std::fs::read_dir("/proc").map_err(|e| format!("/proc could not be read ({e})"))?;
     Ok(entries
@@ -432,7 +695,13 @@ fn working_folders() -> Result<Vec<(String, PathBuf)>, String> {
     lsof.args(["-nP", "-a", "-d", "cwd", "-u", &uid, "-F", "pn"]);
     let out = crate::forklock::output(&mut lsof)
         .map_err(|e| format!("the process list could not be read ({e})"))?;
-    Ok(lsof_cwds(&String::from_utf8_lossy(&out.stdout), &me))
+    if !out.status.success() {
+        return Err(format!(
+            "the process list could not be read (lsof ended with {})",
+            out.status
+        ));
+    }
+    lsof_cwds(&String::from_utf8_lossy(&out.stdout), &me)
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
@@ -440,21 +709,29 @@ fn working_folders() -> Result<Vec<(String, PathBuf)>, String> {
     Err("this system's process list is not read".to_owned())
 }
 
-/// `lsof -F pn`'s answer, without the process `me`: a `p<pid>` line, then its `n<folder>`.
+/// `lsof -F pn`'s answer, without the process `me`: a `p<pid>` line, then its `n<folder>`. A
+/// listing that does not show `me` shows nothing reliably, and is refused.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-fn lsof_cwds(listing: &str, me: &str) -> Vec<(String, PathBuf)> {
+fn lsof_cwds(listing: &str, me: &str) -> Result<Vec<(String, PathBuf)>, String> {
     let mut out = Vec::new();
     let mut pid: Option<&str> = None;
+    let mut shows_me = false;
     for line in listing.lines() {
         if let Some(found) = line.strip_prefix('p') {
             pid = Some(found);
+            shows_me |= found == me;
         } else if let (Some(folder), Some(pid)) = (line.strip_prefix('n'), pid)
             && pid != me
         {
             out.push((format!("process {pid}"), PathBuf::from(folder)));
         }
     }
-    out
+    if !shows_me {
+        return Err(
+            "the process list could not be read (it does not show this process)".to_owned(),
+        );
+    }
+    Ok(out)
 }
 
 /// [`run`] on this machine, with the real file system, at the app's launch: `None` when there
