@@ -58,12 +58,14 @@ const GROUPS: SettingsGroup[] = [
 describe("where a refusal is fixed", () => {
   it("is a refused profile's own page, at the field it is about (#1292)", () => {
     const page: SettingsGroup = {
-      id: "project.profile.bad",
+      id: "project.harness.profile.bad",
       label: "bad",
       help: "",
       settings: [
-        at("project.profile.bad.kind", "bad: kind", ["harness", "bad", "kind"], { file: "local" }),
-        at("project.profile.bad.command", "bad: command", ["harness", "bad", "command"], {
+        at("project.harness.profile.bad.kind", "bad: kind", ["harness", "bad", "kind"], {
+          file: "local",
+        }),
+        at("project.harness.profile.bad.command", "bad: command", ["harness", "bad", "command"], {
           file: "local",
         }),
       ],
@@ -74,16 +76,16 @@ describe("where a refusal is fixed", () => {
         {
           why,
           to: {
-            group: "project.profile.bad",
+            group: "project.harness.profile.bad",
             label: "bad › bad: kind",
-            setting: "project.profile.bad.kind",
+            setting: "project.harness.profile.bad.kind",
           },
         },
       ],
     );
     // One about the profile's table as a whole goes to its page.
     expect(standingIn([said(why, ["harness", "bad"])], "local", [...GROUPS, page])).toEqual([
-      { why, to: { group: "project.profile.bad", label: "bad" } },
+      { why, to: { group: "project.harness.profile.bad", label: "bad" } },
     ]);
   });
 

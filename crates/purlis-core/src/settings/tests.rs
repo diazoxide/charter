@@ -1477,7 +1477,7 @@ fn each_reader_of_the_committed_file_gives_the_key_of_its_refusal() {
 }
 
 /// **This machine's file hands its keys over too** (#1292), and **a refused profile gives its
-/// own table**, so the window links it to that profile's page (`project.profile.<name>`).
+/// own table**, so the window links it to that profile's page (`project.harness.profile.<name>`).
 #[test]
 fn each_reader_of_the_local_file_gives_the_key_of_its_refusal_and_a_profile_its_table() {
     let dir = tempfile::tempdir().unwrap();

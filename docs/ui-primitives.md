@@ -184,7 +184,9 @@ own words instead. What it adds is a type that refuses a line with no way out: `
 `copy` or `onDismiss`, at least one, and always a `cause`. `at="pane"` draws it in its pane's
 row of Notices, above the terminal and never over it (#1647); `at="drawer"` draws it as a row
 of the alerts drawer (NO-6 #1238); the default is the band under the strip.
-`Notice.guard.test.ts` fails on a hand-built one.
+`Notice.guard.test.ts` fails on a hand-built one. A fix whose press is still on its way
+(`busy`, an Undo in flight, #1190) is `disabled` and `aria-busy`, so a second press sends
+nothing; it is enabled again the moment the answer comes, a refusal included.
 
 Under the strip, Notices are stacked by `NoticeBand` (V91i, NO-2 #1229): at most two stand, the
 most important first — trouble before news, then the family order `IMPORTANCE` exports — and
