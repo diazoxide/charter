@@ -37,6 +37,8 @@ empty state and error copy follow it.
   one and press Check again*, *Make one with the + above, or New vault… in the palette*. The
   capital tells the reader it is something to press. An act named for its button is cased
   that way wherever it is the subject, too: *Smart close stopped — …* (#1156).
+  A path to a Settings group is its labels as they read, so it is no title case: *lift it in
+  Settings › Project › Dispatch*.
 
 ## Buttons and menu items
 
@@ -169,8 +171,12 @@ which reads the string literals of named places in the Rust source and builds no
   variants' `#[error(…)]` text. A call into another module is either read or named in
   `NOT_FOLLOWED` with why it holds no copy, or the check fails;
 - the errors of every `#[tauri::command]` in `app/src-tauri/src`: the literals inside its
-  `Err(…)`, `map_err(…)`, `ok_or(…)` and `ok_or_else(…)`. The window shows a command's error
-  word for word. A file is found by its attribute, so a new command is read without a list.
+  `Err(…)`, `map_err(…)`, `ok_or(…)` and `ok_or_else(…)`, in its body and in every function of
+  its own file it calls, and those call in turn, since an error passed on with `?` is shown as
+  well. A helper or a `const` of the same file that builds the error is read too, whether it is
+  called (`Err(gone(id))`) or passed by name (`.map_err(not_kept)`). The window shows a
+  command's error word for word. A file is found by its attribute, so a new command is read
+  without a list.
 
 A format string's `{name}` reads as `…`. A new place the window shows Rust copy from is added to
 its `PLACES`. A fault found there that cannot be fixed at once goes in its `KEPT`, with why, and

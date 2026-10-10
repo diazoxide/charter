@@ -96,6 +96,12 @@ function labels(text: string): string[] {
 }
 
 /**
+ * A path to a Settings group (`Settings › Project › Dispatch`, `Settings › You › This machine`):
+ * the window's own labels, each written as it reads, so the path has no case of its own.
+ */
+const SETTINGS_PATH = /\bSettings(?: › [A-Z][a-z]+(?: [a-z]+)?)+/g;
+
+/**
  * A label is in title case when every word of four letters or more starts with a capital and
  * there are at least two of them. Short words are skipped because title case leaves some of
  * them small ("in", "to", "a"). A label with one long word cannot be told apart, so it passes.
@@ -106,6 +112,7 @@ function titleCased(text: string): boolean {
     const words = label
       .replace(CHORD, " ")
       .replace(NAMES, " ")
+      .replace(SETTINGS_PATH, " ")
       // A capital Charter or Purlis is its own fault, below, and is said once.
       .replace(/\b(Charter|Purlis)\b/g, " ")
       .replace(/[^A-Za-z'-]+/g, " ")
