@@ -202,7 +202,9 @@ async fn answering_an_ask_is_never_served_on_the_link_even_to_the_window() {
         assert!(ui::WINDOW_ONLY.contains(&command), "{command}");
     }
     assert!(ui::WINDOW_ONLY.contains(&"acknowledge_project_hosts"));
-    assert_eq!(ui::WINDOW_ONLY.len(), 35 + 26 + 3 + 2 + 3 + 1 + 2);
+    // And the start of the person's editor on this machine's extension record (#1296).
+    assert!(ui::WINDOW_ONLY.contains(&"open_extension_record"));
+    assert_eq!(ui::WINDOW_ONLY.len(), 35 + 26 + 3 + 2 + 3 + 1 + 2 + 1);
 }
 
 #[tokio::test]
