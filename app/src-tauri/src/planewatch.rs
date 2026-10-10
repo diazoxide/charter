@@ -1695,6 +1695,10 @@ mod tests {
             crate::watchset::raw::watched(&root.join("workspaces/beta/todos")) > 0,
             "the new workspace's todos are not watched"
         );
+        // The look takes its first look at the folder it now watches just after it told: a
+        // write before that is in the first look, and no event (`Raw` sends none) tells it. On
+        // a real watcher that write's own event tells it.
+        std::thread::sleep(SOON * 5);
 
         std::fs::write(root.join("workspaces/beta/todos/new.md"), "# new\n").expect("a todo");
         let change = told_about(&told, "workspaces/beta/todos/new.md");
