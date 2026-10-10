@@ -72,6 +72,11 @@ impl Root {
         &self.base
     }
 
+    /// The project it was found in.
+    pub(super) fn plane(&self) -> &Path {
+        &self.plane
+    }
+
     /// The files in the clone's git folder whose change moves what the branch has checked out
     /// (#1152): its `HEAD`, the branch's own ref, and the clone's `packed-refs`. A commit that
     /// writes no file in the branch's folder — `git commit --amend --no-edit`, a commit of
@@ -80,7 +85,8 @@ impl Root {
         &self.refs
     }
 
-    fn branch(&self) -> Branch<'_> {
+    /// The branch it was found by, named as the window names it.
+    pub(super) fn branch(&self) -> Branch<'_> {
         Branch {
             ws: &self.ws,
             repo: &self.repo,

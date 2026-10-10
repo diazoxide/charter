@@ -27,7 +27,7 @@ use nucleo_matcher::pattern::{AtomKind, CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
 use unicode_segmentation::UnicodeSegmentation as _;
 
-use super::{Branch, Refused};
+use super::{Branch, Reader, Refused};
 
 /// The most files of one branch a session lists: a branch of a million generated files is
 /// searched through its first 200,000 (in git's order), about 18 MB of names held while the
@@ -128,6 +128,8 @@ pub struct Finder {
     listings: HashMap<(PathBuf, Named), Result<Listing, String>>,
     projects: HashMap<PathBuf, Vec<Named>>,
     cap: usize,
+    /// What finds each branch's folder: the bounded reader's child, or, with none, this process.
+    reader: Option<Reader>,
 }
 
 impl Default for Finder {
@@ -143,7 +145,15 @@ impl Finder {
             listings: HashMap::new(),
             projects: HashMap::new(),
             cap,
+            reader: None,
         }
+    }
+
+    /// The same finder, finding each branch's folder by `reader`'s child, so listing a branch
+    /// starts no git to find its folder in this process (#1189).
+    pub fn reading_with(mut self, reader: Reader) -> Self {
+        self.reader = Some(reader);
+        self
     }
 
     /// Every branch of `plane`, read once per session.
@@ -168,11 +178,12 @@ impl Finder {
         );
         let mut listed: Vec<(usize, &Listing)> = Vec::with_capacity(scope.len());
         let cap = self.cap;
+        let reader = self.reader.as_ref();
         for place in scope {
             let key = (place.plane.to_path_buf(), named(place.branch));
             self.listings
                 .entry(key)
-                .or_insert_with(|| listing(place.plane, place.branch, cap));
+                .or_insert_with(|| listing(reader, place.plane, place.branch, cap));
         }
         for (at, place) in scope.iter().enumerate() {
             let key = (place.plane.to_path_buf(), named(place.branch));
@@ -303,9 +314,14 @@ fn named(branch: Branch<'_>) -> Named {
     }
 }
 
-fn listing(plane: &Path, branch: Branch<'_>, cap: usize) -> Result<Listing, String> {
+fn listing(
+    reader: Option<&Reader>,
+    plane: &Path,
+    branch: Branch<'_>,
+    cap: usize,
+) -> Result<Listing, String> {
     let read = || -> Result<Listing, Refused> {
-        let folder = super::folder_of(plane, branch)?;
+        let folder = super::found(reader, plane, branch)?;
         let mut paths = super::files_in(&folder, branch)?;
         let partial = (paths.len() > cap).then(|| {
             format!(
@@ -360,6 +376,25 @@ fn opens(listing: &Listing, path: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #1189: a finder reading with a reader finds each branch's folder through it: a branch
+    /// the reader refuses is refused in the reader's own sentence.
+    #[cfg(unix)]
+    #[test]
+    fn a_finder_reading_with_a_reader_finds_each_folder_through_it() {
+        let nowhere = tempfile::tempdir().unwrap();
+        let said = "thing in workspace 'alpha' has no branch folder called 'piece'";
+        let answer = serde_json::json!({ "Err": said }).to_string();
+        let (_answer, reader) = crate::files::tests::reader_answering(&answer);
+        let scope = [Place {
+            plane: nowhere.path(),
+            branch: Branch::piece("alpha", "thing", "piece"),
+        }];
+
+        let found = Finder::default().reading_with(reader).find(&scope, "a", 10);
+
+        assert_eq!(found.refused, [(0, said.to_string())]);
+    }
 
     fn matched(query: &str, path: &str) -> Vec<u32> {
         let pattern = Pattern::new(

@@ -10,7 +10,7 @@
 use std::path::Path;
 
 use base64::Engine as _;
-use purlis_core::files::{self, Branch, Entry, Kind, Mark, Opened};
+use purlis_core::files::{self, Branch, Entry, Kind, Mark, Opened, Reader};
 use purlis_core::youreditor::{self, Editor, Launch};
 
 use crate::planes::{PlaneId, Planes};
@@ -55,7 +55,12 @@ pub async fn piece_file(
     // Resolved here, so a project that is not open refuses here rather than in the thread.
     let root = planes.held(&plane)?.root().to_path_buf();
     crate::off_the_window("reading the file", move || {
-        file_of(&root, branch(&workspace, &repo, &piece), &path)
+        file_of(
+            &crate::reader(),
+            &root,
+            branch(&workspace, &repo, &piece),
+            &path,
+        )
     })
     .await
 }
@@ -126,7 +131,12 @@ pub async fn branch_tree(
     // Resolved here, so a project that is not open refuses here rather than in the thread.
     let root = planes.held(&plane)?.root().to_path_buf();
     tauri::async_runtime::spawn_blocking(move || {
-        tree_of(&root, branch(&workspace, &repo, &piece), &folder)
+        tree_of(
+            &crate::reader(),
+            &root,
+            branch(&workspace, &repo, &piece),
+            &folder,
+        )
     })
     .await
     .map_err(|err| format!("reading the folder did not finish: {err}"))?
@@ -396,8 +406,16 @@ pub(crate) fn branch<'a>(
     }
 }
 
-fn tree_of(plane: &Path, branch: Branch<'_>, folder: &str) -> Result<FolderListing, String> {
-    files::tree(plane, branch, folder)
+// The branch's folder is found by the bounded reader's child (#1189), so this process starts
+// no git to find it; the folder is then listed here, as `files::tree` lists one.
+fn tree_of(
+    reader: &Reader,
+    plane: &Path,
+    branch: Branch<'_>,
+    folder: &str,
+) -> Result<FolderListing, String> {
+    files::root(reader, plane, branch)
+        .and_then(|root| root.tree(folder))
         .map(|level| FolderListing {
             entries: level.entries.into_iter().map(FolderEntry::from).collect(),
             more: u32::try_from(level.more).unwrap_or(u32::MAX),
@@ -463,6 +481,7 @@ pub async fn open_in_your_editor(
     use tauri_plugin_opener::OpenerExt as _;
     let var = purlis_core::envvar::var;
     let launch = launch_of(
+        &crate::reader(),
         planes.held(&plane)?.root(),
         branch(&workspace, &repo, &piece),
         &path,
@@ -537,6 +556,7 @@ pub async fn move_their_agents_md_aside(
 }
 
 fn launch_of(
+    reader: &Reader,
     plane: &Path,
     branch: Branch<'_>,
     path: &str,
@@ -544,7 +564,8 @@ fn launch_of(
     editor: YourEditor,
     var: &dyn Fn(&str) -> Option<String>,
 ) -> Result<Launch, String> {
-    files::in_your_editor(plane, branch, path, line, editor.into(), var)
+    files::root(reader, plane, branch)
+        .and_then(|root| root.in_your_editor(path, line, editor.into(), var))
         .map_err(|refused| refused.to_string())
 }
 
@@ -570,7 +591,13 @@ pub async fn copy_branch_path(
 ) -> Result<(), String> {
     let root = planes.held(&plane)?.root().to_path_buf();
     let text = crate::off_the_window("placing the path", move || {
-        path_text(&root, branch(&workspace, &repo, &piece), &path, absolute)
+        path_text(
+            &crate::reader(),
+            &root,
+            branch(&workspace, &repo, &piece),
+            &path,
+            absolute,
+        )
     })
     .await?;
     clipboard.put_text(&text)
@@ -596,7 +623,12 @@ pub async fn reveal_branch_path(
     let root = planes.held(&plane)?.root().to_path_buf();
     let asked = path.clone();
     let placed = crate::off_the_window("placing the path", move || {
-        placed_of(&root, branch(&workspace, &repo, &piece), &asked)
+        placed_of(
+            &crate::reader(),
+            &root,
+            branch(&workspace, &repo, &piece),
+            &asked,
+        )
     })
     .await?;
     app.opener()
@@ -605,12 +637,19 @@ pub async fn reveal_branch_path(
 }
 
 /// The file or folder `path` names, or with `""` the branch's own folder (#1143), placed by the
-/// core: the branch's row and its *Files* row copy and reveal the folder itself.
-fn placed_of(plane: &Path, branch: Branch<'_>, path: &str) -> Result<files::Placed, String> {
+/// core: the branch's row and its *Files* row copy and reveal the folder itself. The branch's
+/// folder is found by `reader`'s child (#1189).
+fn placed_of(
+    reader: &Reader,
+    plane: &Path,
+    branch: Branch<'_>,
+    path: &str,
+) -> Result<files::Placed, String> {
+    let root = files::root(reader, plane, branch).map_err(|refused| refused.to_string())?;
     if path.is_empty() {
-        files::place_branch_folder(plane, branch)
+        root.place_branch_folder()
     } else {
-        files::place(plane, branch, path)
+        root.place(path)
     }
     .map_err(|refused| refused.to_string())
 }
@@ -618,6 +657,7 @@ fn placed_of(plane: &Path, branch: Branch<'_>, path: &str) -> Result<files::Plac
 /// What Copy path puts on the clipboard: the path in the branch, or the absolute path the core
 /// placed. An absolute path is said as a person writes it, without Windows' `\\?\` prefix.
 fn path_text(
+    reader: &Reader,
     plane: &Path,
     branch: Branch<'_>,
     path: &str,
@@ -625,9 +665,9 @@ fn path_text(
 ) -> Result<String, String> {
     if !absolute {
         // A link's own path, followed nowhere: what its row copies (`files::named`).
-        return files::named(plane, branch, path).map_err(|refused| refused.to_string());
+        return files::named_by(reader, plane, branch, path).map_err(|refused| refused.to_string());
     }
-    let placed = placed_of(plane, branch, path)?;
+    let placed = placed_of(reader, plane, branch, path)?;
     Ok(dunce::simplified(&placed.absolute).display().to_string())
 }
 
@@ -639,17 +679,35 @@ pub(crate) fn shell_folder(
     branch: Branch<'_>,
     folder: &str,
 ) -> Result<std::path::PathBuf, String> {
-    if folder.is_empty() {
-        return placed_of(plane, branch, folder).map(|placed| placed.absolute);
-    }
-    files::folder(plane, branch, folder).map_err(|refused| refused.to_string())
+    shell_folder_by(&crate::reader(), plane, branch, folder)
 }
 
-fn file_of(plane: &Path, branch: Branch<'_>, path: &str) -> Result<PieceFile, String> {
+/// [`shell_folder`], the branch's folder found by `reader`'s child (#1189).
+fn shell_folder_by(
+    reader: &Reader,
+    plane: &Path,
+    branch: Branch<'_>,
+    folder: &str,
+) -> Result<std::path::PathBuf, String> {
+    if folder.is_empty() {
+        return placed_of(reader, plane, branch, folder).map(|placed| placed.absolute);
+    }
+    files::root(reader, plane, branch)
+        .and_then(|root| root.folder(folder))
+        .map_err(|refused| refused.to_string())
+}
+
+fn file_of(
+    reader: &Reader,
+    plane: &Path,
+    branch: Branch<'_>,
+    path: &str,
+) -> Result<PieceFile, String> {
     // A size crosses as a `u32`: specta refuses a `u64` for TypeScript, which has no integer
     // that wide. A binary or oversized file past 4 GiB is said as 4 GiB.
     let bytes = |n: u64| u32::try_from(n).unwrap_or(u32::MAX);
-    files::open(plane, branch, path)
+    files::root(reader, plane, branch)
+        .and_then(|root| root.open(path))
         .map(|opened| match opened {
             Opened::Text { text } => PieceFile::Text { text },
             Opened::Image { mime, data } => PieceFile::Image {
@@ -689,6 +747,99 @@ mod tests {
         assert!(ran.status.success(), "git {args:?}: {ran:?}");
     }
 
+    /// #1189: a reader whose child answers every ask with `answer` (the child's JSON), so a test
+    /// sees that a command found its branch's folder through the reader and nowhere else.
+    #[cfg(unix)]
+    fn reader_answering(answer: &str) -> (tempfile::TempDir, Reader) {
+        let dir = tempfile::tempdir().unwrap();
+        let said = dir.path().join("answer");
+        std::fs::write(&said, format!("\u{1e}charter-read\u{1e}{answer}\n")).unwrap();
+        let script = format!("cat >/dev/null; cat '{}'", said.display());
+        let reader = Reader::new(
+            "/bin/sh".into(),
+            ["-c", &script, files::READ_ARG].map(std::ffi::OsString::from),
+        );
+        (dir, reader)
+    }
+
+    /// #1189: every file command finds its branch's folder through the bounded reader: a reader
+    /// that refuses the branch refuses each of them in its own sentence, word for word, in a
+    /// project where nothing could have found a folder any other way.
+    #[cfg(unix)]
+    #[test]
+    fn every_file_command_is_refused_in_the_readers_sentence() {
+        let nowhere = tempfile::tempdir().unwrap();
+        let plane = nowhere.path();
+        let said = "thing in workspace 'alpha' has no branch folder called 'piece'";
+        let (_answer, reader) = reader_answering(&serde_json::json!({ "Err": said }).to_string());
+        let none = |_: &str| None;
+        let refused = |answered: Result<(), String>| answered.unwrap_err();
+
+        assert_eq!(
+            refused(file_of(&reader, plane, PIECE, "a.txt").map(drop)),
+            said
+        );
+        assert_eq!(refused(tree_of(&reader, plane, PIECE, "").map(drop)), said);
+        assert_eq!(
+            refused(launch_of(&reader, plane, PIECE, "a.txt", 1, YourEditor::Zed, &none).map(drop)),
+            said
+        );
+        for absolute in [false, true] {
+            assert_eq!(
+                refused(path_text(&reader, plane, PIECE, "a.txt", absolute).map(drop)),
+                said
+            );
+        }
+        // A path refused by its spelling alone is refused before the branch is asked about.
+        assert_eq!(
+            refused(path_text(&reader, plane, PIECE, "../a.txt", false).map(drop)),
+            "'../a.txt' is not a path inside the branch's folder"
+        );
+        for path in ["", "a.txt"] {
+            assert_eq!(
+                refused(placed_of(&reader, plane, PIECE, path).map(drop)),
+                said
+            );
+        }
+        for folder in ["", "src"] {
+            assert_eq!(
+                refused(shell_folder_by(&reader, plane, PIECE, folder).map(drop)),
+                said
+            );
+        }
+    }
+
+    /// #1189: Copy path, Reveal and the shell's folder act on the folder the reader found.
+    #[cfg(unix)]
+    #[test]
+    fn copy_path_reveal_and_the_shell_use_the_folder_the_reader_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let plane = std::fs::canonicalize(dir.path()).unwrap();
+        let folder = plane.join("workspaces/alpha/.worktrees/thing/piece");
+        std::fs::create_dir_all(folder.join("src")).unwrap();
+        std::fs::write(folder.join("src/lib.rs"), "").unwrap();
+        let found = serde_json::json!({ "Ok": { "Root": { "base": folder, "refs": [] } } });
+        let (_answer, reader) = reader_answering(&found.to_string());
+
+        assert_eq!(
+            path_text(&reader, &plane, PIECE, "src/lib.rs", false),
+            Ok("src/lib.rs".to_string())
+        );
+        assert_eq!(
+            path_text(&reader, &plane, PIECE, "src/lib.rs", true),
+            Ok(folder.join("src/lib.rs").display().to_string())
+        );
+        assert_eq!(
+            placed_of(&reader, &plane, PIECE, "src").map(|placed| placed.absolute),
+            Ok(folder.join("src"))
+        );
+        assert_eq!(
+            shell_folder_by(&reader, &plane, PIECE, "src"),
+            Ok(folder.join("src"))
+        );
+        assert_eq!(shell_folder_by(&reader, &plane, PIECE, ""), Ok(folder));
+    }
+
     const PIECE: Branch<'static> = Branch {
         ws: "alpha",
         repo: "thing",
@@ -716,7 +867,7 @@ mod tests {
     fn a_pieces_file_crosses_to_the_window() {
         let (_dir, root, _piece) = plane();
 
-        let file = file_of(&root, PIECE, "README.md").unwrap();
+        let file = file_of(&crate::reader(), &root, PIECE, "README.md").unwrap();
 
         assert_eq!(
             file,
@@ -731,7 +882,7 @@ mod tests {
         let (_dir, root, piece) = plane();
         std::fs::write(piece.join("dot.gif"), b"GIF89a\x01\x00\x01\x00\x00\x00\x00").unwrap();
 
-        let file = file_of(&root, PIECE, "dot.gif").unwrap();
+        let file = file_of(&crate::reader(), &root, PIECE, "dot.gif").unwrap();
 
         assert_eq!(
             file,
@@ -748,8 +899,24 @@ mod tests {
         let none = |_: &str| None;
         let file = std::fs::canonicalize(piece).unwrap().join("README.md");
 
-        let vscode = launch_of(&root, PIECE, "README.md", 4, YourEditor::Vscode, &none);
-        let refused = launch_of(&root, PIECE, "../x", 4, YourEditor::Zed, &none);
+        let vscode = launch_of(
+            &crate::reader(),
+            &root,
+            PIECE,
+            "README.md",
+            4,
+            YourEditor::Vscode,
+            &none,
+        );
+        let refused = launch_of(
+            &crate::reader(),
+            &root,
+            PIECE,
+            "../x",
+            4,
+            YourEditor::Zed,
+            &none,
+        );
 
         assert_eq!(
             vscode,
@@ -768,13 +935,13 @@ mod tests {
         std::fs::write(piece.join("src/lib.rs"), "\n").unwrap();
 
         // The worktree's own `.git` is there too, and hidden with what git ignores.
-        let top: Vec<FolderEntry> = tree_of(&root, PIECE, "")
+        let top: Vec<FolderEntry> = tree_of(&crate::reader(), &root, PIECE, "")
             .unwrap()
             .entries
             .into_iter()
             .filter(|one| !one.ignored)
             .collect();
-        let repo = tree_of(&root, branch("alpha", "thing", &None), "").unwrap();
+        let repo = tree_of(&crate::reader(), &root, branch("alpha", "thing", &None), "").unwrap();
 
         assert_eq!(
             top,
@@ -798,7 +965,7 @@ mod tests {
             "{repo:?}"
         );
         assert_eq!(
-            tree_of(&root, PIECE, ".."),
+            tree_of(&crate::reader(), &root, PIECE, ".."),
             Err("'..' is not a path inside the branch's folder".to_string())
         );
     }
@@ -915,8 +1082,8 @@ mod tests {
         std::fs::write(piece.join("src/lib.rs"), "\n").unwrap();
         let resolved = std::fs::canonicalize(&piece).unwrap();
 
-        let relative = path_text(&root, PIECE, "./src/lib.rs", false);
-        let absolute = path_text(&root, PIECE, "src", true);
+        let relative = path_text(&crate::reader(), &root, PIECE, "./src/lib.rs", false);
+        let absolute = path_text(&crate::reader(), &root, PIECE, "src", true);
 
         assert_eq!(relative, Ok("src/lib.rs".to_string()));
         assert_eq!(absolute, Ok(resolved.join("src").display().to_string()));
@@ -930,15 +1097,15 @@ mod tests {
         let resolved = std::fs::canonicalize(&piece).unwrap();
 
         assert_eq!(
-            path_text(&root, PIECE, "", true),
+            path_text(&crate::reader(), &root, PIECE, "", true),
             Ok(resolved.display().to_string())
         );
         assert_eq!(
-            placed_of(&root, PIECE, "").map(|placed| placed.absolute),
+            placed_of(&crate::reader(), &root, PIECE, "").map(|placed| placed.absolute),
             Ok(resolved)
         );
         assert_eq!(
-            path_text(&root, PIECE, "", false),
+            path_text(&crate::reader(), &root, PIECE, "", false),
             Err("'' is not a path inside the branch's folder".to_string())
         );
     }
@@ -951,15 +1118,15 @@ mod tests {
         let refused = "'CLAUDE.md' is not a path inside the branch's folder".to_string();
 
         assert_eq!(
-            path_text(&root, PIECE, "CLAUDE.md", false),
+            path_text(&crate::reader(), &root, PIECE, "CLAUDE.md", false),
             Ok("CLAUDE.md".to_string())
         );
         assert_eq!(
-            path_text(&root, PIECE, "CLAUDE.md", true),
+            path_text(&crate::reader(), &root, PIECE, "CLAUDE.md", true),
             Err(refused.clone())
         );
         assert_eq!(
-            placed_of(&root, PIECE, "CLAUDE.md").map(|placed| placed.absolute),
+            placed_of(&crate::reader(), &root, PIECE, "CLAUDE.md").map(|placed| placed.absolute),
             Err(refused)
         );
     }
@@ -969,11 +1136,11 @@ mod tests {
         let (_dir, root, _piece) = plane();
 
         assert_eq!(
-            path_text(&root, PIECE, "../../charter.toml", true),
+            path_text(&crate::reader(), &root, PIECE, "../../charter.toml", true),
             Err("'../../charter.toml' is not a path inside the branch's folder".to_string())
         );
         assert_eq!(
-            placed_of(&root, PIECE, ".git").map(|placed| placed.absolute),
+            placed_of(&crate::reader(), &root, PIECE, ".git").map(|placed| placed.absolute),
             Err("'.git' is not a path inside the branch's folder".to_string())
         );
     }
@@ -1007,7 +1174,7 @@ mod tests {
     fn a_refusal_crosses_as_the_cores_sentence() {
         let (_dir, root, _piece) = plane();
 
-        let refused = file_of(&root, PIECE, "../../README.md").unwrap_err();
+        let refused = file_of(&crate::reader(), &root, PIECE, "../../README.md").unwrap_err();
 
         assert_eq!(
             refused,

@@ -167,6 +167,8 @@ pub struct Search {
     at: usize,
     walking: Option<Walking>,
     budget: Duration,
+    /// What finds each branch's folder: the bounded reader's child, or, with none, this process.
+    reader: Option<super::Reader>,
 }
 
 /// One branch, being walked.
@@ -241,6 +243,7 @@ pub fn search(
         at: 0,
         walking: None,
         budget: PAGE_TIME,
+        reader: None,
     })
 }
 
@@ -248,6 +251,13 @@ impl Search {
     /// The same search with another page time: for a test, or a caller with its own clock.
     pub fn with_page_time(mut self, budget: Duration) -> Self {
         self.budget = budget;
+        self
+    }
+
+    /// The same search, finding each branch's folder by `reader`'s child, so walking a branch
+    /// starts no git to find its folder in this process (#1189).
+    pub fn reading_with(mut self, reader: super::Reader) -> Self {
+        self.reader = Some(reader);
         self
     }
 
@@ -282,7 +292,7 @@ impl Search {
             }
             if self.walking.is_none() {
                 let (plane, named) = &self.places[self.at];
-                match walking(plane, named, stop) {
+                match walking(self.reader.as_ref(), plane, named, stop) {
                     Ok(Some(walk)) => self.walking = Some(walk),
                     // Called off while git listed the branch: the place is listed again by the
                     // next page, so a stop costs nothing it had found.
@@ -631,10 +641,15 @@ fn file_hits(
 /// `node_modules/` are never walked, and it opens nothing but folders.
 ///
 /// **The listing hears `stop`** (#1137): `Ok(None)` when it was raised while git listed.
-fn walking(plane: &Path, named: &Named, stop: &AtomicBool) -> Result<Option<Walking>, String> {
+fn walking(
+    reader: Option<&super::Reader>,
+    plane: &Path,
+    named: &Named,
+    stop: &AtomicBool,
+) -> Result<Option<Walking>, String> {
     let branch = named.branch();
     let ready = || -> Result<Option<Walking>, Refused> {
-        let folder = super::folder_of(plane, branch)?;
+        let folder = super::found(reader, plane, branch)?;
         let Some(offered) = super::files_in_until(&folder, branch, stop)? else {
             return Ok(None);
         };
@@ -829,6 +844,36 @@ fn window(line: &str, first: usize) -> (usize, usize, bool) {
 mod tests {
     use super::*;
     use crate::files::{Branch, Place};
+
+    /// #1189: a search reading with a reader finds each branch's folder through it: a branch
+    /// the reader refuses is refused in the reader's own sentence.
+    #[cfg(unix)]
+    #[test]
+    fn a_search_reading_with_a_reader_finds_each_folder_through_it() {
+        let nowhere = tempfile::tempdir().unwrap();
+        let said = "thing in workspace 'alpha' has no branch folder called 'piece'";
+        let answer = serde_json::json!({ "Err": said }).to_string();
+        let (_answer, reader) = crate::files::tests::reader_answering(&answer);
+        let scope = [Place {
+            plane: nowhere.path(),
+            branch: Branch::piece("alpha", "thing", "piece"),
+        }];
+        let mut heard = Vec::new();
+
+        let ended = search(&scope, "needle", SearchOptions::default())
+            .unwrap()
+            .reading_with(reader)
+            .more(10, &AtomicBool::new(false), &mut |one| heard.push(one));
+
+        assert_eq!(ended, Ended::Done);
+        assert_eq!(
+            heard,
+            [Searched::Refused {
+                at: 0,
+                why: said.to_string()
+            }]
+        );
+    }
 
     /// A file whose name ends so makes its reader panic.
     pub(super) const READER_PANICS: &str = "a-reader-panics-here.txt";
