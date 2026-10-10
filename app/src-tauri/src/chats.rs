@@ -977,7 +977,7 @@ impl Chats {
             let cwd = chat.cwd.clone().unwrap_or_else(|| root.clone());
             let mut writable = applied.writable();
             writable.extend(purlis_core::sandbox::program::temp_roots(&[]));
-            let checked = purlis_core::sandbox::program::checked(
+            let (checked, said) = purlis_core::sandbox::program::checked_answering(
                 harness,
                 &words,
                 applied.root(),
@@ -989,7 +989,13 @@ impl Chats {
                 None,
             )
             .map_err(|refused| refused.to_string())?;
-            return Ok((Some((applied.clone(), checked[0].clone())), None));
+            // Claude Code through purlis's proxy from the version that takes its ports
+            // (#1665); an older one keeps its own, and says so once as it opens.
+            let mut applied = applied.clone();
+            if let Some(said) = said {
+                applied.answered(&said);
+            }
+            return Ok((Some((applied, checked[0].clone())), None));
         }
         Ok((None, lifted))
     }
@@ -1760,6 +1766,12 @@ impl Chats {
         // backend still starts — every chat there would otherwise be refused — and its tab
         // says the record is missing.
         let mut late = Vec::new();
+        // An older Claude Code keeps its own proxy, and its first chat says so (#1665).
+        late.extend(
+            sandbox
+                .and_then(purlis_core::sandbox::Applied::older_notice)
+                .map(str::to_owned),
+        );
         if let Some(change) = &trust {
             let written = match (
                 lock(&self.trusting).as_ref(),

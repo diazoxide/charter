@@ -142,7 +142,12 @@ impl HarnessAdapter for ClaudeCode {
                 program: words.program,
                 args: [
                     words.command,
-                    reporting_on(words.armed, compiled, at.hook_socket)?,
+                    reporting_on(
+                        words.armed,
+                        compiled,
+                        at.hook_socket,
+                        at.confinement.map(crate::sandbox::Confinement::proxy_ports),
+                    )?,
                     words.charters,
                 ]
                 .concat(),
@@ -154,17 +159,20 @@ impl HarnessAdapter for ClaudeCode {
 }
 
 /// `armed` with the sandbox and deny rules in its `--settings` allowed to reach `socket`
-/// ([`crate::sandbox::claude::Settings::reporting_on`]), or as it is without one.
+/// ([`crate::sandbox::claude::Settings::reporting_on`]), and its network sent through
+/// purlis's proxy on `ports` where the chat has them (#1665,
+/// [`crate::sandbox::claude::Settings::through`]); or as it is with neither.
 ///
 /// **Fail closed.** A `--settings` that is missing, is not JSON, or does not carry `compiled`
-/// as [`ClaudeCode::arm_under`] wrote it refuses the chat: the socket is never added to a
-/// sandbox this adapter did not compile.
-fn reporting_on(
+/// as [`ClaudeCode::arm_under`] wrote it refuses the chat: neither the socket nor the ports are
+/// ever added to a sandbox this adapter did not compile.
+pub(crate) fn reporting_on(
     mut armed: Vec<String>,
     compiled: &crate::sandbox::claude::Settings,
     socket: Option<&std::path::Path>,
+    ports: Option<[u16; 2]>,
 ) -> Result<Vec<String>, String> {
-    if socket.is_none() {
+    if socket.is_none() && ports.is_none() {
         return Ok(armed);
     }
     let not_carried = || {
@@ -195,7 +203,10 @@ fn reporting_on(
                     .all(|(had, rule)| had == rule)
         })
         .ok_or_else(not_carried)?;
-    let reporting = compiled.reporting_on(socket);
+    let mut reporting = compiled.reporting_on(socket);
+    if let Some(ports) = ports {
+        reporting = reporting.through(ports);
+    }
     deny.extend(
         reporting.deny[compiled.deny.len()..]
             .iter()

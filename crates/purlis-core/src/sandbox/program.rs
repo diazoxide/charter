@@ -98,6 +98,18 @@ pub fn checked(
     chat: Chat<'_>,
     probe: Option<&Probe<'_>>,
 ) -> Result<Vec<String>, NotStarted> {
+    checked_answering(harness, words, root, chat, probe).map(|(words, _)| words)
+}
+
+/// [`checked`], with what the program answered `--version`, for a harness it is asked of
+/// (Claude Code): what the start reads its version from ([`super::Applied::answered`], #1665).
+pub fn checked_answering(
+    harness: Harness,
+    words: &[String],
+    root: &Path,
+    chat: Chat<'_>,
+    probe: Option<&Probe<'_>>,
+) -> Result<(Vec<String>, Option<String>), NotStarted> {
     let Some(written) = words.first() else {
         return Err(NotStarted::ProgramRelative);
     };
@@ -144,13 +156,13 @@ pub fn checked(
             Some(probe) => probe(&words).ok_or(Unanswered::Failed),
             None => version_of(&words, chat),
         };
-        match said {
-            Ok(said) if is_claude_code(&said) => {}
-            Err(Unanswered::TimedOut) => return Err(NotStarted::ProbeTimedOut(harness)),
-            Ok(_) | Err(Unanswered::Failed) => return Err(NotStarted::NotTheHarness(harness)),
-        }
+        return match said {
+            Ok(said) if is_claude_code(&said) => Ok((words, Some(said))),
+            Err(Unanswered::TimedOut) => Err(NotStarted::ProbeTimedOut(harness)),
+            Ok(_) | Err(Unanswered::Failed) => Err(NotStarted::NotTheHarness(harness)),
+        };
     }
-    Ok(words)
+    Ok((words, None))
 }
 
 /// Whether `path` lies in one of `places`, each given as written and as its real path. The one
@@ -408,15 +420,24 @@ fn percent_decoded(word: &str) -> String {
 
 /// Whether `said` holds a line Claude Code answers `--version` with: `X.Y.Z (Claude Code)`.
 pub fn is_claude_code(said: &str) -> bool {
-    said.lines().any(|line| {
-        let Some(version) = line.trim().strip_suffix(" (Claude Code)") else {
-            return false;
-        };
+    claude_code_version(said).is_some()
+}
+
+/// The version in the first line of `said` Claude Code answers `--version` with,
+/// `X.Y.Z (Claude Code)`, or `None` where no line is one.
+pub fn claude_code_version(said: &str) -> Option<(u32, u32, u32)> {
+    said.lines().find_map(|line| {
+        let version = line.trim().strip_suffix(" (Claude Code)")?;
         let parts: Vec<&str> = version.split('.').collect();
-        parts.len() == 3
-            && parts
-                .iter()
-                .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()))
+        let [major, minor, patch] = parts[..] else {
+            return None;
+        };
+        let number = |part: &str| {
+            (!part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()))
+                .then(|| part.parse::<u32>().ok())
+                .flatten()
+        };
+        Some((number(major)?, number(minor)?, number(patch)?))
     })
 }
 

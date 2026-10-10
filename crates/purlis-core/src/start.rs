@@ -355,7 +355,7 @@ fn ready_given(
     // chat that cannot be confined never reaches the program. A person's opt-out, or a system
     // with no backend, starts it unsandboxed instead, and the tab says so for the chat's whole
     // life (§7).
-    let (sandbox, unsandboxed) = match harness {
+    let (mut sandbox, unsandboxed) = match harness {
         Some(harness) => match crate::sandbox::decide_granted(
             harness,
             root,
@@ -437,13 +437,13 @@ fn ready_given(
     // Ruling V87g: a sandbox binds only the harness it was compiled for, and never a program a
     // sandboxed chat could have changed. Resolved once, here: the real file it names is what the
     // check asks and what the chat then runs.
-    if let (Some(harness), Some(applied)) = (harness, &sandbox) {
+    if let (Some(harness), Some(applied)) = (harness, &mut sandbox) {
         let words: Vec<String> = std::iter::once(program.clone())
             .chain(argv.iter().cloned())
             .collect();
         let mut writable = applied.writable();
         writable.extend(crate::sandbox::program::temp_roots(&env));
-        let checked = crate::sandbox::program::checked(
+        let (checked, said) = crate::sandbox::program::checked_answering(
             harness,
             &words,
             applied.root(),
@@ -456,6 +456,11 @@ fn ready_given(
         )
         .map_err(|refused| refused.to_string())?;
         program = checked[0].clone();
+        // Claude Code goes through purlis's proxy from the version that takes its ports, and an
+        // older one says once, on its tab, that it keeps its own (#1665).
+        if let Some(said) = said {
+            applied.answered(&said);
+        }
     }
     // Only a record's path: the briefing reads it through `sessionrecord::open`, which refuses
     // anything else, and a profile cannot set a `CHARTER_` name to forge one.
