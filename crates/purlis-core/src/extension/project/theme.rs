@@ -44,6 +44,7 @@
 use super::{Effective, Ignored, Source, State, WORKSPACE_AT};
 use crate::extension::{BUILT_IN_ICON_THEMES, BUILT_IN_THEMES};
 use crate::profiles::{COMMITTED_FILE, LOCAL_FILE};
+use crate::settings::Refusal;
 
 /// The table a project's theme is picked in, in either file — and in a workspace's `settings`.
 pub const TABLE: &str = "theme";
@@ -550,6 +551,11 @@ fn unavailable(
 /// each — what the Settings tab refuses to save. Empty when the text is not TOML at all:
 /// that is the file's own reader's refusal.
 pub fn refusals(text: &str, file: &str) -> Vec<String> {
+    keyed(text, file).into_iter().map(|one| one.why).collect()
+}
+
+/// [`refusals`], each with the key it is about (#1292).
+pub fn keyed(text: &str, file: &str) -> Vec<Refusal> {
     let Ok(top) = text.parse::<toml::Table>() else {
         return Vec::new();
     };
@@ -557,19 +563,25 @@ pub fn refusals(text: &str, file: &str) -> Vec<String> {
         return Vec::new();
     };
     let Some(table) = table.as_table() else {
-        return vec![format!(
-            "{TABLE} in {file} is not a table — write [{TABLE}] with {USE} = \"<theme>\""
+        return vec![Refusal::at(
+            format!("{TABLE} in {file} is not a table — write [{TABLE}] with {USE} = \"<theme>\""),
+            &[TABLE],
         )];
     };
     let mut out = Vec::new();
     for (key, value) in table {
+        let at = [TABLE, key.as_str()];
         match key.as_str() {
             USE if value.as_str().and_then(Pick::parse).is_none() => {
-                out.push(format!("{TABLE}.{USE} in {file} is {value}, {NOT_A_PICK}"));
+                out.push(Refusal::at(
+                    format!("{TABLE}.{USE} in {file} is {value}, {NOT_A_PICK}"),
+                    &at,
+                ));
             }
             ICONS if value.as_str().and_then(Pick::parse_icons).is_none() => {
-                out.push(format!(
-                    "{TABLE}.{ICONS} in {file} is {value}, {NOT_AN_ICON_PICK}"
+                out.push(Refusal::at(
+                    format!("{TABLE}.{ICONS} in {file} is {value}, {NOT_AN_ICON_PICK}"),
+                    &at,
                 ));
             }
             USE | ICONS => {}
@@ -579,10 +591,13 @@ pub fn refusals(text: &str, file: &str) -> Vec<String> {
                 } else {
                     ""
                 };
-                out.push(format!(
-                    "{TABLE}.{} in {file} is not read — [{TABLE}] holds {USE} and {ICONS} and \
-                     nothing else{colour}",
-                    toml_edit::Key::new(key.as_str()).display_repr()
+                out.push(Refusal::at(
+                    format!(
+                        "{TABLE}.{} in {file} is not read — [{TABLE}] holds {USE} and {ICONS} \
+                         and nothing else{colour}",
+                        toml_edit::Key::new(key.as_str()).display_repr()
+                    ),
+                    &at,
                 ));
             }
         }
@@ -594,34 +609,47 @@ pub fn refusals(text: &str, file: &str) -> Vec<String> {
 /// (`crate::settings::workspace`), where the theme may also hold a [`COLOUR`]. `file` is the
 /// manifest as a sentence names it; each key is named by its path in the JSON.
 pub fn refusals_in_workspace(top: &toml::Table, file: &str) -> Vec<String> {
+    keyed_in_workspace(top, file)
+        .into_iter()
+        .map(|one| one.why)
+        .collect()
+}
+
+/// [`refusals_in_workspace`], each with the key it is about under the workspace's `settings`
+/// (#1292), as a setting at that level holds it.
+pub fn keyed_in_workspace(top: &toml::Table, file: &str) -> Vec<Refusal> {
     let Some(table) = top.get(TABLE) else {
         return Vec::new();
     };
     let Some(table) = table.as_table() else {
-        return vec![format!(
-            "{WORKSPACE_AT}{TABLE} in {file} is not an object — write \
-             {{\"{USE}\": \"<theme>\", \"{COLOUR}\": \"<colour>\"}}"
+        return vec![Refusal::at(
+            format!(
+                "{WORKSPACE_AT}{TABLE} in {file} is not an object — write \
+                 {{\"{USE}\": \"<theme>\", \"{COLOUR}\": \"<colour>\"}}"
+            ),
+            &[TABLE],
         )];
     };
     let mut out = Vec::new();
     for (key, value) in table {
         let at = format!("{WORKSPACE_AT}{TABLE}.{key} in {file}");
-        match key.as_str() {
+        let said = match key.as_str() {
             USE if value.as_str().and_then(Pick::parse).is_none() => {
-                out.push(format!("{at} is {value}, {NOT_A_PICK}"));
+                format!("{at} is {value}, {NOT_A_PICK}")
             }
             COLOUR if value.as_str().and_then(Colour::parse).is_none() => {
-                out.push(format!("{at} is {value}, {}", not_a_colour()));
+                format!("{at} is {value}, {}", not_a_colour())
             }
             ICONS if value.as_str().and_then(Pick::parse_icons).is_none() => {
-                out.push(format!("{at} is {value}, {NOT_AN_ICON_PICK}"));
+                format!("{at} is {value}, {NOT_AN_ICON_PICK}")
             }
-            USE | COLOUR | ICONS => {}
-            _ => out.push(format!(
+            USE | COLOUR | ICONS => continue,
+            _ => format!(
                 "{at} is not read — a workspace's {TABLE} holds {USE}, {ICONS} and {COLOUR} and \
                  nothing else"
-            )),
-        }
+            ),
+        };
+        out.push(Refusal::at(said, &[TABLE, key.as_str()]));
     }
     out
 }

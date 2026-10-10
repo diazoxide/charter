@@ -9,9 +9,9 @@ import { inAFile, type FileSetting, type SettingsFileId, type SettingsGroup } fr
  * **The key comes from the core with the sentence** (#1292): `SettingsRefusal.key`, set by the
  * reader that refused, one step per table or key — so an extension id with dots in it
  * (`extensions.my.ext.enabled`) is one step, which no reading of the sentence could tell. A
- * workspace's is already the key under its `settings`. A refusal with no key — a file that does
- * not parse, a profile the loader refused — draws no link. The window never reads the sentence
- * for it.
+ * workspace's is already the key under its `settings`, and a refused profile's is its own table
+ * (`harness`, `<name>`), so it links to that profile's page. A refusal with no key — a file that
+ * does not parse — draws no link. The window never reads the sentence for it.
  */
 
 /** Where a refusal's link goes: the group, its words, and the setting when one is named. */

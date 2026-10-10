@@ -419,18 +419,30 @@ pub fn from_text(local: Option<&str>) -> Vec<String> {
 /// What is wrong with `value`, the `[chat_env]` table: one sentence per thing [`from_text`]
 /// leaves out.
 pub fn refusals(value: &toml::Value) -> Vec<String> {
+    keyed(value).into_iter().map(|one| one.why).collect()
+}
+
+/// [`refusals`], each with the key it is about (#1292).
+pub fn keyed(value: &toml::Value) -> Vec<crate::settings::Refusal> {
+    use crate::settings::Refusal;
     let Some(table) = value.as_table() else {
-        return vec![format!(
-            "[{TABLE}] in charter.local.toml is not a table, so it passes nothing — write \
-             [{TABLE}] then {KEY} = [\"NAME\", \"PREFIX_*\"]."
+        return vec![Refusal::at(
+            format!(
+                "[{TABLE}] in charter.local.toml is not a table, so it passes nothing — write \
+                 [{TABLE}] then {KEY} = [\"NAME\", \"PREFIX_*\"]."
+            ),
+            &[TABLE],
         )];
     };
     let mut said = Vec::new();
     for key in table.keys().filter(|key| key.as_str() != KEY) {
-        said.push(format!(
-            "[{TABLE}].{} in charter.local.toml is not read — the table holds {KEY} and \
-             nothing else.",
-            crate::shown::short(key)
+        said.push(Refusal::at(
+            format!(
+                "[{TABLE}].{} in charter.local.toml is not read — the table holds {KEY} and \
+                 nothing else.",
+                crate::shown::short(key)
+            ),
+            &[TABLE, key.as_str()],
         ));
     }
     match table.get(KEY) {
@@ -438,18 +450,24 @@ pub fn refusals(value: &toml::Value) -> Vec<String> {
         Some(toml::Value::Array(entries)) => {
             for entry in entries {
                 if !entry.as_str().is_some_and(well_formed) {
-                    said.push(format!(
-                        "[{TABLE}].{KEY} in charter.local.toml holds {}, which is not a \
-                         variable's name — write a name, or a prefix ending in * \
-                         (\"GO*\"). It passes nothing.",
-                        crate::shown::short(&entry.to_string())
+                    said.push(Refusal::at(
+                        format!(
+                            "[{TABLE}].{KEY} in charter.local.toml holds {}, which is not a \
+                             variable's name — write a name, or a prefix ending in * \
+                             (\"GO*\"). It passes nothing.",
+                            crate::shown::short(&entry.to_string())
+                        ),
+                        &[TABLE, KEY],
                     ));
                 }
             }
         }
-        Some(_) => said.push(format!(
-            "[{TABLE}].{KEY} in charter.local.toml is not a list, so it passes nothing — \
-             write {KEY} = [\"NAME\", \"PREFIX_*\"]."
+        Some(_) => said.push(Refusal::at(
+            format!(
+                "[{TABLE}].{KEY} in charter.local.toml is not a list, so it passes nothing — \
+                 write {KEY} = [\"NAME\", \"PREFIX_*\"]."
+            ),
+            &[TABLE, KEY],
         )),
     }
     said
