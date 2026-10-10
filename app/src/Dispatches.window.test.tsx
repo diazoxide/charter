@@ -686,6 +686,125 @@ describe("the Dispatches tab", () => {
   });
 });
 
+describe("past tasks (#1510)", () => {
+  const hoursAgo = (hours: number) => new Date(Date.now() - hours * 3_600_000).toISOString();
+  /** One task in alpha today, one in beta on a branch of its own last week, one at the root
+   *  long ago. */
+  const PLACED: DispatchRow[] = [
+    dispatch({ id: "01P3", task: "tidy alpha", mode: "task", started: hoursAgo(0.5) }),
+    dispatch({
+      id: "01P2",
+      task: "fix beta",
+      mode: "task",
+      place: "beta · fix-beta-b5rc0def",
+      folder: "workspaces/beta/api",
+      started: hoursAgo(24 * 3),
+    }),
+    dispatch({
+      id: "01P1",
+      task: "sort the root",
+      mode: "task",
+      place: "project root",
+      folder: ".",
+      started: hoursAgo(24 * 12),
+    }),
+  ];
+
+  it("starts narrowed to the workspace it was opened from, and widens to every workspace", async () => {
+    core({ rows: PLACED });
+    render(<App />);
+    const table = await opened();
+
+    const where = screen.getByRole("combobox", { name: "Filter by workspace" });
+    expect(where).toHaveValue("alpha");
+    expect(tasks(table)).toEqual(["tidy alpha"]);
+    expect(
+      within(where)
+        .getAllByRole("option")
+        .map((one) => one.textContent),
+    ).toEqual(["Every workspace", "alpha", "beta", "Project root"]);
+
+    await userEvent.selectOptions(where, "Every workspace");
+    expect(tasks(table)).toEqual(["tidy alpha", "fix beta", "sort the root"]);
+
+    // A task on a branch of its own is found under its workspace, and the root under its word.
+    await userEvent.selectOptions(where, "beta");
+    expect(tasks(table)).toEqual(["fix beta"]);
+    await userEvent.selectOptions(where, "Project root");
+    expect(tasks(table)).toEqual(["sort the root"]);
+  });
+
+  it("narrows by when a task started", async () => {
+    core({ rows: PLACED });
+    render(<App />);
+    const table = await opened();
+    await userEvent.selectOptions(
+      screen.getByRole("combobox", { name: "Filter by workspace" }),
+      "Every workspace",
+    );
+    const when = screen.getByRole("combobox", { name: "Filter by date" });
+    expect(when).toHaveValue("");
+
+    await userEvent.selectOptions(when, "Past 7 days");
+    expect(tasks(table)).toEqual(["tidy alpha", "fix beta"]);
+    await userEvent.selectOptions(when, "Earlier");
+    expect(tasks(table)).toEqual(["sort the root"]);
+    await userEvent.selectOptions(when, "Any date");
+    expect(tasks(table)).toHaveLength(3);
+  });
+
+  it("finds a task whose session has closed, with its report (line 1)", async () => {
+    core({
+      rows: [
+        dispatch({
+          id: "01P4",
+          task: "audit the queue",
+          mode: "task",
+          persona: "qa",
+          open_session: null,
+          session_record: QA_RECORD,
+          report: "The queue drains in 4s.",
+        }),
+      ],
+    });
+    render(<App />);
+    const table = await opened();
+    await userEvent.selectOptions(
+      screen.getByRole("combobox", { name: "Filter by persona" }),
+      "qa",
+    );
+
+    await userEvent.click(
+      within(table).getByRole("button", { name: "Show the brief and report of audit the queue" }),
+    );
+
+    expect(screen.getByText("The queue drains in 4s.")).toBeInTheDocument();
+    // Its chat is closed: the row opens the session record it wrote.
+    expect(within(table).getByRole("button", { name: "audit the queue" })).toHaveAttribute(
+      "title",
+      "Open its session record",
+    );
+  });
+
+  it("draws a report that holds markup as text, never as markup (line 3)", async () => {
+    const report = '<b>done</b> <img src="x" onerror="alert(1)"> [link](https://example.com)';
+    core({
+      rows: [dispatch({ id: "01P5", task: "write markup", mode: "task", report })],
+    });
+    render(<App />);
+    const table = await opened();
+
+    await userEvent.click(
+      within(table).getByRole("button", { name: "Show the brief and report of write markup" }),
+    );
+
+    const drawn = screen.getByText(report);
+    expect(drawn.tagName).toBe("PRE");
+    expect(drawn.querySelector("b, img, a")).toBeNull();
+    expect(document.querySelector('img[src="x"]')).toBeNull();
+  });
+});
+
 describe("a dispatch's own branch", () => {
   const BRANCH = "fix-the-queue-b5rc0def";
   /** A task that worked on a branch of its own: one kept, and one purlis took away. */

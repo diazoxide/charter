@@ -17,19 +17,24 @@ import {
   branchSaid,
   counted,
   discardSays,
-  EVERY_DISPATCH,
+  DISPATCH_WHENS,
+  dispatchesIn,
   losesNothing,
   lostSaid,
   nestedSaid,
   notStartedSaid,
   NO_PERSONA,
   NO_PERSONA_SAID,
+  NO_WORKSPACE,
+  NO_WORKSPACE_SAID,
   personasOf,
   saidAt,
   shownDispatches,
   waitsOnMemory,
+  workspacesOf,
   worktreeSaid,
   type DispatchFilter,
+  type DispatchWhen,
 } from "./dispatches";
 
 /** How often the list is read again while a dispatch in it is still running. */
@@ -37,7 +42,13 @@ const WHILE_RUNNING_MS = 5000;
 
 /**
  * **A project's dispatches, in a tab of their own** (#1452): the running ones and the past ones
- * this machine still keeps, newest first, narrowed by persona and by the chat that asked.
+ * this machine still keeps, newest first, narrowed by persona, by the chat that asked, by the
+ * workspace it worked in and by when it started.
+ *
+ * **It is also the project's Past tasks** (#1510): a task whose chat has closed is listed with
+ * its report as long as the store keeps its record, which is this machine's own and never a
+ * file git carries. Opened from a workspace's strip, it starts narrowed to that workspace;
+ * Every workspace widens it.
  *
  * A row's task is its one control. It opens the persona chat while that chat is still open, else
  * the session record the chat wrote, and is plain text when neither is there. The brief and the
@@ -69,12 +80,16 @@ const WHILE_RUNNING_MS = 5000;
  */
 export function DispatchesTab({
   plane,
+  workspace,
   changed,
   onShowChat,
   onOpenRecord,
   onChanges,
 }: {
   plane: PlaneId;
+  /** The workspace whose strip the tab was opened on, which it starts narrowed to; `undefined`
+   *  outside every workspace. */
+  workspace?: string;
   /** Bumped when the project changes on disk: the tab reads again. */
   changed: number;
   /** Bring the chat in `session` to the front. */
@@ -86,7 +101,7 @@ export function DispatchesTab({
   onChanges?: (id: string, task: string) => void;
 }) {
   const [said, setSaid] = useState<{ read?: Dispatches; trouble?: string }>();
-  const [filter, setFilter] = useState<DispatchFilter>(EVERY_DISPATCH);
+  const [filter, setFilter] = useState<DispatchFilter>(() => dispatchesIn(workspace));
   const [read, setRead] = useState<string>();
   const [again, setAgain] = useState(0);
   /** The discard being asked about: the row, what the core says would be lost, and its refusal
@@ -236,6 +251,35 @@ export function DispatchesTab({
           {askersOf(rows).map((asker) => (
             <option key={asker.key} value={asker.key}>
               {asker.name}
+            </option>
+          ))}
+        </select>
+        <select
+          className="search-scope"
+          role="combobox"
+          tabIndex={0}
+          aria-label="Filter by workspace"
+          value={filter.workspace}
+          onChange={(e) => setFilter({ ...filter, workspace: e.target.value })}
+        >
+          <option value="">Every workspace</option>
+          {workspacesOf(rows, filter.workspace).map((place) => (
+            <option key={place} value={place}>
+              {place === NO_WORKSPACE ? NO_WORKSPACE_SAID : place}
+            </option>
+          ))}
+        </select>
+        <select
+          className="search-scope"
+          role="combobox"
+          tabIndex={0}
+          aria-label="Filter by date"
+          value={filter.when}
+          onChange={(e) => setFilter({ ...filter, when: e.target.value as DispatchWhen })}
+        >
+          {DISPATCH_WHENS.map(({ when, said }) => (
+            <option key={when} value={when}>
+              {said}
             </option>
           ))}
         </select>
