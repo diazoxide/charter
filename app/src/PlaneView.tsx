@@ -7336,8 +7336,9 @@ export const PlaneView = memo(function PlaneView({
           ("5 came back" beside a tab that says "steward 5"). */}
         {frontTab && frontChat?.resumed && !dismissed.has(resumedNote(frontChat)) && (
           <Notice cause={resumedNote(frontChat)} onDismiss={() => dismiss(resumedNote(frontChat))}>
-            <strong>{frontTab.name}</strong> was resumed — conversation{" "}
-            <code>{frontChat.resumed}</code>
+            {/* No conversation id (#1646): it means nothing to the person, and the session
+                record and Activity keep it. The cause still names it (D-NO2-9). */}
+            <strong>{frontTab.name}</strong> was resumed where it left off
           </Notice>
         )}
         {/* What a Resume from a session record had to guess because the record could not say
