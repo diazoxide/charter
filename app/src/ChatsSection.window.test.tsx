@@ -15,6 +15,7 @@ import App from "./App";
 import type { FinishedTask, Moved, OpenChat } from "./bindings";
 import type { State } from "./chatState";
 import { drawnWith } from "./cascade.testkit";
+import { card, cardOf as cardOfRow, facts, theCard } from "./chatCard.testkit";
 import { forgetThisLaunch } from "./regions";
 import type { Shown } from "./shownState";
 import { stripNamed } from "./test-strips";
@@ -340,6 +341,9 @@ const says = (on: HTMLElement) => ({
   shape: on.querySelector(".shown-state .shape")?.getAttribute("data-shape"),
 });
 
+/** What row `name`'s card says (#1675). */
+const cardOf = (tree: HTMLElement, name: string) => cardOfRow(row(tree, name));
+
 const strip = () => stripNamed("Tabs");
 const tabNames = () =>
   within(strip())
@@ -372,12 +376,12 @@ describe("the Chats section", () => {
     await waitFor(() =>
       expect(shape(tree)).toEqual(["1 steward 1", "2 drop commons", "3 steward 3", "1 devops 4"]),
     );
-    // Each row says who runs it, where, and what it is doing.
+    // Each row says who runs it and what it is doing, and its card says where (#1675).
     const first = row(tree, "steward 1");
     expect(first.querySelector('[title="steward"]')?.getAttribute("data-initials")).toBe("ST");
-    expect(first.querySelector(".workspace")?.textContent).toBe("alpha");
     expect(within(first).getByText("running (no detail from claude)")).toBeTruthy();
-    expect(row(tree, "devops 4").querySelector(".workspace")?.textContent).toBe("beta");
+    expect((await cardOf(tree, "steward 1")).facts.Workspace).toBe("alpha");
+    expect((await cardOf(tree, "devops 4")).facts.Workspace).toBe("beta");
   });
   it("nests a chat that works in another workspace under the chat that asked, and names its workspace", async () => {
     core([chat(1, "alpha"), chat(2, "beta", { persona: "devops", from: by(1, "task") })]);
@@ -385,7 +389,7 @@ describe("the Chats section", () => {
     const tree = await section();
 
     await waitFor(() => expect(shape(tree)).toEqual(["1 steward 1", "2 devops 2"]));
-    expect(row(tree, "devops 2").querySelector(".workspace")?.textContent).toBe("beta");
+    expect((await cardOf(tree, "devops 2")).facts.Workspace).toBe("beta");
 
     expect(screen.queryByRole("list", { name: /started in other workspaces/ })).toBeNull();
   });
@@ -411,9 +415,9 @@ describe("the Chats section", () => {
     const tree = await section();
 
     await waitFor(() => expect(shape(tree)).toEqual(["1 steward 1", "1 steward 8", "2 steward 9"]));
-    expect(row(tree, "steward 8").querySelector(".from")?.textContent).toBe("from release notes");
+    expect((await cardOf(tree, "steward 8")).text).toContain("from release notes");
     // A chat drawn under its parent needs no note: the nesting says it.
-    expect(row(tree, "steward 9").querySelector(".from")).toBeNull();
+    expect((await cardOf(tree, "steward 9")).text).not.toContain("from steward 8");
   });
 
   it("says a task whose asking chat has closed was asked by that chat, closed", async () => {
@@ -423,9 +427,7 @@ describe("the Chats section", () => {
     const tree = await section();
 
     await waitFor(() => expect(shape(tree)).toEqual(["1 steward 1", "1 steward 8"]));
-    expect(row(tree, "steward 8").querySelector(".from")?.textContent).toBe(
-      "asked by steward 7 (closed)",
-    );
+    expect((await cardOf(tree, "steward 8")).text).toContain("asked by steward 7 (closed)");
   });
 
   it("says on the asking chat's row how many of its dispatches wait on memory (#1617)", async () => {
@@ -459,9 +461,7 @@ describe("the Chats section", () => {
     const tree = await section();
 
     await waitFor(() => expect(shape(tree)).toEqual(["1 steward 1", "1 steward 8"]));
-    expect(row(tree, "steward 8").querySelector(".from")?.textContent).toBe(
-      "asked by steward 7 (not open)",
-    );
+    expect((await cardOf(tree, "steward 8")).text).toContain("asked by steward 7 (not open)");
   });
 
   it("marks the chat that needs you, and takes the mark off when it stops asking", async () => {
@@ -513,33 +513,33 @@ describe("a task chat", () => {
     expect(row(tree, "steward 1").getAttribute("data-tab")).toBe("true");
   });
 
-  it("says its tokens on its row's hover, read once the pointer rests and only for that row (#1500)", async () => {
+  it("says its tokens in its row's card, read once the pointer rests and only for that row (#1500)", async () => {
     const { asked } = core(sixTasks());
     render(<App />);
     const tree = await section();
     await waitFor(() => expect(row(tree, "devops 3")).toBeInTheDocument());
     const reads = () => asked.filter((one) => one.cmd === "tasks_used").map((one) => one.args);
 
-    // A pointer passing over a row reads nothing.
+    // A pointer passing over a row brings up no card, and reads nothing.
     fireEvent.pointerEnter(row(tree, "devops 4"));
     fireEvent.pointerLeave(row(tree, "devops 4"));
     // One that rests reads that row's figure, for a hover: no time, no total.
-    fireEvent.pointerEnter(row(tree, "devops 3"));
-    await waitFor(() =>
-      expect(row(tree, "devops 3").getAttribute("title")).toContain("Tokens: 12k in, 3k out"),
-    );
+    await userEvent.hover(row(tree, "devops 3"));
+    await waitFor(() => expect(card()).toHaveTextContent("Tokens: 12k in, 3k out"), {
+      timeout: 3000,
+    });
     expect(reads()).toEqual([
       { plane: PLANE, scope: "hover", own: null, chats: [3], finished: [] },
     ]);
+    await userEvent.unhover(row(tree, "devops 3"));
 
-    fireEvent.pointerEnter(row(tree, "devops 5"));
-    await waitFor(() =>
-      expect(row(tree, "devops 5").getAttribute("title")).toContain(
-        "Tokens: — (nothing reported yet)",
-      ),
-    );
+    await userEvent.hover(row(tree, "devops 5"));
+    await waitFor(() => expect(card()).toHaveTextContent("Tokens: — (nothing reported yet)"), {
+      timeout: 3000,
+    });
+    await userEvent.unhover(row(tree, "devops 5"));
     // The session's own row is no task, and says no tokens.
-    fireEvent.pointerEnter(row(tree, "steward 1"));
+    expect((await cardOf(tree, "steward 1")).text).not.toContain("Tokens");
     expect(reads().map((one) => one.chats)).toEqual([[3], [5]]);
   });
 
@@ -654,7 +654,7 @@ describe("a task chat", () => {
     await waitFor(() => expect(tabNames()).toEqual(["steward 1", "devops 3"]));
     // And as a row of its own at the top: it is not a task of the chat it came from (#1492).
     expect(shape(tree)).toEqual(["1 steward 1", "2 devops 2", "1 devops 3"]);
-    expect(row(tree, "devops 3").querySelector(".from")?.textContent).toBe("from steward 1");
+    expect((await cardOf(tree, "devops 3")).text).toContain("from steward 1");
   });
 });
 
@@ -729,7 +729,7 @@ describe("the needs-you mark rolling up the tree (#1448)", () => {
     expect(rolledUp(tree, "drop commons")).toBeNull();
   });
 
-  it("still shows on a folded row when a chat two levels down needs you", async () => {
+  it("still shows on a row folded again over a chat two levels down that needs you", async () => {
     const { move } = core(threeDeep());
     render(<App />);
     const tree = await section();
@@ -737,15 +737,13 @@ describe("the needs-you mark rolling up the tree (#1448)", () => {
     expect(row(tree, "steward 1").getAttribute("aria-expanded")).toBe("true");
     expect(row(tree, "steward 4").getAttribute("aria-expanded")).toBeNull();
 
+    // The grandchild asks (its path is opened, #1675), and the person folds its rows away.
+    move(3, "waiting", 10, [3]);
     await userEvent.click(within(tree).getByTitle("Fold the chats under steward 1"));
     expect(shape(tree)).toEqual(["1 steward 1", "1 steward 4"]);
     expect(row(tree, "steward 1").getAttribute("aria-expanded")).toBe("false");
 
-    // The grandchild asks while its row, and its parent's, are folded away.
-    move(3, "waiting", 10, [3]);
-
     expect(rolledUp(tree, "steward 1")?.getAttribute("data-leads-to")).toBe("3");
-    expect(shape(tree)).toEqual(["1 steward 1", "1 steward 4"]);
   });
 
   it("goes to the chat that needs you when the rolled-up mark is pressed", async () => {
@@ -1139,17 +1137,17 @@ const fiveTasks = () => [
 ];
 
 describe("a chat's helpers (#1673)", () => {
-  it("says on its row's hover what it runs on, which the explorer's row said before", async () => {
+  it("says in its row's card what it runs on, which the explorer's row said before", async () => {
     core([chat(1, "alpha", { profile: "work" }), chat(2, "alpha", { from: by(1, "handoff") })]);
     render(<App />);
     const tree = await section();
     await waitFor(() => expect(shape(tree)).toHaveLength(2));
 
-    expect(row(tree, "steward 1").getAttribute("title")).toContain("work (claude)");
-    expect(row(tree, "steward 2").getAttribute("title")).toContain("claude");
+    expect((await cardOf(tree, "steward 1")).facts.Harness).toBe("work (claude)");
+    expect((await cardOf(tree, "steward 2")).facts.Harness).toBe("claude");
   });
 
-  it("are said on its row in the Chats list, which is the one list of chats", async () => {
+  it("are said in its row's card in the Chats list, which is the one list of chats", async () => {
     const { move } = core([chat(1, "alpha"), chat(2, "alpha", { from: by(1, "handoff") })]);
     render(<App />);
     const tree = await section();
@@ -1157,12 +1155,12 @@ describe("a chat's helpers (#1673)", () => {
 
     move(1, "running", 10, [], [{ agent: "thread-7", state: "running" }]);
 
-    await waitFor(() =>
-      expect(row(tree, "steward 1").querySelector(".helpers")).toHaveTextContent(
-        /^1 helper · 1 working$/,
-      ),
-    );
-    expect(row(tree, "steward 2").querySelector(".helpers")).toBeNull();
+    await userEvent.hover(row(tree, "steward 1"));
+    const shown = await theCard();
+    await waitFor(() => expect(shown).toHaveTextContent("1 helper · 1 working"));
+    await userEvent.unhover(row(tree, "steward 1"));
+    await waitFor(() => expect(card()).toBeNull());
+    expect((await cardOf(tree, "steward 2")).text).not.toContain("helper");
   });
 });
 
@@ -1185,11 +1183,9 @@ describe("a task's helpers (#1490)", () => {
       ],
     );
 
-    const task = row(tree, "live check talk");
-    expect(task.querySelector(".line.two .helpers")).toHaveTextContent(/^3 helpers · 1 working$/);
-    // Last on the second line, and only on a row that has some.
-    expect(task.querySelector(".line.two")?.lastElementChild).toBe(task.querySelector(".helpers"));
-    expect(row(tree, "live check queue").querySelector(".helpers")).toBeNull();
+    // In its card, and only in the card of a task that has some (#1675).
+    expect((await cardOf(tree, "live check talk")).text).toContain("3 helpers · 1 working");
+    expect((await cardOf(tree, "live check queue")).text).not.toContain("helper");
   });
 });
 
@@ -1543,5 +1539,182 @@ describe("the chat in front, as the Chats tree draws it (#1672)", () => {
     // Both at once: each is still there.
     expect(drawnWith(front, "outline", { focusVisible: true })).toBe("2px solid var(--focus-ring)");
     expect(drawnWith(front, "background", { focusVisible: true })).toBe("var(--list-selected)");
+  });
+});
+
+/** One session in alpha, with three tasks: one in beta on a branch of its own. */
+const threeTasks = () => [
+  chat(1, "alpha"),
+  chat(2, "alpha", { persona: "devops", from: by(1, "task") }),
+  chat(3, "beta", {
+    persona: "devops",
+    from: by(1, "task"),
+    cwd: `${PLANE}/workspaces/beta/.worktrees/api/fix-the-login`,
+  }),
+  chat(4, "alpha", { persona: "devops", from: by(1, "task") }),
+];
+
+describe("a chat's row is one line, with a hover card (#1675)", () => {
+  it("draws its state's mark, its persona's badge and its name, and nothing more", async () => {
+    const { move } = core(threeTasks());
+    render(<App />);
+    const tree = await section();
+    await waitFor(() => expect(shape(tree)).toHaveLength(4));
+    for (const session of [1, 2, 3, 4]) move(session, "running", 10 + session);
+
+    for (const name of ["steward 1", "devops 3"]) {
+      const one = row(tree, name);
+      // One line, and no second line: the badge, the name and the state, which is drawn
+      // first and heard after the name.
+      expect(one.querySelector(".line.two")).toBeNull();
+      const parts = [...(one.querySelector(".line.one")?.children ?? [])];
+      expect(parts.map((part) => part.classList[0])).toEqual([
+        "persona-mark",
+        "session",
+        "shown-state",
+      ]);
+      expect(drawnWith(parts[2], "order")).toBe("-1");
+      expect(one).toHaveAccessibleName(`${name} working`);
+      // The state is its mark on the row; its word is out of sight.
+      const word = one.querySelector(".shown-state .word") as HTMLElement;
+      expect(word.textContent).toBe("working");
+      expect(drawnWith(word, "clip-path")).toBe("inset(50%)");
+    }
+    // An open row's tasks are its rows below it: no count, no workspace, no branch beside it.
+    expect(row(tree, "steward 1").querySelector(".task-count")).toBeNull();
+    expect(row(tree, "devops 3").textContent).not.toContain("beta");
+    expect(row(tree, "devops 3").textContent).not.toContain("fix-the-login");
+    // And the details are no native tooltip.
+    expect(row(tree, "devops 3").getAttribute("title")).toBeNull();
+  });
+
+  it("shows its details in a card under a resting pointer, and takes it down when it leaves", async () => {
+    const { move } = core(threeTasks());
+    render(<App />);
+    const tree = await section();
+    await waitFor(() => expect(shape(tree)).toHaveLength(4));
+    move(3, "running", 10);
+
+    await userEvent.hover(row(tree, "devops 3"));
+    const shown = await theCard();
+
+    expect(shown).toHaveTextContent("devops 3");
+    expect(shown).toHaveTextContent("working");
+    expect(facts(shown)).toMatchObject({
+      Persona: "devops",
+      Harness: "claude",
+      Workspace: "beta",
+      Branch: "fix-the-login",
+    });
+    // The tokens are read as the card comes up, for this task alone (#1500).
+    await waitFor(() => expect(card()).toHaveTextContent("Tokens: 12k in, 3k out"));
+
+    await userEvent.unhover(row(tree, "devops 3"));
+    await waitFor(() => expect(card()).toBeNull());
+  });
+
+  it("says a session's tasks in its card", async () => {
+    const { move } = core(threeTasks());
+    render(<App />);
+    const tree = await section();
+    await waitFor(() => expect(shape(tree)).toHaveLength(4));
+    for (const session of [2, 3, 4]) move(session, "running", 10 + session);
+
+    await userEvent.hover(row(tree, "steward 1"));
+    expect(facts(await theCard()).Tasks).toBe("3 working");
+  });
+
+  it("opens the card from the keyboard, once the keyboard rests on the row, and Escape closes it", async () => {
+    core(threeTasks());
+    render(<App />);
+    const tree = await section();
+    await waitFor(() => expect(shape(tree)).toHaveLength(4));
+
+    act(() => row(tree, "devops 2").focus());
+    const shown = await theCard();
+    expect(shown).toHaveTextContent("devops 2");
+    // What the card says is what the row is described by while it is up.
+    expect(row(tree, "devops 2").getAttribute("aria-describedby")).toBe(shown.id);
+
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(card()).toBeNull());
+  });
+
+  it("brings up no card for a press that focused the row, and does once the keyboard is used", async () => {
+    core(threeTasks());
+    render(<App />);
+    const tree = await section();
+    await waitFor(() => expect(shape(tree)).toHaveLength(4));
+
+    await userEvent.click(row(tree, "devops 2"));
+    await act(() => new Promise((done) => setTimeout(done, 1200)));
+    expect(card()).toBeNull();
+
+    // The keyboard used, then a row focused: that is a rest of the keyboard.
+    await userEvent.keyboard("{Shift}");
+    act(() => row(tree, "devops 3").focus());
+    expect(facts(await theCard())).toMatchObject({ Workspace: "beta" });
+  });
+
+  it("shows a folded chat's tasks as a small count, and an open one's as its rows with guides", async () => {
+    const { move } = core(threeTasks());
+    render(<App />);
+    const tree = await section();
+    await waitFor(() => expect(shape(tree)).toHaveLength(4));
+    for (const session of [2, 3, 4]) move(session, "running", 10 + session);
+
+    // Open: the tasks are rows a level in, each under the session's guide.
+    expect(shape(tree)).toEqual(["1 steward 1", "2 devops 2", "2 devops 3", "2 devops 4"]);
+    const item = row(tree, "devops 3").closest("li") as HTMLElement;
+    expect(drawnWith(item, "background-image")).toContain("var(--tree-guide)");
+    expect(row(tree, "steward 1").querySelector(".task-count")).toBeNull();
+
+    await userEvent.click(within(tree).getByTitle("Fold the chats under steward 1"));
+
+    expect(shape(tree)).toEqual(["1 steward 1"]);
+    const count = row(tree, "steward 1").querySelector(".task-count");
+    expect(count?.querySelector('[aria-hidden="true"]')?.textContent).toBe("3");
+    // Heard as what it counts.
+    expect(count).toHaveTextContent("3 tasks");
+  });
+
+  it("opens the rows above a task that needed you before its row was listed", async () => {
+    const open = [chat(1, "alpha"), chat(2, "alpha", { persona: "devops", from: by(1, "task") })];
+    const { arrive, move } = core(open);
+    render(<App />);
+    const tree = await section();
+    await waitFor(() => expect(shape(tree)).toHaveLength(2));
+    await userEvent.click(within(tree).getByTitle("Fold the chats under steward 1"));
+    expect(shape(tree)).toEqual(["1 steward 1"]);
+    // The pointer leaves the list, which holds no arrival back then (V100-47).
+    fireEvent.pointerLeave(tree.closest(".chats-list") as HTMLElement);
+
+    // The board says a task needs you before the list has a row for it.
+    move(3, "waiting", 10, [3]);
+    open.push(chat(3, "alpha", { persona: "devops", from: by(1, "task") }));
+    arrive(open[2]);
+
+    await waitFor(() => expect(shape(tree)).toEqual(["1 steward 1", "2 devops 2", "2 devops 3"]));
+  });
+
+  it("opens the rows above a task that comes to need you, under a fold set by hand", async () => {
+    const { move } = core(threeDeep());
+    render(<App />);
+    const tree = await section();
+    await waitFor(() => expect(shape(tree)).toHaveLength(4));
+    await userEvent.click(within(tree).getByTitle("Fold the chats under steward 1"));
+    expect(shape(tree)).toEqual(["1 steward 1", "1 steward 4"]);
+
+    move(3, "waiting", 10, [3]);
+
+    await waitFor(() =>
+      expect(shape(tree)).toEqual(["1 steward 1", "2 drop commons", "3 devops 3", "1 steward 4"]),
+    );
+    // Opened once, for the asking: a fold set again afterwards is the person's, and holds.
+    await userEvent.click(within(tree).getByTitle("Fold the chats under steward 1"));
+    expect(shape(tree)).toEqual(["1 steward 1", "1 steward 4"]);
+    move(3, "waiting", 11, [3]);
+    expect(shape(tree)).toEqual(["1 steward 1", "1 steward 4"]);
+    expect(rolledUp(tree, "steward 1")?.getAttribute("data-leads-to")).toBe("3");
   });
 });

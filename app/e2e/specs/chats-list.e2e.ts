@@ -5,12 +5,13 @@ import { READY } from "../harness.js";
 import { endChat, pressAndStart } from "../opening.js";
 
 /**
- * **The Chats list in a narrow sidebar, measured** (#1499, V100-50).
+ * **The Chats list in a narrow sidebar, measured** (#1499, V100-50, #1675).
  *
  * The operator's screenshot: rows cut off at the sidebar's edge, "cancel mid-turn smart-ide ●
- * no…", with the state the first thing lost. A row is now as wide as the list: the name gives
- * way, and the state's word is whole. That holds for a finished task's row too, at the least
- * width the left region can be dragged to, five levels down, at the largest text.
+ * no…", with the state the first thing lost. A row is now one line as wide as the list: its
+ * state's mark first, then the persona's badge and the name, and the name gives way. The mark
+ * is whole, and so is a finished task's state word, at the least width the left region can be
+ * dragged to, five levels down, at the largest text.
  *
  * That is layout, and jsdom lays nothing out, so it is measured here: in the real engine,
  * against the built stylesheet.
@@ -31,7 +32,6 @@ const MOST_TEXT = 24;
 
 const fixture = (name: string) =>
   readFileSync(fileURLToPath(new URL(`../fixtures/${name}`, import.meta.url)), "utf8");
-const TWO_LINES = fixture("chats-list.two-lines.html");
 const ONE_LINE = fixture("chats-list.one-line.html");
 
 type Box = { left: number; right: number; top: number; bottom: number; width: number };
@@ -51,8 +51,11 @@ type Measured = {
   section: Box;
   /** How far the section scrolls sideways past what it shows: 0 when nothing overflows it. */
   overflow: number;
-  /** Every state word drawn: on a chat's row and on a finished task's. */
+  /** Every state word drawn: a finished task's. A chat's row draws its state's mark, and its
+   *  word is the row's card's (#1675). */
   words: Word[];
+  /** Every chat row's state mark, measured as a word is. */
+  marks: Word[];
   /** Every row's own box: a chat's item, a finished task's line. */
   rows: { name: string; box: Box; nameCut: boolean }[];
 };
@@ -120,26 +123,33 @@ async function measured(): Promise<Measured | null> {
     if (!section) return null;
     const nameOf = (el: Element) =>
       el.closest("li, .finished-task")?.querySelector(".session")?.textContent ?? "";
+    /** How whole `el` is drawn, and inside what. */
+    const seen = (el: HTMLElement, text: string) => {
+      const mine = el.getBoundingClientRect();
+      let clipped = false;
+      for (let up = el.parentElement; up && up !== section; up = up.parentElement) {
+        const style = getComputedStyle(up);
+        if (style.overflowX === "visible") continue;
+        const theirs = up.getBoundingClientRect();
+        if (mine.left < theirs.left - 1 || mine.right > theirs.right + 1) clipped = true;
+      }
+      return {
+        row: nameOf(el),
+        text,
+        box: box(el),
+        cut: el.scrollWidth - el.clientWidth,
+        clipped,
+      };
+    };
     return {
       section: box(section),
       overflow: section.scrollWidth - section.clientWidth,
-      words: [...section.querySelectorAll<HTMLElement>(".shown-state .word")].map((word) => {
-        const mine = word.getBoundingClientRect();
-        let clipped = false;
-        for (let up = word.parentElement; up && up !== section; up = up.parentElement) {
-          const style = getComputedStyle(up);
-          if (style.overflowX === "visible") continue;
-          const theirs = up.getBoundingClientRect();
-          if (mine.left < theirs.left - 1 || mine.right > theirs.right + 1) clipped = true;
-        }
-        return {
-          row: nameOf(word),
-          text: word.textContent ?? "",
-          box: box(word),
-          cut: word.scrollWidth - word.clientWidth,
-          clipped,
-        };
-      }),
+      words: [...section.querySelectorAll<HTMLElement>(".finished-name .shown-state .word")].map(
+        (word) => seen(word, word.textContent ?? ""),
+      ),
+      marks: [...section.querySelectorAll<HTMLElement>(".chat .shown-state .shape")].map((mark) =>
+        seen(mark, mark.closest(".shown-state")?.getAttribute("data-state") ?? ""),
+      ),
       rows: [
         ...section.querySelectorAll<HTMLElement>(
           'li[role="none"]:not(.finished-tasks), .finished-line',
@@ -171,14 +181,15 @@ function check(what: string, holds: boolean, saw: unknown) {
   if (!holds) throw new Error(`${what}: ${JSON.stringify(saw)}`);
 }
 
-/** Every state word is whole and inside the list, no row runs past it, and it does not scroll
- *  sideways. */
+/** Every state mark and word is whole and inside the list, no row runs past it, and it does
+ *  not scroll sideways. */
 function whole(seen: Measured | null, least: number) {
   check("nothing was measured", seen !== null, seen);
-  const { section, overflow, words, rows } = seen as Measured;
-  check("no state word was drawn", words.length >= least, words.length);
+  const { section, overflow, words, marks, rows } = seen as Measured;
+  check("no state mark was drawn", marks.length >= least, marks.length);
+  check("no finished task's word was drawn", words.length >= 1, words.length);
   check("the list scrolls sideways", overflow <= 1, overflow);
-  for (const one of words) {
+  for (const one of [...words, ...marks]) {
     check(`${one.row}: its state is not a word`, one.text !== "", one);
     check(`${one.row}: its state's word has no width`, one.box.width > 0, one);
     check(`${one.row}: its state's word is cut short by its own box`, one.cut <= 1, one);
@@ -237,57 +248,55 @@ describe("the Chats list in a narrow sidebar", () => {
     });
   });
 
-  for (const [what, html] of [
-    ["two lines", TWO_LINES],
-    ["one line", ONE_LINE],
-  ] as const) {
-    it(`keeps every state's word whole at the region's least width, on ${what}`, async () => {
-      check("there was no left region to draw in", await draw(html, FLOOR), FLOOR);
-      const seen = whole(await measured(), 10);
+  it("keeps every state's mark whole at the region's least width", async () => {
+    check("there was no left region to draw in", await draw(ONE_LINE, FLOOR), FLOOR);
+    const seen = whole(await measured(), 10);
 
-      // The longest state there is, five levels down and on a finished task's row.
-      const longest = seen.words.filter((word) => word.text === "ended without a report");
-      check("the longest state was not drawn three times", longest.length >= 3, longest);
-      // What gave way is the name: the long ones are cut short, with an ellipsis.
-      for (const one of seen.rows.filter((row) => row.name.length > 40))
-        check(`${one.name}: its name was not what gave way`, one.nameCut, one);
-    });
+    // The longest state there is, on a finished task's row, is whole in words.
+    const longest = seen.words.filter((word) => word.text === "ended without a report");
+    check("the longest state was not drawn", longest.length >= 1, seen.words);
+    // What gave way is the name: the long ones are cut short, with an ellipsis.
+    for (const one of seen.rows.filter((row) => row.name.length > 40))
+      check(`${one.name}: its name was not what gave way`, one.nameCut, one);
+  });
 
-    it(`keeps every state's word whole at the least width and the largest text, on ${what}`, async () => {
-      check("there was no left region to draw in", await draw(html, FLOOR, MOST_TEXT), FLOOR);
+  it("keeps every state's mark whole at the least width and the largest text", async () => {
+    check("there was no left region to draw in", await draw(ONE_LINE, FLOOR, MOST_TEXT), FLOOR);
 
-      whole(await measured(), 10);
-    });
-  }
+    whole(await measured(), 10);
+  });
 
   it("holds below its floor too, where a window was left narrower by an older layout", async () => {
-    check("there was no left region to draw in", await draw(TWO_LINES, "150px"), 150);
+    check("there was no left region to draw in", await draw(ONE_LINE, "150px"), 150);
 
     whole(await measured(), 10);
   });
 
   it("moves no row when a row or the line under the filter comes to say something", async () => {
-    check("there was no left region to draw in", await draw(TWO_LINES, "16rem"), "16rem");
+    check("there was no left region to draw in", await draw(ONE_LINE, "16rem"), "16rem");
     const before = await tops();
     check("no row was drawn", before.length >= 8, before);
 
-    // What a row's second line says changes while the row stands: the time in its state
-    // comes, and what a chat was doing goes. Every row has that line whether or not there is
-    // anything on it, so neither moves a row. Here every other row's line gains a thing to
-    // say and the rest lose all they said; and the line under the filter says why a key did
-    // nothing.
+    // What a row says changes while the row stands: a folded row's count comes or goes, and a
+    // chat is being stopped. Here every other row gains a count and the rest lose theirs; and
+    // the line under the filter says why a key did nothing.
     const changed = await browser.execute(() => {
       const section = document.querySelector('[data-raised="chats-list.e2e"]');
-      const lines = [...(section?.querySelectorAll(".chat .line.two") ?? [])];
+      const lines = [...(section?.querySelectorAll(".chat .line.one") ?? [])];
       lines.forEach((line, at) => {
+        const had = line.querySelector(".task-count");
         if (at % 2 === 1) {
-          line.replaceChildren();
+          had?.remove();
           return;
         }
-        const since = document.createElement("span");
-        since.className = "since";
-        since.textContent = "just now";
-        line.append(since);
+        if (had) return;
+        const count = document.createElement("span");
+        count.className = "task-count";
+        count.textContent = "12";
+        const stopping = document.createElement("span");
+        stopping.className = "stopping";
+        stopping.textContent = "Stopping…";
+        line.append(count, stopping);
       });
       const said = section?.querySelector(".chats-said");
       if (said)
@@ -295,157 +304,43 @@ describe("the Chats list in a narrow sidebar", () => {
           "purlis cannot open a chat beside another yet. Press Enter to open it in front.";
       return lines.length;
     });
-    check("no row had a second line to change", changed >= 2, changed);
+    check("no row had a line to change", changed >= 2, changed);
 
     const after = await tops();
     check("a row moved", JSON.stringify(after) === JSON.stringify(before), { before, after });
   });
 
-  it("moves no row when a working chat's line comes, changes and goes (#1493)", async () => {
-    check("there was no left region to draw in", await draw(TWO_LINES, "16rem"), "16rem");
-    const before = await tops();
-    check("no row was drawn", before.length >= 8, before);
+  it("draws every chat's row one line high, its mark first and its name cut short (#1675)", async () => {
+    check("there was no left region to draw in", await draw(ONE_LINE, FLOOR), FLOOR);
+    whole(await measured(), 10);
 
-    // The fixture has rows that say what their chat is doing. Each second line is one line
-    // high whatever it holds.
-    const lines = await browser.execute(() => {
+    const rows = await browser.execute(() => {
       const section = document.querySelector('[data-raised="chats-list.e2e"]');
-      const two = [...(section?.querySelectorAll(".chat .line.two") ?? [])];
-      return {
-        doing: section?.querySelectorAll(".chat .line.two .chat-doing").length ?? 0,
-        heights: two.map((line) => Math.round(line.getBoundingClientRect().height)),
-      };
-    });
-    check("no row said what its chat is doing", lines.doing >= 1, lines);
-    check(
-      "a second line is not one line high",
-      new Set(lines.heights).size === 1 && lines.heights[0] > 0,
-      lines,
-    );
-
-    // On every row, the component's own markup with a name as long as a row shows one, and
-    // the time in the chat's state after it: the activity is cut short, the time is whole.
-    await browser.execute(() => {
-      const section = document.querySelector('[data-raised="chats-list.e2e"]');
-      for (const line of section?.querySelectorAll(".chat .line.two") ?? []) {
-        const both = document.createElement("span");
-        both.className = "doing-and-since";
-        const doing = document.createElement("span");
-        doing.className = "chat-doing";
-        doing.append("editing ");
-        const named = document.createElement("bdi");
-        named.className = "named";
-        named.textContent = "a_file_name_that_is_far_wider_than_a_sidebar.tsx";
-        doing.append(named);
-        const since = document.createElement("span");
-        since.className = "since";
-        since.textContent = "12m";
-        both.append(doing, since);
-        line.replaceChildren(both);
-      }
-    });
-    const during = await tops();
-    check("a row moved when its line came", JSON.stringify(during) === JSON.stringify(before), {
-      before,
-      during,
-    });
-    const seen = await measured();
-    check("a line made the list scroll sideways", seen !== null && seen.overflow <= 1, seen);
-    const parts = await browser.execute(() => {
-      const section = document.querySelector('[data-raised="chats-list.e2e"]');
-      return [...(section?.querySelectorAll(".chat .line.two") ?? [])].map((line) => {
-        const doing = line.querySelector<HTMLElement>(".chat-doing");
-        const since = line.querySelector<HTMLElement>(".since");
-        const edge = line.getBoundingClientRect();
-        const time = since?.getBoundingClientRect();
+      return [...(section?.querySelectorAll<HTMLElement>(".chat") ?? [])].map((chat) => {
+        const line = chat.querySelector(".line.one")?.getBoundingClientRect();
+        const mark = chat.querySelector(".shown-state .shape")?.getBoundingClientRect();
+        const name = chat.querySelector(".session")?.getBoundingClientRect();
         return {
-          height: Math.round(edge.height),
-          doingCut: doing !== null && doing.scrollWidth > doing.clientWidth,
-          timeWhole:
-            since !== null &&
-            time !== undefined &&
-            since.scrollWidth <= since.clientWidth + 1 &&
-            time.right <= edge.right + 1 &&
-            time.width > 0,
+          name: chat.querySelector(".session")?.textContent ?? "",
+          height: Math.round(chat.getBoundingClientRect().height),
+          lineHeight: Math.round(line?.height ?? 0),
+          markLeft: mark?.left ?? 0,
+          nameLeft: name?.left ?? 0,
+          markTop: mark?.top ?? 0,
+          nameBottom: name?.bottom ?? 0,
         };
       });
     });
+    check("no chat row was drawn", rows.length >= 8, rows);
+    // One line each, and all the same height, however long the name.
     check(
-      "a second line changed height for its line",
-      parts.every((one) => one.height === lines.heights[0]),
-      { parts, lines },
+      "a chat's row is not one line high",
+      new Set(rows.map((one) => one.height)).size === 1 && rows[0].height > 0,
+      rows,
     );
-    check(
-      "no activity was cut short at this width",
-      parts.some((one) => one.doingCut),
-      parts,
-    );
-    check(
-      "the time in a state was cut short",
-      parts.every((one) => one.timeWhole),
-      parts,
-    );
-
-    // Text drawn from a taller font (another script, marks stacked on a letter) is cut, and
-    // makes no room for itself: the line has a height, not a least height.
-    await browser.execute(() => {
-      const section = document.querySelector('[data-raised="chats-list.e2e"]');
-      for (const named of section?.querySelectorAll(".chat .line.two .named") ?? [])
-        named.textContent = "\u0e01\u0e34\u0e34\u0e34\u0e34 \u6587\u4ef6 \u0f67\u0f71\u0f74\u0f83";
-    });
-    const tall = await tops();
-    check(
-      "a row moved for text from a taller font",
-      JSON.stringify(tall) === JSON.stringify(before),
-      {
-        before,
-        tall,
-      },
-    );
-
-    // The turn ends: the line goes, and what was there comes back.
-    await browser.execute(() => {
-      const section = document.querySelector('[data-raised="chats-list.e2e"]');
-      for (const line of section?.querySelectorAll(".chat .line.two") ?? []) {
-        const workspace = document.createElement("span");
-        workspace.className = "workspace";
-        workspace.textContent = "smart-ide";
-        line.replaceChildren(workspace);
-      }
-    });
-    const after = await tops();
-    check("a row moved when its line went", JSON.stringify(after) === JSON.stringify(before), {
-      before,
-      after,
-    });
-  });
-
-  it("draws the state beside the name where there is room for both", async () => {
-    check("there was no left region to draw in", await draw(TWO_LINES, "420px"), 420);
-    const seen = whole(await measured(), 10);
-
-    const row = await browser.execute(() => {
-      const section = document.querySelector('[data-raised="chats-list.e2e"]');
-      const chat = [...(section?.querySelectorAll(".chat") ?? [])].find(
-        (one) => one.querySelector(".session")?.textContent === "steward 7",
-      );
-      const session = chat?.querySelector(".session")?.getBoundingClientRect();
-      const word = chat?.querySelector(".shown-state .word")?.getBoundingClientRect();
-      if (!session || !word) return null;
-      return {
-        nameRight: session.right,
-        nameBottom: session.bottom,
-        wordLeft: word.left,
-        wordTop: word.top,
-      };
-    });
-    check("the short row was not drawn", row !== null, seen.rows);
-    // One line: the word starts right of the name and at its height.
-    check(
-      "the state is not beside the name",
-      (row?.wordLeft ?? 0) >= (row?.nameRight ?? 0) - 1,
-      row,
-    );
-    check("the state is not on the name's line", (row?.wordTop ?? 0) < (row?.nameBottom ?? 0), row);
+    for (const one of rows) {
+      check(`${one.name}: its mark is not before its name`, one.markLeft < one.nameLeft, one);
+      check(`${one.name}: its mark is not on its name's line`, one.markTop < one.nameBottom, one);
+    }
   });
 });

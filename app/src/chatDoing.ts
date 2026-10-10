@@ -196,15 +196,6 @@ export function useDoingSaid(session: number): Says | undefined {
   return running && doing !== undefined ? doingSays(doing) : undefined;
 }
 
-/** The id of the element that says what chat `session` is doing, which its row is described
- *  by while there is one. */
-export function chatDoingId(session: number): string {
-  return `${DOING_ID}${session}`;
-}
-
-/** What {@link chatDoingId} puts before the chat's number. */
-export const DOING_ID = "chat-doing-";
-
 /**
  * Keeps what the chats of ONE project are doing, starting from what the core holds. It
  * answers the store and not the lines, so the component holding it is not redrawn by one.
