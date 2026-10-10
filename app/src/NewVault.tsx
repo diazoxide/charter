@@ -24,7 +24,7 @@ const PROVIDERS = [
   {
     id: "plain-file",
     name: "Plain file",
-    says: "A plaintext file under the plane's state directory, which git never sees.",
+    says: "A plaintext file under the project's state directory, which git never sees.",
   },
   {
     id: "reference",

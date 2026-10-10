@@ -971,7 +971,7 @@ describe("the project's own save keys, in Saving (charter-app#300, ADR 0051)", (
     core();
     const saving = await at("Saving");
 
-    expect(saving).toHaveTextContent("[plane] worktrees is under General.");
+    expect(saving).toHaveTextContent("Where branch folders go is under General.");
   });
 
   it("says what is in force could not be read, rather than drawing a marker or no repo", async () => {
