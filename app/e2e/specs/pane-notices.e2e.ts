@@ -302,20 +302,39 @@ const overlap = (a: Box, b: Box) =>
   a.left < b.right - 1 && b.left < a.right - 1 && a.top < b.bottom - 1 && b.top < a.bottom - 1;
 
 /**
- * **No Notice is over the terminal** (#1647): each one that is drawn is above the terminal's
- * top edge, and shares no area with it.
+ * **No Notice is over the terminal** (#1647): the row's stack ends above the terminal's top
+ * edge, and what each Notice draws shares no area with it.
+ *
+ * What a Notice draws is its box **as far as the stack shows it**: once "+N more" is open the
+ * stack scrolls, and a Notice scrolled out of it still has a box below the row, clipped and
+ * drawn nowhere. So each box is cut to the stack's before it is compared.
  */
 function offTheTerminal(seen: {
   terminal: Box | null;
+  stack: Box | null;
   notices: { box: Box | null; shown: boolean }[];
 }) {
   check("the pane has no terminal", seen.terminal !== null, "is", true);
-  const terminal = seen.terminal as Box;
+  check("the pane has no stack of Notices", seen.stack !== null, "is", true);
+  const [terminal, stack] = [seen.terminal as Box, seen.stack as Box];
+  check("the stack of Notices runs onto the terminal", stack.bottom, "atMost", terminal.top + 1);
   for (const [index, notice] of seen.notices.entries()) {
     if (!notice.shown) continue;
     const box = notice.box as Box;
-    check(`Notice ${index + 1} is over the terminal`, overlap(box, terminal), "is", false);
-    check(`Notice ${index + 1} is not above the terminal`, box.bottom, "atMost", terminal.top + 1);
+    const top = Math.max(box.top, stack.top);
+    const bottom = Math.min(box.bottom, stack.bottom);
+    const left = Math.max(box.left, stack.left);
+    const right = Math.min(box.right, stack.right);
+    // Scrolled wholly out of the stack: drawn nowhere.
+    if (bottom - top <= 0 || right - left <= 0) continue;
+    const drawn = { left, right, top, bottom, width: right - left, height: bottom - top };
+    check(`Notice ${index + 1} is over the terminal`, overlap(drawn, terminal), "is", false);
+    check(
+      `Notice ${index + 1} is not above the terminal`,
+      drawn.bottom,
+      "atMost",
+      terminal.top + 1,
+    );
   }
 }
 
