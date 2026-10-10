@@ -307,6 +307,10 @@ pub struct Hooks {
     /// Told each sandbox block a chat's hook found (#1338), once it is kept for `purlis doctor`
     /// — a slot filled after the fact, for `answering`'s reason.
     blocked: Arc<Mutex<Option<Blocks>>>,
+    /// The road every sandbox block takes into the app (#1338): the throttle, the kept count,
+    /// then [`Self::blocked`]. Handed to what else hears a chat refused (#1663): purlis's own
+    /// proxy beside a chat it wraps. None with nothing listening.
+    hear_block: Option<Blocks>,
     /// Runs each brokered `secret exec` a sandboxed chat asks for (#1407) — a slot filled after
     /// the fact, for `answering`'s reason: it needs the chat's record. Empty, the asker is told
     /// nothing answers and runs the command itself.
@@ -573,17 +577,16 @@ fn offered(
     match (block.operation, block.kind) {
         (Operation::Connect, Kind::Host) => (
             BlockOffer::Host,
-            target
-                .and_then(|typed| grant::host(typed).ok())
-                .map(|host| host.to_string())
-                .filter(|host| !host.starts_with("*.")),
+            target.and_then(purlis_core::sandboxblock::named_host),
             None,
         ),
         // A program that looks its host up itself, not through the proxy (#1631): a host grant
         // would not let it through, so none is offered, and the Notice says why.
+        // The host it looked up is shown, checked as a grant checks one (#1663), and never
+        // offered: the Notice's Allow is not drawn for this offer.
         (Operation::Lookup, Kind::Host) => (
             BlockOffer::Unsandboxed,
-            None,
+            target.and_then(purlis_core::sandboxblock::named_host),
             Some(
                 "This program looks its host up itself instead of going through the sandbox's \
                  proxy, so allowing the host would not let it through. A client that uses the \
@@ -842,6 +845,7 @@ impl Hooks {
             doings,
             touching: Arc::new(Mutex::new(None)),
             blocked: Arc::new(Mutex::new(None)),
+            hear_block: None,
             secret_exec: Arc::new(Mutex::new(None)),
         }
     }
@@ -1111,6 +1115,7 @@ impl Hooks {
             touching,
             doings,
             blocked,
+            hear_block: Some(hear_block),
             secret_exec,
         })
     }
@@ -1413,6 +1418,13 @@ impl Hooks {
     /// Who is told, from now on, each sandbox block a chat's hook found (#1338), once it is kept.
     pub fn when_blocked(&self, blocks: Blocks) {
         *self.blocked.lock().unwrap_or_else(PoisonError::into_inner) = Some(blocks);
+    }
+
+    /// What hears a sandbox block from outside a chat's own hook (#1663): purlis's own proxy
+    /// beside a chat it wraps tells each host it refused here, and it takes the road a hook's
+    /// block takes. None with nothing listening.
+    pub fn block_hearer(&self) -> Option<Blocks> {
+        self.hear_block.clone()
     }
 
     /// Who runs, from now on, each brokered `secret exec` a chat asks for (#1407).
@@ -2500,11 +2512,32 @@ mod tests {
             (BlockOffer::Unsandboxed, None, true)
         );
         // A lookup a program made itself, past the proxy (#1631): no host grant would reach
-        // it, so none is offered, and the Notice says why rather than nothing.
+        // it, so none is offered, and the Notice says why rather than nothing. The host it
+        // looked up is shown (#1663), checked as a grant checks one, and never offered.
         assert_eq!(
             told(Operation::Lookup, Kind::Host, false, None),
             (BlockOffer::Unsandboxed, None, true)
         );
+        assert_eq!(
+            told(
+                Operation::Lookup,
+                Kind::Host,
+                false,
+                Some("DB.Prod.example.com")
+            ),
+            (
+                BlockOffer::Unsandboxed,
+                Some("db.prod.example.com".to_owned()),
+                true
+            )
+        );
+        for target in ["localhost", "*.example.com", "db", "169.254.169.254"] {
+            assert_eq!(
+                told(Operation::Lookup, Kind::Host, false, Some(target)),
+                (BlockOffer::Unsandboxed, None, true),
+                "{target}"
+            );
+        }
         // Never granted: the way that works instead.
         for (operation, kind) in [
             (Operation::Write, Kind::ProjectState),

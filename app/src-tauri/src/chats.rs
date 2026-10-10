@@ -10,7 +10,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use purlis_core::engine::Size;
 use purlis_core::eventlog::{Began, RunOf};
@@ -405,6 +405,10 @@ pub struct Chats {
     /// The sandbox block each open chat is held on now, as the app heard it (#1508): what an
     /// answer to several tasks is checked against. **In memory only**, and gone with the chat.
     blocks: crate::taskblocks::Blocks,
+    /// What hears each host purlis's own proxy refused a chat it wraps (Codex, opencode,
+    /// #1663), as that chat's block: the road a hook's block takes into the app
+    /// ([`crate::hooks::Hooks::block_hearer`]). Empty until the project's hooks listen.
+    refused: Arc<Mutex<Option<crate::hooks::Blocks>>>,
     /// The session record the app last wrote for each open chat, project-relative (#1436): what
     /// a task's report names as its record. The app's own knowledge of what it wrote, so a
     /// report never names a path its chat chose. **In memory only**, and gone with the chat.
@@ -713,6 +717,7 @@ impl Chats {
             most_at_once: MOST_AT_ONCE,
             grants: Mutex::new(HashMap::new()),
             blocks: crate::taskblocks::Blocks::default(),
+            refused: Arc::new(Mutex::new(None)),
             records: Mutex::new(HashMap::new()),
             briefs: crate::rebrief::Sent::default(),
             dispatching: Mutex::new(()),
@@ -1247,6 +1252,11 @@ impl Chats {
     /// The sandbox blocks each open chat is held on now (#1508).
     pub fn blocks(&self) -> &crate::taskblocks::Blocks {
         &self.blocks
+    }
+
+    /// Who hears, from now on, each host purlis's own proxy refuses a chat it wraps (#1663).
+    pub fn tell_refusals_to(&self, hear: crate::hooks::Blocks) {
+        *lock(&self.refused) = Some(hear);
     }
 
     /// The folder chat `session` was started in: what a write grant for it is judged against.
@@ -1792,8 +1802,12 @@ impl Chats {
         )?;
         // What a wrapped chat needs running beside it, started before it and kept for as long
         // as it is open: charter's egress proxy and its own temp directory (ADR 0067 §2).
+        // Its proxy tells the app each host it refuses, by the proxy's word (#1663): the
+        // chat's block, under the number the chat is given below.
+        let whose = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let refusals = refused_by_the_proxy(Arc::clone(&self.refused), Arc::clone(&whose), harness);
         let confinement = match sandbox {
-            Some(applied) => applied.confine().map_err(|err| {
+            Some(applied) => applied.confine_keeping(refusals).map_err(|err| {
                 purlis_core::sandbox::under_policy(
                     &purlis_core::sandbox::policy::Locks::of(&self.project),
                     format!(
@@ -1878,6 +1892,7 @@ impl Chats {
                 },
                 &|session| {
                     announced.store(session, std::sync::atomic::Ordering::SeqCst);
+                    whose.store(session, std::sync::atomic::Ordering::SeqCst);
                     // A new program knows no model until its harness says (#1021).
                     lock(&self.models).remove(&session);
                     if let Some(starting) = lock(&self.starting).as_ref() {
@@ -3289,6 +3304,42 @@ fn its_own_model<'a>(
         .map(purlis_core::state::Model::as_str)
 }
 
+/// **What purlis's own proxy beside a chat it wraps tells of each host it refused** (#1663):
+/// the chat's block, a connection to a host named whole as the proxy heard it (`host:port`),
+/// told to whoever `hear` holds once the chat has its number (`whose`, 0 before). The proxy's
+/// word, never the chat's: its hook leaves such a host to it
+/// (`purlis_core::sandboxblock::the_proxy_tells_hosts`). Told on a thread of its own, so the
+/// refusal the client is waiting for is never held up by the app's keeping of it.
+fn refused_by_the_proxy(
+    hear: Arc<Mutex<Option<crate::hooks::Blocks>>>,
+    whose: Arc<std::sync::atomic::AtomicU32>,
+    harness: Option<Harness>,
+) -> purlis_core::sandbox::egress::Refusals {
+    use purlis_core::sandboxblock::{Block, Kind, Operation};
+    purlis_core::sandbox::egress::Refusals::telling(Arc::new(move |host: &str, port: u16| {
+        let chat = whose.load(std::sync::atomic::Ordering::SeqCst);
+        let Some(told) = lock(&hear).clone() else {
+            return;
+        };
+        if chat == 0 {
+            return;
+        }
+        let block = purlis_core::hookwire::SandboxBlocked {
+            chat,
+            sandbox_blocked: Block {
+                operation: Operation::Connect,
+                kind: Kind::Host,
+                ours: false,
+            },
+            harness: harness.map(|harness| harness.name().to_owned()),
+            target: Some(purlis_core::sandbox::egress::host_and_port(host, port)),
+        };
+        let _ = std::thread::Builder::new()
+            .name("purlis-refused".into())
+            .spawn(move || told(block));
+    }))
+}
+
 fn lock<T: ?Sized>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
@@ -3322,6 +3373,49 @@ fn what_its_hooks_read(
 
 #[cfg(test)]
 pub(crate) mod tests {
+
+    /// #1663: each host purlis's own proxy refused a chat it wraps is that chat's block, named
+    /// whole by the proxy, once the chat has its number, and only to a listener there is.
+    #[test]
+    fn a_host_the_proxy_refused_a_wrapped_chat_is_its_block_by_the_proxys_word() {
+        use purlis_core::sandboxblock::{Block, Kind, Operation};
+        let hear: Arc<Mutex<Option<crate::hooks::Blocks>>> = Arc::new(Mutex::new(None));
+        let whose = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let refusals = super::refused_by_the_proxy(
+            Arc::clone(&hear),
+            Arc::clone(&whose),
+            Some(Harness::Codex),
+        );
+        let (tx, rx) = std::sync::mpsc::channel();
+        let tx = Mutex::new(tx);
+        // Nobody listening yet, then no number yet: nothing is told.
+        refusals.heard("early.example.com", 443);
+        *lock(&hear) = Some(Arc::new(move |block| lock(&tx).send(block).unwrap()));
+        refusals.heard("before.example.com", 443);
+        whose.store(12, std::sync::atomic::Ordering::SeqCst);
+        refusals.heard("api.example.com", 8443);
+        let told = rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("told");
+        assert_eq!(
+            told,
+            purlis_core::hookwire::SandboxBlocked {
+                chat: 12,
+                sandbox_blocked: Block {
+                    operation: Operation::Connect,
+                    kind: Kind::Host,
+                    ours: false,
+                },
+                harness: Some("codex".to_owned()),
+                target: Some("api.example.com:8443".to_owned()),
+            }
+        );
+        assert!(
+            rx.recv_timeout(std::time::Duration::from_millis(200))
+                .is_err(),
+            "once"
+        );
+    }
 
     #[test]
     fn a_chats_hooks_are_told_its_folder_and_only_a_sandboxed_chat_is_called_sandboxed() {

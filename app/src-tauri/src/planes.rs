@@ -1917,10 +1917,22 @@ impl Planes {
                         );
                     }
                     crate::taskblocks::heard(strong.chats(), &told);
+                    // The chat now waits on the person for this Notice, until its turn moves
+                    // on: what the chat that asked for it is told (#1663). purlis's own block
+                    // is a bug to report, which the chat is not told to wait on.
+                    if !told.ours {
+                        let turn = strong.board().glance(told.session).turns;
+                        strong.chats().blocks().raised(told.session, turn);
+                    }
                 }
                 blocks(told);
             })
         });
+        // A host purlis's own proxy refused a chat it wraps (Codex, opencode) takes the road a
+        // hook's block takes (#1663).
+        if let Some(hear) = held.hooks.block_hearer() {
+            held.chats().tell_refusals_to(hear);
+        }
         // The conversation a chat's own harness moves it onto — the first one Codex or
         // opencode names, a Claude Code `/clear` — is the one the record resumes it by (Q10).
         // Weak for the handoff's reason.

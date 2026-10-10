@@ -503,18 +503,30 @@ fn a_refused_connection_or_certificate_check_is_read_from_standard_error() {
 }
 
 #[test]
-fn a_failed_commands_error_is_read_for_its_violation_block_alone() {
-    // `error` holds standard output too: a program's words in it are not read.
-    for error in [
-        "Exit code 1\ntouch: /opt/x: Operation not permitted",
-        "Exit code 6\ncurl: (56) CONNECT tunnel failed, response 403",
-    ] {
-        assert!(detect(&failed("x", error), &place()).is_empty(), "{error}");
-    }
+fn a_failed_commands_error_is_read_for_its_violation_block_and_network_refusals_alone() {
+    // `error` holds standard output too: a program's refusal of a path in it is not read. A
+    // refusal of the network is, as standard output's is (#1663), naming no host to allow.
+    assert!(
+        detect(
+            &failed("x", "Exit code 1\ntouch: /opt/x: Operation not permitted"),
+            &place()
+        )
+        .is_empty()
+    );
+    assert_eq!(
+        detect_with_targets(
+            &failed(
+                "x",
+                "Exit code 6\ncurl: (56) CONNECT tunnel failed, response 403"
+            ),
+            &place()
+        ),
+        vec![(block(Operation::Connect, Kind::Host, false), None)]
+    );
 }
 
 #[test]
-fn what_a_command_printed_on_its_standard_output_is_never_a_block() {
+fn what_a_command_printed_on_its_standard_output_is_never_a_block_of_a_path() {
     // A chat reading purlis's own sources, or a log, prints these words without being refused.
     let stdout = format!("{SESSION_RECORD}\ntouch: /opt/x: Operation not permitted\n");
     assert!(detect(&came_back("cat log.txt", &stdout, ""), &place()).is_empty());
@@ -1148,24 +1160,35 @@ fn a_proxy_line_names_only_a_host_never_the_words_after_it() {
 /// A program that looks a host up itself, rather than going through the sandbox's proxy, is
 /// refused the lookup by the sandbox, and macOS's resolver says only that the name is not known
 /// (#1631): no violation line comes with it. Allowing the host would not let such a program
-/// through, so nothing is named to grant.
+/// through, so the host it names is said and never offered (#1663,
+/// `sandboxblock_network_tests`).
 #[test]
 fn a_lookup_the_sandbox_refused_is_a_lookup_of_a_host_with_nothing_to_grant() {
-    for line in [
-        "psql: error: could not translate host name \"db.example.com\" to address: nodename nor \
-         servname provided, or not known",
-        "socket.gaierror: [Errno 8] nodename nor servname provided, or not known",
-        "nc: getaddrinfo: nodename nor servname provided, or not known",
-        "curl: (6) Could not resolve host: api.example.com",
+    for (line, host) in [
+        (
+            "psql: error: could not translate host name \"db.example.com\" to address: nodename \
+             nor servname provided, or not known",
+            Some("db.example.com"),
+        ),
+        (
+            "socket.gaierror: [Errno 8] nodename nor servname provided, or not known",
+            None,
+        ),
+        (
+            "nc: getaddrinfo: nodename nor servname provided, or not known",
+            None,
+        ),
+        (
+            "curl: (6) Could not resolve host: api.example.com",
+            Some("api.example.com"),
+        ),
     ] {
         assert_eq!(
             detect_with_targets(&came_back("x", "", line), &place()),
-            vec![(block(Operation::Lookup, Kind::Host, false), None)],
-            "{line}"
-        );
-        // What a command printed on its standard output is never a block.
-        assert!(
-            detect(&came_back("x", line, ""), &place()).is_empty(),
+            vec![(
+                block(Operation::Lookup, Kind::Host, false),
+                host.map(str::to_owned)
+            )],
             "{line}"
         );
     }

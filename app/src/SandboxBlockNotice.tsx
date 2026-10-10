@@ -285,8 +285,8 @@ function AllowNotice({
         The sandbox blocked {block.said}
         {block.target !== null && (
           <>
-            {" "}
-            in <code className="block-allow-target">{block.target}</code>
+            {block.kind === "host" ? ": " : " in "}
+            <code className="block-allow-target">{block.target}</code>
           </>
         )}
         . {block.route}
@@ -313,8 +313,8 @@ function AllowNotice({
         The sandbox blocked {block.said}
         {block.target !== null && (
           <>
-            {" "}
-            in <code className="block-allow-target">{block.target}</code>
+            {block.kind === "host" ? ": " : " in "}
+            <code className="block-allow-target">{block.target}</code>
           </>
         )}
         . {block.route} Only you can choose to start this chat again without the sandbox: it
