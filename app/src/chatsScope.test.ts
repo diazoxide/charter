@@ -1,6 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { chatsTree, type ListedChat } from "./chatsTree";
-import { inScope, inTab, keepScope, keptScope } from "./chatsScope";
+import { inScope, inTab, keepScope, keptScope, settleScope } from "./chatsScope";
+import { keptFacet } from "./projectViews";
+import { GLOBAL, usingTheDefaultLayout } from "./windowprefs";
 
 /** A chat working in `workspace`, started by `parent` as `mode` where one started it. */
 function listed(
@@ -105,6 +107,65 @@ describe("the scope kept for each project (#1679)", () => {
 
   it("is the workspace's where what is kept is not a scope", () => {
     globalThis.localStorage.setItem("purlis.chats.scope:/p/one", "everything");
+    expect(keptScope("/p/one")).toBe("workspace");
+  });
+});
+
+describe("the scope in layout.json v2 (B-11, #1696)", () => {
+  const put = (document: unknown) => {
+    (globalThis as Record<string, unknown>)[GLOBAL] = {
+      layout: { path: "/cfg/layout.json", found: true, document, trouble: null },
+      theme: { path: "", found: false, document: null, trouble: null },
+    };
+  };
+  afterEach(() => Reflect.deleteProperty(globalThis, GLOBAL));
+
+  it("is kept in the project's entry, and the default is kept as nothing", () => {
+    keepScope("/p/one", "all");
+    expect(keptFacet("/p/one", "chats")).toEqual({ scope: "all" });
+
+    keepScope("/p/one", "workspace");
+    expect(keptFacet("/p/one", "chats")).toBeUndefined();
+  });
+
+  it("is read from the project's entry in the file, and a value that is not a scope is the default", () => {
+    put({
+      version: 2,
+      regions: [],
+      projects: { "/p/one": { chats: { scope: "tab" } }, "/p/two": { chats: { scope: "x" } } },
+    });
+
+    expect(keptScope("/p/one")).toBe("tab");
+    expect(keptScope("/p/two")).toBe("workspace");
+  });
+
+  it("moves what web storage kept into the file once, and the key goes", () => {
+    globalThis.localStorage.setItem("purlis.chats.scope:/p/one", "all");
+    expect(keptScope("/p/one")).toBe("all");
+
+    settleScope("/p/one");
+
+    expect(keptFacet("/p/one", "chats")).toEqual({ scope: "all" });
+    expect(globalThis.localStorage.getItem("purlis.chats.scope:/p/one")).toBeNull();
+    expect(keptScope("/p/one")).toBe("all");
+  });
+
+  it("never lets web storage's old pick over the file's, and still lets the key go", () => {
+    put({ version: 2, regions: [], projects: { "/p/one": { chats: { scope: "tab" } } } });
+    globalThis.localStorage.setItem("purlis.chats.scope:/p/one", "all");
+
+    expect(keptScope("/p/one")).toBe("tab");
+    settleScope("/p/one");
+
+    expect(keptScope("/p/one")).toBe("tab");
+    expect(globalThis.localStorage.getItem("purlis.chats.scope:/p/one")).toBeNull();
+  });
+
+  it("is the workspace's again once the default layout is used", () => {
+    put({ version: 2, regions: [], projects: { "/p/one": { chats: { scope: "tab" } } } });
+
+    usingTheDefaultLayout();
+
     expect(keptScope("/p/one")).toBe("workspace");
   });
 });

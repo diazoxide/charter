@@ -50,6 +50,7 @@ import { WorktreeMark } from "./Worktree";
 import { OUTSIDE, OUTSIDE_TITLE } from "./actions";
 import type { BranchPath, Catalogued, FileOn, Offer } from "./actions";
 import { setSectionOpen, useClosedSections, type SectionId } from "./explorerSections";
+import { keepTreeFolds, keptTreeFolds } from "./explorerFolds";
 import type { WorkspaceState } from "./workspaceState";
 import { useTabStop } from "./roving";
 import { Breadcrumb, CockpitHeader, focusStands, useAheadBehind } from "./Cockpit";
@@ -238,11 +239,14 @@ export function Explorer({
    *  region's to offer, for the bottom bar's lines too, since that region is not pressed. */
   onReadAgain: () => void;
 }) {
+  /** The rows folded and opened as this project's Explorer was left, on this machine (B-11,
+   *  #1686): read once, as the view is first drawn, and kept on every change. */
+  const [kept] = useState(() => keptTreeFolds(plane));
   /** The clones the operator folded, by workspace and name: a row inside one is not drawn, so
    *  it cannot be where the keyboard comes back in. */
-  const [folded, setFolded] = useState<ReadonlySet<string>>(new Set());
+  const [folded, setFolded] = useState<ReadonlySet<string>>(kept.folded);
   /** The folders of branches the operator opened, by {@link fileFold}: closed until opened. */
-  const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(kept.opened);
   /** Whether what git ignores is drawn, dimmed. */
   const [showIgnored, setShowIgnored] = useState(false);
   /** Whether a branch's files are collapsed to what it changed (FM-4). */
@@ -250,7 +254,13 @@ export function Explorer({
   /** What the file rows are narrowed to: names holding it, any case. */
   const [filter, setFilter] = useState("");
   /** The cockpit's *Files* rows the operator closed: open until they do (FM-5). */
-  const [shut, setShut] = useState<ReadonlySet<string>>(new Set());
+  const [shut, setShut] = useState<ReadonlySet<string>>(kept.shut);
+  // Written only when they differ from what is kept (`projectViews.keepFacet`), so the first
+  // draw writes nothing.
+  useEffect(
+    () => keepTreeFolds(plane, { folded, opened: expanded, shut }),
+    [plane, folded, expanded, shut],
+  );
   const cockpit = cockpitOf(workspace, state, focus);
   /** Where the *Files* section is of: the picked branch or repo, or nothing for the workspace
    *  itself, whose repos' own folders it lists. */
@@ -319,7 +329,7 @@ export function Explorer({
     levels: new Map(),
     touching,
   };
-  const closed = useClosedSections();
+  const closed = useClosedSections(plane);
   /** The rows of each section's tree, and of the cockpit's: ids never repeat across them, so
    *  one lookup answers for every row. A folded section draws none of its rows. */
   const shownIn = (rows: Row[], section: SectionId) =>
@@ -454,7 +464,7 @@ export function Explorer({
   /** The *Workspaces* section: every workspace the strip can bring forward, the focused one
    *  current, each pressed through the strip's own catalogue row and with the strip's menu. */
   const workspacesSection = (
-    <Section id="workspaces" title="Workspaces" closed={closed.has("workspaces")}>
+    <Section id="workspaces" title="Workspaces" closed={closed.has("workspaces")} project={plane}>
       <RovingFocusGroup.Root asChild orientation="vertical" {...workspacesStop}>
         <div
           className="tree"
@@ -666,7 +676,7 @@ export function Explorer({
     <nav ref={navRef} className="explorer" aria-label="Explorer" data-testid="explorer">
       {workspacesSection}
 
-      <Section id="repos" title="Repos and branches" closed={closed.has("repos")}>
+      <Section id="repos" title="Repos and branches" closed={closed.has("repos")} project={plane}>
         {state.trouble && (
           <ReadRefused cause={`workspace-read:${workspace}`} onReadAgain={onReadAgain}>
             {state.trouble}
@@ -889,6 +899,7 @@ export function Explorer({
         of={filesName}
         marks={topMarks || undefined}
         closed={closed.has("files")}
+        project={plane}
       >
         {filterBox}
         <RovingFocusGroup.Root asChild orientation="vertical" {...filesStop}>
@@ -931,6 +942,7 @@ function Section({
   of,
   marks,
   closed,
+  project,
   children,
 }: {
   id: SectionId;
@@ -940,6 +952,8 @@ function Section({
   /** The marks of what it is of, after that. */
   marks?: ReactNode;
   closed: boolean;
+  /** The project whose sections these are: a fold is kept for it (B-11). */
+  project: string | undefined;
   children: ReactNode;
 }) {
   const body = useId();
@@ -952,7 +966,7 @@ function Section({
           tabIndex={0}
           aria-expanded={!closed}
           aria-controls={body}
-          onClick={() => setSectionOpen(id, closed)}
+          onClick={() => setSectionOpen(id, closed, project)}
         >
           <ChevronRight className="twisty" data-open={!closed || undefined} />
           {title}

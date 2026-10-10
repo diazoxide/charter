@@ -7,6 +7,7 @@ import {
   setSectionOpen,
 } from "./explorerSections";
 import { forgetThisLaunch } from "./regions";
+import { keptFacet } from "./projectViews";
 import {
   aboutThisMachine,
   GLOBAL,
@@ -77,5 +78,55 @@ describe("Explorer's folded sections in the layout file (#1677)", () => {
 
   it("reads only a list under closed", () => {
     expect(loadExplorerSections({ explorer: ["files"] }).closed).toEqual(new Set());
+  });
+});
+
+describe("Explorer's folded sections, kept per project (B-11, #1686)", () => {
+  it("are the project's own once folded there, and the machine's last fold for a project with none", () => {
+    handed({ version: 2, regions: [], explorer: { closed: ["files"] } });
+
+    setSectionOpen("workspaces", false, "/one");
+
+    expect(closedSections("/one")).toEqual(new Set(["files", "workspaces"]));
+    expect(keptFacet("/one", "explorer")).toEqual({ closed: ["workspaces", "files"] });
+    // A project with none of its own starts as the person last left one, as an arrangement does.
+    expect(closedSections("/two")).toEqual(new Set(["files", "workspaces"]));
+    expect(explorerSectionsDocument()).toEqual({ closed: ["workspaces", "files"] });
+  });
+
+  it("keep a project's every-section-open, whatever another project folds later", () => {
+    handed({ version: 2, regions: [], explorer: { closed: ["files"] } });
+    setSectionOpen("files", true, "/one");
+
+    setSectionOpen("repos", false, "/two");
+
+    expect(closedSections("/one")).toEqual(new Set());
+    expect(closedSections("/two")).toEqual(new Set(["repos"]));
+  });
+
+  it("are read from the project's entry in the file, a name that is no section left out", () => {
+    handed({
+      version: 2,
+      regions: [],
+      explorer: { closed: ["files"] },
+      projects: { "/one": { explorer: { closed: ["repos", "outline"] } } },
+    });
+
+    expect(closedSections("/one")).toEqual(new Set(["repos"]));
+    expect(closedSections("/two")).toEqual(new Set(["files"]));
+  });
+
+  it("are the same set while nothing changes, so a view drawing them does not draw again", () => {
+    handed({ version: 2, regions: [], projects: { "/one": { explorer: { closed: ["repos"] } } } });
+
+    expect(closedSections("/one")).toBe(closedSections("/one"));
+  });
+
+  it("are every one open in every project once the default layout is used", () => {
+    handed({ version: 2, regions: [], projects: { "/one": { explorer: { closed: ["repos"] } } } });
+
+    usingTheDefaultLayout();
+
+    expect(closedSections("/one")).toEqual(new Set());
   });
 });

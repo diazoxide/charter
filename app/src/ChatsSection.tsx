@@ -44,7 +44,15 @@ import {
   type Rank,
 } from "./chatsList";
 import { useChatsListPrefs } from "./chatsListPrefs";
-import { inScope, inTab, keepScope, keptScope, SCOPES, type Scope } from "./chatsScope";
+import {
+  inScope,
+  inTab,
+  keepScope,
+  keptScope,
+  SCOPES,
+  settleScope,
+  type Scope,
+} from "./chatsScope";
 import { useArrowPick } from "./settings/components";
 import { keepFolds, keptFolds } from "./chatFolds";
 import {
@@ -358,6 +366,8 @@ export function ChatsSection({
     setPicked(to);
     keepScope(chats.plane, to);
   };
+  // A pick web storage kept before the layout file did goes into the file, once (#1696).
+  useEffect(() => settleScope(chats.plane), [chats.plane]);
   /** The scope the list is drawn in: every chat where the caller names no workspace. */
   const scope: Scope = here === undefined ? "all" : picked;
   const tabChats = tab?.chats;
