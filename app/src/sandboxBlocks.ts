@@ -17,6 +17,7 @@
  */
 import { useCallback, useEffect, useState } from "react";
 import { listen } from "./here";
+import { asksMoved } from "./asks";
 import { commands, type BlockShown, type ChatBlocked, type PlaneId } from "./bindings";
 
 /** The most blocks one chat holds at once. */
@@ -172,6 +173,24 @@ export function forgotten(block: HeldBlock): BlockShown[] {
   }));
 }
 
+/**
+ * **The block chat `session` holds for what an ask showed** (#1692): of its operation and kind,
+ * and naming that very host or folder, as only that one, so putting it away puts away nothing
+ * else the block lists. Nothing where the window holds no such block.
+ */
+export function heldFor(blocks: Blocks, session: number, shown: BlockShown): HeldBlock | undefined {
+  const block = (blocks[session] ?? []).find(
+    (one) =>
+      one.operation === shown.operation &&
+      one.kind === shown.kind &&
+      (hostsOf(one).length > 0
+        ? hostsOf(one).some((host) => matched("host", host) === matched("host", shown.target))
+        : one.target === shown.target),
+  );
+  if (block === undefined) return undefined;
+  return hostsOf(block).length > 0 ? listing(block, [shown.target]) : block;
+}
+
 /** What `plane`'s chats' sandboxes blocked, and how one is put away. */
 export function useSandboxBlocks(plane: PlaneId | undefined): {
   blocks: Blocks;
@@ -214,17 +233,23 @@ export function useSandboxBlocks(plane: PlaneId | undefined): {
       setHeld((was) => ({ ...was, blocks: putAway(was.blocks, session, block) }));
       // Keep blocked, told to the core, so the block is no longer an ask (#1690).
       if (plane !== undefined)
-        for (const shown of forgotten(block))
-          void Promise.resolve()
-            .then(() => commands.forgetSandboxBlock(plane, session, shown))
-            .catch(() => undefined);
+        void Promise.all(
+          forgotten(block).map((shown) =>
+            Promise.resolve()
+              .then(() => commands.forgetSandboxBlock(plane, session, shown))
+              .catch(() => undefined),
+          ),
+          // The Inbox lists the same block (#1692): put away here, it goes there too.
+        ).then(() => asksMoved(plane));
     },
     [plane],
   );
   const answered = useCallback(
-    (session: number, block: HeldBlock) =>
-      setHeld((was) => ({ ...was, blocks: putAway(was.blocks, session, block, true) })),
-    [],
+    (session: number, block: HeldBlock) => {
+      setHeld((was) => ({ ...was, blocks: putAway(was.blocks, session, block, true) }));
+      if (plane !== undefined) asksMoved(plane);
+    },
+    [plane],
   );
   return { blocks, dismiss, answered };
 }

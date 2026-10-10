@@ -4,6 +4,7 @@ import {
   Brain,
   FolderTree,
   GitBranch,
+  Hand,
   History,
   KeyRound,
   ListTodo,
@@ -158,6 +159,8 @@ export const VIEW_MARKS: Record<OwnViewId, LucideIcon> = {
   // #1676: a magnifier for finding in files, and a branch for what git says of the repos.
   search: Search,
   changes: GitBranch,
+  // The title bar's hand (#1692): the ✋ counts the asks and opens this view.
+  inbox: Hand,
   todos: ListTodo,
   memory: Brain,
   personas: UsersRound,

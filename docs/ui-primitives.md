@@ -1146,6 +1146,16 @@ sends the chord, so a chat with the keyboard keeps it. Each of the right side's 
 palette row too (_Show the Memory view_, and an extension's panel by its own name), and so is the
 region (_Put the Attention region away_).
 
+**The Inbox's key is `⌘⇧I`** (#1692), `Ctrl+Shift+I` off a Mac: `Ctrl` with `Shift` and a letter
+is no byte, so it is the window's while a chat has the keyboard, as `Ctrl+Shift+E` is. It shows
+the Inbox, the right side's first view, and gives the keyboard to its first ask, never to one of
+the ask's buttons, so the key and a stray Enter after it answer nothing. The title bar's ✋ does
+the same. The Inbox is one Tab stop, on the window's own roving focus (`useTabStop`): ↑ and ↓
+move from an ask to its buttons and on to the next ask, Home and End go to the ends, Enter
+presses the focused button as it does anywhere, and Escape gives the keyboard back to the chat in
+front. A dispatch's Notice drawn in it keeps its own buttons as Tab stops. There is no key of a
+single letter (I-11).
+
 **The keys for the chats inside a tab take nothing either** (#1487, `taskKeys.taskKeyOf`).
 
 |                                                               | On a Mac      | Everywhere else                 |

@@ -1292,6 +1292,7 @@ const VIEW_NOTES: Record<Exclude<OwnViewId, "search">, string> = {
   explorer: "The focused workspace's repos, branches and files, on the left.",
   changes:
     "The focused workspace's repos: branch, uncommitted files, branches and pipeline, on the left.",
+  inbox: "What waits on you in this project, answered in place, on the right.",
   todos: "What is left to do in the focused workspace, on the right.",
   memory: "What the focused workspace remembers, on the right.",
   personas: "The project's personas, on the right.",

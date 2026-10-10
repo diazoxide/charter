@@ -34,6 +34,19 @@ export const ASKS_MAY_HAVE_MOVED = [
 /** How long the window waits for a burst of moves to settle before it reads a list again. */
 export const SETTLE_MS = 50;
 
+/** Whatever reads the lists again when the window itself moved a source. */
+const moved = new Set<(plane: string) => void>();
+
+/**
+ * **The window itself answered something `plane` waits on** (#1692): a Notice's Keep blocked,
+ * an Allow in the Inbox, a dispatch answered on its tab. Some of those move the core with no
+ * event of their own, so the window says so here and every list of `plane`'s asks is read
+ * again: an answer in one place clears the ask everywhere it is drawn.
+ */
+export function asksMoved(plane: string): void {
+  for (const reader of moved) reader(plane);
+}
+
 /** Each project's asks, by its id: the last whole list the core derived for it. */
 export function useAsks(planes: readonly string[]): {
   held: Record<string, readonly Shown[]>;
@@ -49,6 +62,10 @@ export function useAsks(planes: readonly string[]): {
     for (const plane of wanted) reader.read(plane);
   }, [key, reader]);
   useEffect(() => {
+    // Listening again after a cleanup (React's StrictMode runs every effect twice) reads what it
+    // watches again, since a read made while it was stopped was dropped.
+    reader.start();
+    moved.add(reader.soon);
     const stops = ASKS_MAY_HAVE_MOVED.map((event) =>
       listen<{ plane: string }>(event, (said) => {
         const plane = said.payload?.plane;
@@ -56,6 +73,7 @@ export function useAsks(planes: readonly string[]): {
       }).catch(() => undefined),
     );
     return () => {
+      moved.delete(reader.soon);
       reader.stop();
       for (const stop of stops) void stop.then((off) => off?.()).catch(() => undefined);
     };
@@ -85,6 +103,11 @@ function listReader(
   };
   return {
     read,
+    start() {
+      if (live) return;
+      live = true;
+      for (const plane of watched) read(plane);
+    },
     soon(plane: string) {
       if (timers.has(plane)) return;
       timers.set(

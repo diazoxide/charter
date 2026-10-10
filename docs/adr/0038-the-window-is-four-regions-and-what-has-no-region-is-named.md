@@ -308,3 +308,18 @@ three sections, each folding on its heading**, as an editor's explorer is.
 Which sections are folded is kept in the layout file on this machine. A focused branch is still
 its cockpit, which draws in place of the three sections.
 
+## Amendment, 2026-10-11: the Inbox heads the right side
+
+The operator's decision of 2026-10-10 (spec #1688, I-2 and I-4; built in #1692): **the Inbox is
+the right side's first view**, above Todos. It lists what waits on the person in the project, the
+asks of the registry (#1690), grouped by chat with the chat waiting longest first, and answers
+each in place through the path its source's Notice answers with. Its icon is the title bar's
+hand, and its count is the asks', in the needs-you colours, on the bar while the side is away
+too. Memory stays the view the side opens on.
+
+**The title bar's ✋ opens the Inbox**, of the project in front where something waits there, and
+otherwise of the first project along the strip with something waiting. The ✋ is no longer the
+queue's only place: its count is the Inbox's, and its list is opened now only where something
+asks for it (the away summary's dispatches refused while nobody was there), until #1693 and
+#1695 move those into the Inbox and retire the list. ⌘⇧I (Ctrl+Shift+I elsewhere) shows the
+Inbox, and so does its palette row.

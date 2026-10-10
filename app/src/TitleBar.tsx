@@ -150,6 +150,8 @@ export function TitleBar({
     /** The registry's other asks, with Go to each one's chat. */
     others?: readonly OtherAsk[];
     onOpenOther?: (ask: OtherAsk) => void;
+    /** Opens the Inbox, which a press of the hand does where there is one (#1692). */
+    onInbox?: () => void;
   };
   /**
    * The project in front's save standing (charter-app#294, ADR 0051) and what its two buttons

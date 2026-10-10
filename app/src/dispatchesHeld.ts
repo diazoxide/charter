@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useReducer, useRef, useSyncExternalStore } from "react";
 import { commands, type DispatchPending, type PlaneId } from "./bindings";
 import { listen } from "./here";
+import { asksMoved } from "./asks";
 
 /**
  * **The dispatches a chat has asked for that are held for the person** (#1437), read once per
@@ -35,6 +36,9 @@ function read(plane: PlaneId, session: number) {
       // A core that answers nothing holds nothing.
       mine.waiting = answer.data ?? NONE;
       for (const changed of mine.readers) changed();
+      // The Inbox lists the same dispatches from the asks registry (#1692): an answer on the
+      // pane's Notice clears its copy there too.
+      asksMoved(plane);
     })
     // A chat whose held dispatches cannot be read shows none.
     .catch(() => {});
