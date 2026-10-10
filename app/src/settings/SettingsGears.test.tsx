@@ -132,7 +132,7 @@ describe("⌘, opens Settings at the focused level", () => {
     await menuSettings();
 
     await waitFor(() => expect(level()).toBe("Workspace"));
-    expect(inFront()).toHaveTextContent("Workspace settings · alpha");
+    expect(inFront()).toHaveTextContent("Settings · alpha");
   });
 
   it("opens the project's level when no workspace is focused", async () => {
@@ -172,9 +172,7 @@ describe("⌘, opens Settings at the focused level", () => {
     await waitFor(() => expect(level()).toBe("Workspace"));
     await menuSettings();
 
-    expect(
-      chatTabs().filter((tab) => /Workspace settings/.test(tab.textContent ?? "")),
-    ).toHaveLength(1);
+    expect(chatTabs().filter((tab) => /Settings · /.test(tab.textContent ?? ""))).toHaveLength(1);
   });
 });
 
@@ -236,7 +234,7 @@ describe("the workspace gear", () => {
     await userEvent.click(gears[0]);
 
     await waitFor(() => expect(level()).toBe("Workspace"));
-    expect(inFront()).toHaveTextContent("Workspace settings · alpha");
+    expect(inFront()).toHaveTextContent("Settings · alpha");
   });
 
   it("has no gear on the plane root, which is not a workspace", async () => {

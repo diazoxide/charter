@@ -785,7 +785,7 @@ describe("a tab that shows a view (ADR 0043, as amended 2026-09-23)", () => {
     const [first, settings, other] = moved.order.map((id) => moved.byId[id]);
     expect(workspaceOf(moved, first.id, filed)).toBe("beta");
     expect(workspaceOf(moved, settings.id, filed)).toBe("beta");
-    expect(settings.name).toBe("Workspace settings · beta");
+    expect(settings.name).toBe("Settings · beta");
     expect(contentsOf(moved, settings.id)[0].content).toMatchObject({
       kind: "view",
       view: workspaceSettingsView("beta"),
@@ -923,6 +923,26 @@ describe("a view an older launch left open (SE-16, SE-19)", () => {
     });
     const theirs: ViewRef = { from: "acme", view: "settings", key: "" };
     expect(viewNamedNow(theirs, "Acme settings")).toEqual({ view: theirs, title: "Acme settings" });
+  });
+
+  it("titles a workspace's Settings tab from before D-1192-1 the way every level is titled", () => {
+    // #1192: "Workspace settings · <ws>" is "Settings · <ws>" now, and only that exact title.
+    const alpha = workspaceSettingsView("alpha");
+
+    expect(workspaceSettingsTitle("alpha")).toBe("Settings · alpha");
+    expect(viewNamedNow(alpha, "Workspace settings · alpha")).toEqual({
+      view: alpha,
+      title: "Settings · alpha",
+    });
+    expect(viewNamedNow(alpha, "Settings · alpha")).toEqual({
+      view: alpha,
+      title: "Settings · alpha",
+    });
+    // A title that names another workspace is not this view's, and is left as it is.
+    expect(viewNamedNow(alpha, "Workspace settings · beta")).toEqual({
+      view: alpha,
+      title: "Workspace settings · beta",
+    });
   });
 });
 
