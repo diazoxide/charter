@@ -104,7 +104,7 @@ vouched for becomes yours). A file that still matches is refreshed when the
 plane's settings move; one that does not is yours — left completely untouched and never
 repaired. `purlis workspace reinit` (or `--all`) is the repair for a file that still is
 purlis's. `purlis doctor` has a `workspace layer` row, and in this version it says the
-layer is not checked there yet.
+layer is not checked there yet (#994).
 
 **A clone gets the layer too, and pays a cost this directory does not.**
 `workspaces/<name>/<repo>/` is a repo of its own, so the walk-up that carries agents and
@@ -277,8 +277,12 @@ Each is a **piece**. Git is the only registry of them: every listing is
 `git worktree list --porcelain`, so a worktree made with plain git at that path is a piece,
 and one removed by hand is gone
 ([ADR 0027](https://github.com/purlis/purlis/blob/main/docs/adr/0027-git-is-the-only-registry-for-a-chats-worktree.md)).
-The app lists a workspace's pieces, merges one back into the branch it was cut from, marks
-one done, and removes one. Cutting a piece from the app is not in this version yet.
+The app shows a piece as its branch, and the piece's directory as that branch's folder
+([ADR 0072](https://github.com/purlis/purlis/blob/main/docs/adr/0072-charter-has-five-concepts-and-every-other-word-belongs-to-one-of-them.md)).
+**New branch**, on a repo's row, cuts one off the clone's HEAD, under the name you type or
+the next free `chat-<n>`. The app also lists a workspace's branches, merges one back into
+the branch it was cut from, marks one done, and removes a branch's folder (**Remove
+folder**) while keeping the branch.
 
 From a terminal or a chat, `purlis worktree` (alias `wt`):
 
@@ -327,7 +331,7 @@ worktree repair` is run in it. And git that purlis runs starts no git inside a s
 uncommitted work inside a submodule does not show in purlis; a new commit there does.
 
 A relocated worktree root — `[plane] worktrees` or `$PURLIS_WORKTREES` — is not followed in
-this version yet: unset it to keep worktrees in the plane.
+this version yet (#1381): unset it to keep worktrees in the plane.
 
 ### A session in a piece gets the layer a clone gets
 

@@ -19,7 +19,7 @@ matters to an autonomous agent specifically.
 - **What it needs:** [`glab`](https://gitlab.com/gitlab-org/cli) installed and
   authenticated (`glab auth login`, then `glab auth status` should say "Logged in").
   `purlis doctor` lists a row for the CLI and one for its auth, and in this version says
-  of both that they are not checked yet; `purlis discover` asks `auth status` itself
+  of both that they are not checked yet (#802); `purlis discover` asks `auth status` itself
   before it lists anything.
 - **What "group" means:** the GitLab group (or subgroup) whose repos this forge block
   tracks. `include_subgroups` is always on, so a group tracks everything beneath it too.
