@@ -22,11 +22,9 @@ import { describe, expect, it } from "vitest";
  * Read as text, as `settings/oldFormClasses.test.ts` and `Notice.guard.test.ts` read theirs.
  */
 
-/** The view tabs left for a later change, each with why. */
-const LATER: Record<string, string> = {
-  "SearchTab.tsx":
-    "held by the sidebar's second train (train 36) tonight; its empty search moves after it",
-};
+/** The view tabs left for a later change, each with why. Empty since Search stopped being a
+ *  view tab (#1701): it is a side view only, and draws its empty states through `EmptyState`. */
+const LATER: Record<string, string> = {};
 
 const SRC = join(process.cwd(), "src");
 
