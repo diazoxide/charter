@@ -248,12 +248,13 @@ impl Opened {
 }
 
 /// The remote-tracking ref the branch checked out in `repo` follows (`@{upstream}`), as
-/// `(branch, refs/remotes/<remote>/<merged>)`: read from `branch.<branch>.remote` and
-/// `branch.<branch>.merge`, each holding exactly one value. **Read, never trusted**: anything
-/// working in the folder can write its config, so the remote must be one plain name — no `/`,
-/// not `.` (a local upstream) — the merged branch must be under `refs/heads/`, and the whole
-/// must be a ref name git would accept (no `..`, no control characters). Anything else is no
-/// upstream. Only a remote-tracking ref is ever named, never a pattern or a path.
+/// `(branch, refs/remotes/…)`: read from `branch.<branch>.remote` and `branch.<branch>.merge`,
+/// each holding exactly one value, and mapped through `remote.<remote>.fetch` as git maps it
+/// ([`tracking_ref`], #1130). **Read, never trusted**: anything working in the folder can write
+/// its config, so the remote must be one plain name — no `/`, not `.` (a local upstream) — the
+/// merged branch must be under `refs/heads/`, and the ref it maps to must be under
+/// `refs/remotes/` and a name git would accept (no `..`, no control characters). Anything else
+/// is no upstream. Only a remote-tracking ref is ever named, never a pattern or a path.
 fn upstream_of_head(repo: &gix::Repository) -> Option<(String, String)> {
     let head = repo.head_name().ok()??;
     let head = head
@@ -283,9 +284,62 @@ fn upstream_of_head(repo: &gix::Repository) -> Option<(String, String)> {
     }
     let merged = merge.strip_prefix("refs/heads/")?;
     name::branch_name_ok(merged).ok()?;
-    let full = format!("refs/remotes/{remote}/{merged}");
-    gix::refs::FullName::try_from(full.as_str()).ok()?;
-    Some((head, full))
+    let mut fetch = Vec::new();
+    for section in config.plumbing().sections_by_name("remote")? {
+        if section
+            .header()
+            .subsection_name()
+            .map(|n| n.to_string())
+            .as_deref()
+            != Some(remote)
+        {
+            continue;
+        }
+        fetch.extend(section.values("fetch").iter().map(|v| v.to_string()));
+    }
+    Some((head, tracking_ref(&fetch, merged)?))
+}
+
+/// The remote-tracking ref the remote's `fetch` refspecs map `refs/heads/<merged>` to, as git's
+/// `@{upstream}` finds it (#1130): the first refspec that maps it somewhere wins (one with no
+/// destination is passed over, as git passes it over), a negative refspec that
+/// matches it leaves it unmapped, and a refspec that does not parse is passed over. Only a ref
+/// under `refs/remotes/` that git would accept is answered: a refspec mapping the branch onto a
+/// local branch, a tag or nowhere gives no upstream.
+fn tracking_ref(fetch: &[String], merged: &str) -> Option<String> {
+    use gix::bstr::ByteSlice as _;
+    let specs: Vec<gix::refspec::RefSpec> = fetch
+        .iter()
+        .filter_map(|spec| {
+            gix::refspec::parse(
+                spec.trim().as_bytes().as_bstr(),
+                gix::refspec::parse::Operation::Fetch,
+            )
+            .ok()
+            .map(|spec| spec.to_owned())
+        })
+        .collect();
+    let full = format!("refs/heads/{merged}");
+    let null = gix::ObjectId::null(gix::hash::Kind::Sha1);
+    let item = gix::refspec::match_group::Item {
+        full_ref_name: full.as_bytes().as_bstr(),
+        target: &null,
+        object: None,
+    };
+    let group = gix::refspec::MatchGroup::from_fetch_specs(specs.iter().map(|spec| spec.to_ref()));
+    let mapped = group
+        .match_lhs(std::iter::once(item))
+        .mappings
+        .into_iter()
+        .filter(|mapping| mapping.rhs.is_some())
+        .min_by_key(|mapping| mapping.spec_index)?
+        .rhs?
+        .to_str()
+        .ok()?
+        .to_string();
+    mapped.strip_prefix("refs/remotes/")?;
+    gix::refs::FullName::try_from(mapped.as_str()).ok()?;
+    Some(mapped)
 }
 
 /// The config keys a read uses, `section.key`, lower-cased: how the working tree is read and
@@ -584,6 +638,81 @@ fn folders_above(path: &str) -> Vec<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn specs(all: &[&str]) -> Vec<String> {
+        all.iter().map(|one| (*one).to_string()).collect()
+    }
+
+    /// #1130: the upstream follows the remote's fetch refspec, as git's `@{upstream}` does, so a
+    /// remote fetched into `refs/remotes/up/` is followed there.
+    #[test]
+    fn an_upstream_follows_the_remotes_fetch_refspec() {
+        let tracked = tracking_ref(&specs(&["+refs/heads/*:refs/remotes/up/*"]), "main");
+
+        assert_eq!(tracked.as_deref(), Some("refs/remotes/up/main"));
+    }
+
+    /// #1130: with git's default refspec the upstream is the ref it always was.
+    #[test]
+    fn the_default_refspec_gives_the_remotes_own_tracking_ref() {
+        let tracked = tracking_ref(
+            &specs(&["+refs/heads/*:refs/remotes/origin/*"]),
+            "topic/one",
+        );
+
+        assert_eq!(tracked.as_deref(), Some("refs/remotes/origin/topic/one"));
+    }
+
+    /// #1130: the first refspec that maps the branch wins, as in git; one fetched by name
+    /// counts as well as a pattern, and one with no destination maps nothing and is passed over.
+    #[test]
+    fn the_first_refspec_that_maps_the_branch_wins() {
+        let fetch = specs(&[
+            "refs/heads/main",
+            "+refs/heads/release:refs/remotes/rel/release",
+            "refs/heads/main:refs/remotes/mine/main",
+            "+refs/heads/*:refs/remotes/origin/*",
+        ]);
+
+        assert_eq!(
+            tracking_ref(&fetch, "main").as_deref(),
+            Some("refs/remotes/mine/main")
+        );
+        assert_eq!(
+            tracking_ref(&fetch, "other").as_deref(),
+            Some("refs/remotes/origin/other")
+        );
+    }
+
+    /// #1130: no refspec that maps the branch, one a negative refspec leaves out, or one that
+    /// maps it outside `refs/remotes/` gives no upstream: no base, as before.
+    #[test]
+    fn a_branch_no_refspec_maps_to_a_remote_tracking_ref_has_no_upstream() {
+        assert_eq!(tracking_ref(&[], "main"), None);
+        assert_eq!(
+            tracking_ref(&specs(&["+refs/heads/dev:refs/remotes/o/dev"]), "main"),
+            None
+        );
+        assert_eq!(
+            tracking_ref(
+                &specs(&["+refs/heads/*:refs/remotes/o/*", "^refs/heads/main"]),
+                "main"
+            ),
+            None
+        );
+        for elsewhere in [
+            "+refs/heads/*:refs/heads/*",
+            "+refs/heads/*:refs/tags/*",
+            "refs/heads/main",
+            "not a refspec at all",
+        ] {
+            assert_eq!(
+                tracking_ref(&specs(&[elsewhere]), "main"),
+                None,
+                "{elsewhere}"
+            );
+        }
+    }
 
     /// #1152: a count stops at its cap, and reads no commit past it.
     #[test]

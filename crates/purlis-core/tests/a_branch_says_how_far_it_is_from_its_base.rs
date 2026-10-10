@@ -124,12 +124,18 @@ fn a_branch_with_no_recorded_base_says_it_has_none_rather_than_a_count() {
 /// with the fetch refspec a clone writes, which git's own `@{upstream}` needs to map
 /// `refs/heads/main` to `refs/remotes/<remote>/main`. Nothing is ever fetched from it.
 fn following_an_upstream(f: &support::Fixture, remote: &str) {
+    following_an_upstream_kept_under(f, remote, remote);
+}
+
+/// [`following_an_upstream`], with the remote's fetch refspec keeping what it fetches under
+/// `refs/remotes/<kept>/` rather than under the remote's own name (#1130).
+fn following_an_upstream_kept_under(f: &support::Fixture, remote: &str, kept: &str) {
     f.commit(&f.clone, "pushed");
     support::git(&f.clone, &["checkout", "-q", "-b", "elsewhere"]);
     f.commit(&f.clone, "theirs");
     support::git(
         &f.clone,
-        &["update-ref", &format!("refs/remotes/{remote}/main"), "HEAD"],
+        &["update-ref", &format!("refs/remotes/{kept}/main"), "HEAD"],
     );
     support::git(&f.clone, &["checkout", "-q", "main"]);
     support::git(&f.clone, &["branch", "-q", "-D", "elsewhere"]);
@@ -141,7 +147,7 @@ fn following_an_upstream(f: &support::Fixture, remote: &str) {
         &[
             "config",
             &format!("remote.{remote}.fetch"),
-            &format!("+refs/heads/*:refs/remotes/{remote}/*"),
+            &format!("+refs/heads/*:refs/remotes/{kept}/*"),
         ],
     );
     support::git(&f.clone, &["config", "branch.main.remote", remote]);
@@ -163,6 +169,22 @@ fn the_repos_own_folder_counts_from_its_upstream_as_git_does() {
     assert_eq!((apart.ahead, apart.behind), (ahead, behind));
     assert_eq!((apart.ahead, apart.behind), (1, 1));
     assert_eq!(apart.base.as_deref(), Some("origin/main"));
+}
+
+/// #1130: a remote whose fetch refspec keeps its branches under another name is followed where
+/// the refspec maps it, as git's own `@{upstream}` follows it.
+#[test]
+fn the_repos_own_folder_follows_its_upstream_through_the_remotes_fetch_refspec() {
+    purlis_core::unsteered!();
+    let f = support::plane_with_clone("thing");
+    following_an_upstream_kept_under(&f, "origin", "up");
+
+    let apart = files::ahead_behind(&reader(), &f.plane, Branch::repo(&f.ws, &f.repo)).unwrap();
+
+    let (behind, ahead) = git_counts(&f.clone, "@{upstream}");
+    assert_eq!((apart.ahead, apart.behind), (ahead, behind));
+    assert_eq!((apart.ahead, apart.behind), (1, 1));
+    assert_eq!(apart.base.as_deref(), Some("up/main"));
 }
 
 #[test]
